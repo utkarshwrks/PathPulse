@@ -59,7 +59,7 @@ export function useGeolocation(autoStart = false): UseGeolocationResult {
   const watchIdRef = useRef<number | null>(null);
 
   const stop = useCallback(() => {
-    if (watchIdRef.current !== null) {
+    if (watchIdRef.current !== null && navigator.geolocation) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
@@ -67,7 +67,10 @@ export function useGeolocation(autoStart = false): UseGeolocationResult {
   }, []);
 
   const start = useCallback(() => {
-    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+    // Truthiness, not `in`: the property can exist with an undefined value in
+    // insecure contexts and some embedded webviews. `'geolocation' in navigator`
+    // passes there and the next line throws, taking the app down with it.
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setStatus('unsupported');
       setError('This browser does not expose the Geolocation API.');
       return;
@@ -127,7 +130,7 @@ export function useGeolocation(autoStart = false): UseGeolocationResult {
   useEffect(() => {
     if (autoStart) start();
     return () => {
-      if (watchIdRef.current !== null) {
+      if (watchIdRef.current !== null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }

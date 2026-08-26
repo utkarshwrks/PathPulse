@@ -6,12 +6,12 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import {
   appendTrailPoint,
   trailDistanceM,
-  type NavMode,
   type TrailPoint,
 } from '@pathpulse/nav-core';
 import { FOLLOW_ZOOM, resolveMapStyle } from '@/config/map';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { useMockTrack } from '@/hooks/useMockTrack';
+import { deriveMode } from '@/lib/navMode';
 import StatusBar from '@/components/StatusBar';
 import PermissionGate from '@/components/PermissionGate';
 import VehicleMarker from '@/components/VehicleMarker';
@@ -27,19 +27,6 @@ const MapView = dynamic(() => import('@/components/MapView'), {
     </div>
   ),
 });
-
-/**
- * Phase 1 display mode.
- *
- * This is a deliberately thin stand-in driven purely by fix accuracy. The real
- * hysteresis state machine is Phase 4 and belongs in nav-core — this exists so
- * the marker and trail colouring have something honest to render today.
- */
-function deriveMode(accuracyM: number | null | undefined): NavMode {
-  if (accuracyM === null || accuracyM === undefined) return 'INITIALIZING';
-  if (accuracyM > 25) return 'GNSS_DEGRADED';
-  return 'GNSS';
-}
 
 export default function Home() {
   // ?mock=1 drives a synthetic track for development on a machine with no GPS.

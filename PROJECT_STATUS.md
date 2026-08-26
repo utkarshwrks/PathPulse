@@ -72,11 +72,21 @@ NEXT_PUBLIC_MAPTILER_KEY=your_key_here
 ## HOW TO TEST
 
 ```bash
-pnpm test                # 33/33 pass (18 geo + 15 trail)
+pnpm test                # 70/70 pass
 pnpm typecheck           # clean across 4 packages
 pnpm lint:core-purity    # 0 violations across 8 files
 pnpm build               # emits apps/web/out
 ```
+
+| Package | Tests | Covers |
+| --- | --- | --- |
+| `nav-core` | 33 | geodesy (18), trail buffer + segments (15) |
+| `apps/web` | 37 | geolocation hook (14), map config (11), mode colours (6), mode derivation (5), mock script (3) |
+
+`apps/web` runs Vitest under jsdom with `@testing-library/react`, so the
+geolocation hook is tested against a mocked `navigator.geolocation` — including
+denial, timeout and unsupported-browser paths that are awkward to reproduce by
+hand and fatal if they crash during a demo.
 
 Verified in a real browser on 2026-08-26 against the **production static
 export** (the same bundle Capacitor will wrap):
@@ -99,6 +109,13 @@ export** (the same bundle Capacitor will wrap):
   not a bug fix.
 - **Mode colour has one home** (`config/modes.ts`). A green marker over an
   orange trail reads as a broken demo regardless of whether the math is right.
+- **`deriveMode` lives in `lib/navMode.ts`, not inside the page component**, so
+  the accuracy thresholds are unit tested rather than buried in JSX. Phase 4
+  supersedes it with the real hysteresis machine in nav-core.
+- **The geolocation hook guards on `navigator.geolocation` truthiness, not
+  `'geolocation' in navigator`.** The property can exist holding `undefined` in
+  insecure contexts and some embedded webviews; the `in` check passes there and
+  the next line throws. Found by the unsupported-browser test.
 
 ## KNOWN ISSUES
 
