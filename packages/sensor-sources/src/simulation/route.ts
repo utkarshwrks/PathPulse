@@ -3,7 +3,16 @@ import { enuToLatLon, latLonToEnu, normalizeAngle360, type LatLon } from '@pathp
 /** A GeoJSON LineString Feature, as stored in data/routes/. */
 export interface RouteGeoJson {
   type: 'Feature';
-  properties?: { name?: string; description?: string; stopsAtFraction?: number[] };
+  properties?: {
+    name?: string;
+    description?: string;
+    stopsAtFraction?: number[];
+    /** Provenance — see scripts/make-routes.mjs. */
+    source?: string;
+    lengthM?: number;
+    turns?: number;
+    roads?: string[];
+  };
   geometry: { type: 'LineString'; coordinates: Array<[number, number]> };
 }
 
