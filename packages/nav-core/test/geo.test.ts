@@ -90,6 +90,32 @@ describe('ENU conversion', () => {
     expect(Math.abs(enuDist - hav) / hav).toBeLessThan(0.005);
   });
 
+  it('drops below the tangent plane by the earth-curvature term', () => {
+    // A point 4.9 km away sits ~d^2/(2R) below the local tangent plane.
+    // This is why a round-trip that discards u lands ~1.5 mm off: the math is
+    // exact, but throwing away a real component is not a round-trip.
+    const enu = latLonToEnu(RED_FORT.lat, RED_FORT.lon, INDIA_GATE.lat, INDIA_GATE.lon);
+    const d = Math.hypot(enu.e, enu.n);
+    // d^2/2R is itself a spherical approximation, so allow 1% against the
+    // ellipsoidal truth rather than asserting decimal places.
+    const approxDrop = -(d * d) / (2 * 6371008.8);
+    expect(Math.abs((enu.u ?? 0) - approxDrop) / Math.abs(approxDrop)).toBeLessThan(0.01);
+    expect(enu.u ?? 0).toBeLessThan(0);
+
+    const withU = enuToLatLon(enu.e, enu.n, INDIA_GATE.lat, INDIA_GATE.lon, enu.u ?? 0);
+    const withoutU = enuToLatLon(enu.e, enu.n, INDIA_GATE.lat, INDIA_GATE.lon);
+    const errWith = haversineDistance(RED_FORT.lat, RED_FORT.lon, withU.lat, withU.lon);
+    const errWithout = haversineDistance(
+      RED_FORT.lat,
+      RED_FORT.lon,
+      withoutU.lat,
+      withoutU.lon,
+    );
+    expect(errWith).toBeLessThan(1e-6); // sub-micrometre
+    expect(errWithout).toBeGreaterThan(errWith);
+    expect(errWithout).toBeLessThan(0.01); // still under a centimetre
+  });
+
   it('orients east positive and north positive', () => {
     const east = latLonToEnu(CP.lat, CP.lon + 0.01, CP.lat, CP.lon);
     expect(east.e).toBeGreaterThan(0);

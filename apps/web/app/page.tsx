@@ -27,7 +27,15 @@ export default function Home() {
     );
     const bearing = bearingDeg(INDIA_GATE.lat, INDIA_GATE.lon, RED_FORT.lat, RED_FORT.lon);
     const enu = latLonToEnu(RED_FORT.lat, RED_FORT.lon, INDIA_GATE.lat, INDIA_GATE.lon);
-    const roundTrip = enuToLatLon(enu.e, enu.n, INDIA_GATE.lat, INDIA_GATE.lon);
+    // Pass u back in. Over 4.9 km the earth curves ~1.9 m away from the
+    // tangent plane; dropping that term reprojects the point ~1.5 mm off.
+    const roundTrip = enuToLatLon(
+      enu.e,
+      enu.n,
+      INDIA_GATE.lat,
+      INDIA_GATE.lon,
+      enu.u ?? 0,
+    );
     const roundTripErrorM = haversineDistance(
       RED_FORT.lat,
       RED_FORT.lon,
@@ -58,6 +66,7 @@ export default function Home() {
             label="ENU offset"
             value={`E ${check.enu.e.toFixed(1)}  N ${check.enu.n.toFixed(1)}`}
           />
+          <Row label="curvature drop (u)" value={`${(check.enu.u ?? 0).toFixed(2)} m`} />
           <Row
             label="round-trip error"
             value={`${(check.roundTripErrorM * 1000).toFixed(4)} mm`}
