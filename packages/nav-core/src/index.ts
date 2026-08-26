@@ -11,3 +11,4 @@
  */
 export * from './types.js';
 export * from './geo/index.js';
+export * from './trail/index.js';

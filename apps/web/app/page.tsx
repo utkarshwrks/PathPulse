@@ -1,93 +1,136 @@
 'use client';
 
-import { useMemo } from 'react';
+import dynamic from 'next/dynamic';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Map as MapLibreMap } from 'maplibre-gl';
 import {
-  bearingDeg,
-  haversineDistance,
-  latLonToEnu,
-  enuToLatLon,
+  appendTrailPoint,
+  trailDistanceM,
+  type NavMode,
+  type TrailPoint,
 } from '@pathpulse/nav-core';
+import { FOLLOW_ZOOM, resolveMapStyle } from '@/config/map';
+import { useGeolocation } from '@/hooks/useGeolocation';
+import { useMockTrack } from '@/hooks/useMockTrack';
+import StatusBar from '@/components/StatusBar';
+import PermissionGate from '@/components/PermissionGate';
+import VehicleMarker from '@/components/VehicleMarker';
+import TrailLayer from '@/components/TrailLayer';
 
-const INDIA_GATE = { lat: 28.6129, lon: 77.2295 };
-const RED_FORT = { lat: 28.6562, lon: 77.241 };
+// MapLibre touches window/document at import time, and this app is statically
+// exported — so it must never be evaluated during prerender.
+const MapView = dynamic(() => import('@/components/MapView'), {
+  ssr: false,
+  loading: () => (
+    <div className="absolute inset-0 flex items-center justify-center bg-[#0a0e14]">
+      <p className="text-sm text-neutral-500">Loading map…</p>
+    </div>
+  ),
+});
 
 /**
- * Phase 0 landing page. Deliberately not the real UI — it exists to prove the
- * workspace wiring end to end: the app imports pure nav-core math, runs it in
- * the browser, and still satisfies `output: 'export'`.
- * Phase 1 replaces this with the full-screen map.
+ * Phase 1 display mode.
+ *
+ * This is a deliberately thin stand-in driven purely by fix accuracy. The real
+ * hysteresis state machine is Phase 4 and belongs in nav-core — this exists so
+ * the marker and trail colouring have something honest to render today.
  */
-export default function Home() {
-  const check = useMemo(() => {
-    const distanceM = haversineDistance(
-      INDIA_GATE.lat,
-      INDIA_GATE.lon,
-      RED_FORT.lat,
-      RED_FORT.lon,
-    );
-    const bearing = bearingDeg(INDIA_GATE.lat, INDIA_GATE.lon, RED_FORT.lat, RED_FORT.lon);
-    const enu = latLonToEnu(RED_FORT.lat, RED_FORT.lon, INDIA_GATE.lat, INDIA_GATE.lon);
-    // Pass u back in. Over 4.9 km the earth curves ~1.9 m away from the
-    // tangent plane; dropping that term reprojects the point ~1.5 mm off.
-    const roundTrip = enuToLatLon(
-      enu.e,
-      enu.n,
-      INDIA_GATE.lat,
-      INDIA_GATE.lon,
-      enu.u ?? 0,
-    );
-    const roundTripErrorM = haversineDistance(
-      RED_FORT.lat,
-      RED_FORT.lon,
-      roundTrip.lat,
-      roundTrip.lon,
-    );
-    return { distanceM, bearing, enu, roundTripErrorM };
-  }, []);
-
-  return (
-    <main className="flex min-h-full flex-col items-center justify-center gap-8 p-8">
-      <header className="text-center">
-        <h1 className="text-4xl font-bold tracking-tight">PathPulse</h1>
-        <p className="mt-2 text-sm text-neutral-400">
-          Intelligent dead reckoning for seamless navigation
-        </p>
-        <p className="mt-1 text-xs text-neutral-600">SIH26168 · ISRO · Team Avinya</p>
-      </header>
-
-      <section className="w-full max-w-md rounded-lg border border-neutral-800 bg-neutral-900/60 p-5">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-neutral-500">
-          nav-core self check
-        </h2>
-        <dl className="tabular space-y-2 font-mono text-sm">
-          <Row label="India Gate → Red Fort" value={`${check.distanceM.toFixed(1)} m`} />
-          <Row label="bearing" value={`${check.bearing.toFixed(2)}°`} />
-          <Row
-            label="ENU offset"
-            value={`E ${check.enu.e.toFixed(1)}  N ${check.enu.n.toFixed(1)}`}
-          />
-          <Row label="curvature drop (u)" value={`${(check.enu.u ?? 0).toFixed(2)} m`} />
-          <Row
-            label="round-trip error"
-            value={`${(check.roundTripErrorM * 1000).toFixed(4)} mm`}
-          />
-        </dl>
-      </section>
-
-      <p className="max-w-md text-center text-xs leading-relaxed text-neutral-600">
-        Phase 0 complete. These numbers come from{' '}
-        <code className="text-neutral-500">@pathpulse/nav-core</code>, which contains no browser
-        APIs — the same code will run in the APK, in replay tests, and in the Part B edge engine.
-      </p>
-    </main>
-  );
+function deriveMode(accuracyM: number | null | undefined): NavMode {
+  if (accuracyM === null || accuracyM === undefined) return 'INITIALIZING';
+  if (accuracyM > 25) return 'GNSS_DEGRADED';
+  return 'GNSS';
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+export default function Home() {
+  // ?mock=1 drives a synthetic track for development on a machine with no GPS.
+  // Superseded by the real SimulationSource in Phase 2.
+  const [mockEnabled, setMockEnabled] = useState(false);
+  useEffect(() => {
+    setMockEnabled(new URLSearchParams(window.location.search).get('mock') === '1');
+  }, []);
+
+  const live = useGeolocation(true);
+  const mock = useMockTrack(mockEnabled);
+
+  const { status, error, fixCount, start } = live;
+  const fix = mockEnabled ? mock.fix : live.fix;
+  const [trail, setTrail] = useState<TrailPoint[]>([]);
+  const [following, setFollowing] = useState(true);
+  const mapRef = useRef<MapLibreMap | null>(null);
+  const styleInfo = useMemo(() => resolveMapStyle(), []);
+
+  const mode = mockEnabled ? mock.mode : deriveMode(fix?.accuracyM);
+
+  // Accumulate the trail. appendTrailPoint handles jitter filtering and the
+  // 500-point cap; this component just feeds it.
+  useEffect(() => {
+    if (!fix) return;
+    setTrail((prev) =>
+      appendTrailPoint(prev, {
+        lat: fix.lat,
+        lon: fix.lon,
+        mode: mockEnabled ? mock.mode : deriveMode(fix.accuracyM),
+        t: fix.timestamp,
+      }),
+    );
+  }, [fix, mockEnabled, mock.mode]);
+
+  // Follow the marker, unless the user has taken manual control of the map.
+  useEffect(() => {
+    if (!fix || !following) return;
+    const map = mapRef.current;
+    if (!map) return;
+    map.easeTo({
+      center: [fix.lon, fix.lat],
+      zoom: Math.max(map.getZoom(), FOLLOW_ZOOM),
+      duration: 700,
+    });
+  }, [fix, following]);
+
+  const handleReady = useCallback((map: MapLibreMap) => {
+    mapRef.current = map;
+  }, []);
+
+  const distanceM = useMemo(() => trailDistanceM(trail), [trail]);
+
   return (
-    <div className="flex items-baseline justify-between gap-4">
-      <dt className="text-neutral-500">{label}</dt>
-      <dd className="text-neutral-100">{value}</dd>
-    </div>
+    <main className="relative h-full w-full overflow-hidden">
+      <MapView onReady={handleReady} onUserInteract={() => setFollowing(false)}>
+        <TrailLayer trail={trail} />
+        {fix ? (
+          <VehicleMarker
+            lat={fix.lat}
+            lon={fix.lon}
+            headingDeg={fix.headingDeg}
+            mode={mode}
+            accuracyM={fix.accuracyM}
+          />
+        ) : null}
+      </MapView>
+
+      <StatusBar
+        mode={mode}
+        fix={fix}
+        status={status}
+        error={error}
+        fixCount={fixCount}
+        distanceM={distanceM}
+        mapSourceLabel={styleInfo.label}
+      />
+
+      {!following ? (
+        <button
+          type="button"
+          onClick={() => setFollowing(true)}
+          className="absolute bottom-6 right-4 z-10 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-xs font-medium text-neutral-100 backdrop-blur transition hover:bg-black/85"
+        >
+          Recenter
+        </button>
+      ) : null}
+
+      {mockEnabled ? null : (
+        <PermissionGate status={status} error={error} onRetry={start} />
+      )}
+    </main>
   );
 }

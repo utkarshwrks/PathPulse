@@ -18,3 +18,52 @@ body {
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/* MapLibre fills its container; the container is absolutely positioned. */
+.maplibregl-map {
+  height: 100%;
+  width: 100%;
+}
+
+/*
+ * OpenStreetMap raster tiles are light. When no MapTiler key is configured we
+ * darken them in CSS so the fallback still reads as a driving HUD rather than
+ * a different app. Vector dark styles skip this.
+ */
+.map-dark-filter .maplibregl-canvas {
+  filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.95) saturate(0.65);
+}
+
+.vehicle-marker {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 0;
+  height: 0;
+}
+
+.vehicle-marker__halo {
+  position: absolute;
+  border-radius: 9999px;
+  opacity: 0.14;
+  transition:
+    width 400ms ease-out,
+    height 400ms ease-out,
+    background-color 300ms linear;
+  pointer-events: none;
+}
+
+.vehicle-marker__arrow {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  /*
+   * Golden Rule #6: the dot must never look like it teleported. Position is
+   * eased by the map's own camera; this smooths the heading change so turns
+   * read as turns instead of snaps.
+   */
+  transition:
+    transform 220ms ease-out,
+    color 300ms linear;
+  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.8));
+}

@@ -1,104 +1,139 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 0 — Environment Setup & Repo Skeleton ✅ COMPLETE
+**CURRENT PHASE:** Phase 1 — Map + Live GNSS Marker ✅ COMPLETE
 **LAST UPDATED:** 2026-08-26
-**NEXT PHASE:** Phase 1 — Map + Live GNSS Marker
+**NEXT PHASE:** Phase 2 — nav-core + Sensor Abstraction + Simulation
 
 ---
 
 ## COMPLETED
 
 ### Phase 0 — Environment Setup & Repo Skeleton
+- pnpm monorepo (`apps/*`, `packages/*`), shared strict `tsconfig.base.json`
+- `packages/nav-core` — pure TS: `types.ts` (`NavMode`, `SensorSample`,
+  `NavigationState`) and `geo/` (WGS84 ECEF/ENU via Bowring, haversine,
+  bearing, angle normalisation)
+- `packages/sensor-sources` — `SensorSource` interface
+- `packages/eval` — placeholder (Phase 7)
+- `apps/web` — Next.js 14 App Router, `output: 'export'`, Tailwind
+- `scripts/check-core-purity.mjs` — enforces Golden Rule #1
 
-**Monorepo**
-- pnpm workspace (`pnpm-workspace.yaml`) over `apps/*` and `packages/*`
-- Shared `tsconfig.base.json`: ES2022, `strict`, `noUncheckedIndexedAccess`
-- `.gitignore` covering node_modules, `.next/`, `out/`, `android/`, APKs,
-  Python artefacts, model binaries and large map data
+### Phase 1 — Map + Live GNSS Marker
 
-**`packages/nav-core`** — the pure package
-- `src/types.ts` — `NavMode`, `SensorSample`, `NavigationState`, `LatLon`,
-  `EnuPoint`, `Vec3`, `Quaternion`
-- `src/geo/constants.ts` — WGS84 ellipsoid parameters
-- `src/geo/angles.ts` — `normalizeAngle` (-180, 180], `normalizeAngle360`,
-  `normalizeRadians`, `angleDifference`
-- `src/geo/enu.ts` — `latLonToEcef`, `ecefToLatLon` (Bowring),
-  `latLonToEnu`, `enuToLatLon`
-- `src/geo/distance.ts` — `haversineDistance`, `bearingDeg`
-- Vitest configured, node environment, **18 tests passing**
+**`packages/nav-core/src/trail/`** — pure, unit-tested trail logic
+- `appendTrailPoint()` — jitter filter (0.5 m) + 500-point ring buffer.
+  A mode change always forces the point to be kept, so the trail can never
+  recolour at the wrong place.
+- `buildTrailSegments()` — splits into per-mode runs. **Segments share their
+  boundary vertex**, otherwise the rendered line gaps at every mode change.
+- `trailDistanceM()` — summed leg lengths
+- 15 tests covering jitter, capping, immutability, NaN rejection, the full
+  GNSS → DR → RECOVERING → GNSS sequence, and `[lon, lat]` ordering
 
-**`packages/sensor-sources`** — `SensorSource` interface + capabilities type.
-Implementations arrive in Phase 2.
+**`apps/web/config/`**
+- `map.ts` — `resolveMapStyle()` returns MapTiler dark when
+  `NEXT_PUBLIC_MAPTILER_KEY` is set, else OpenStreetMap raster. Single seam for
+  the Phase 9 offline PMTiles swap.
+- `modes.ts` — `MODE_COLORS` / `MODE_LABELS`, the single source of truth.
+  `tailwind.config.ts` imports it rather than keeping a second copy.
 
-**`packages/eval`** — placeholder. Built in Phase 7.
+**`apps/web/hooks/`**
+- `useGeolocation.ts` — `watchPosition`, `enableHighAccuracy`, `maximumAge: 0`,
+  `timeout: 5000`. Distinguishes denied / unavailable / timeout; a timeout keeps
+  the watch alive (expected indoors) while a denial tears it down.
+- `useMockTrack.ts` — dev-only `?mock=1` synthetic track (**see Known Issues**)
 
-**`apps/web`** — Next.js 14 App Router
-- `output: 'export'` set on day one, `images.unoptimized: true`
-- Tailwind configured, mode colours (`gnss`/`degraded`/`dr`/`recovering`)
-  defined once so badge, marker and trail can never disagree
-- All client-side. No server components, no API routes.
-- Landing page renders live `nav-core` output as a wiring self-check
-
-**Tooling**
-- `scripts/check-core-purity.mjs` — mechanically enforces Golden Rule #1
+**`apps/web/components/`**
+- `MapView.tsx` — MapLibre, dynamically imported with `ssr: false` (it touches
+  `window` at import time and the app is statically exported). Degrades to a
+  message instead of crashing if the map fails.
+- `VehicleMarker.tsx` — heading-rotated arrow, colour by mode, CSS-transitioned.
+  Keeps the last heading when the platform reports `null` (stationary) rather
+  than snapping to north. Accuracy halo — Phase 9 replaces it with a real
+  covariance ellipse.
+- `TrailLayer.tsx` — one line layer, colour from a data-driven `match`
+  expression, so layer count stays constant however often the mode flips.
+- `StatusBar.tsx`, `PermissionGate.tsx`, `MapContext.tsx`
 
 ## HOW TO RUN
 
 ```bash
 pnpm install
-pnpm dev      # http://localhost:3000
+pnpm dev                              # http://localhost:3000
+# no GPS on this machine? drive a synthetic track:
+open http://localhost:3000/?mock=1
+```
+
+Optional vector dark basemap — `apps/web/.env.local`:
+```
+NEXT_PUBLIC_MAPTILER_KEY=your_key_here
 ```
 
 ## HOW TO TEST
 
 ```bash
-pnpm test                # 18/18 nav-core tests pass
-pnpm typecheck           # clean across all 4 packages
-pnpm lint:core-purity    # "nav-core is pure — scanned 7 file(s), 0 violations"
-pnpm build               # emits apps/web/out/{index.html,404.html,_next}
+pnpm test                # 33/33 pass (18 geo + 15 trail)
+pnpm typecheck           # clean across 4 packages
+pnpm lint:core-purity    # 0 violations across 8 files
+pnpm build               # emits apps/web/out
 ```
 
-Verified on 2026-08-26:
-- `pnpm dev` serves HTTP 200 and renders India Gate → Red Fort as **4943.8 m**
-  (real-world ≈ 4.94 km) with an ENU round-trip error under 0.001 mm
-- `pnpm build` produces the static `out/` folder Capacitor will wrap in Phase 3
+Verified in a real browser on 2026-08-26 against the **production static
+export** (the same bundle Capacitor will wrap):
+- 77 OSM tiles fetched, attribution rendered
+- marker present, colour `rgb(249,115,22)` = `DEAD_RECKONING` orange,
+  `transform: rotate(140deg)` matching a reported heading of 140°
+- trail visibly segmented green → amber → orange → blue across mode changes
+- map follows the marker; manual pan disengages follow and shows Recenter
 
 ## ARCHITECTURE NOTES
 
-- **Golden Rule #1:** `nav-core` is pure TypeScript. No `window`, `document`,
-  `fetch`, `navigator`, React or Node APIs. It is what lets one codebase serve
-  the browser, the APK, the replay/ablation harness, and the Part B 200 Hz edge
-  engine. Enforced by `pnpm lint:core-purity`.
-- **ENU over degrees:** dead reckoning integrates m/s, so the math runs in a
-  local East-North-Up plane in metres and converts back only for display.
-- **`.js` import specifiers in `nav-core`** are intentional — real ESM requires
-  them and Node will need them verbatim for the edge engine. `next.config.js`
-  carries a `resolve.extensionAlias` mapping `.js → .ts` so webpack resolves
-  them. Do not "fix" this by stripping the extensions.
-- **`transpilePackages`** lets Next compile the workspace packages from source,
-  so there is no build step and no stale `dist/` to debug.
-- **Static export from day one** means an accidental server component fails the
-  build today rather than on demo day.
-- **Covariance is along/cross, not a radius.** Road snapping bounds cross-track
-  error while along-track error keeps growing. That asymmetry is why the UI will
-  draw an ellipse, not a circle.
+- **Golden Rule #1 holds.** All browser APIs (`navigator.geolocation`,
+  MapLibre, DOM) live in `apps/web`. `nav-core` gained only pure trail math.
+- **Trail logic lives in nav-core on purpose.** Segment splitting is pure data
+  transformation, so it is unit tested rather than eyeballed on a map. The
+  boundary-vertex rule in particular is the kind of thing that silently breaks.
+- **`dynamic(..., { ssr: false })` is mandatory for MapView** — MapLibre touches
+  `window` at import time and `output: 'export'` prerenders in Node.
+- **MapLibre is pinned to 5.24.0.** See Known Issues — this is a risk choice,
+  not a bug fix.
+- **Mode colour has one home** (`config/modes.ts`). A green marker over an
+  orange trail reads as a broken demo regardless of whether the math is right.
 
 ## KNOWN ISSUES
 
-- `pnpm start` uses `npx serve out`; `serve` is not a declared dependency and is
-  fetched on demand. Fine for local checks, worth pinning if it becomes routine.
-- System Python is 3.9.15. Phase 8 (PyTorch, ONNX export) wants 3.10+. The guide
-  points that phase at Colab, so this only matters if we train locally.
-- Nothing is wired to real sensors yet — Phase 1 adds geolocation, Phase 2 adds
-  the simulation source.
+- **`useMockTrack` / `?mock=1` is a stopgap.** It fabricates positions and
+  scripts mode changes on a timer. It is *not* a physics simulation and must not
+  be used for any accuracy claim. Phase 2's `SimulationSource` replaces it with
+  proper IMU noise, bias, vibration and stop modelling behind `SensorSource`.
+  Delete `useMockTrack.ts` once Phase 2 lands.
+- **MapLibre pinned to 5.24.0 while 6.6.0 is `latest`.** During Phase 1 the map
+  never rendered and v6 was initially blamed. That diagnosis was wrong: the real
+  cause was that the automation browser tab is permanently
+  `visibilityState: "hidden"`, so `requestAnimationFrame` never fires and
+  MapLibre's rAF-deferred style load never completes. Both v5 and v6 were
+  verified working once rAF was shimmed. v5 is retained because it is verified
+  end-to-end in this Next 14 stack and nothing here needs v6; v6's separate
+  ESM worker chunk under Next/webpack bundling remains **untested**, not broken.
+  Revisit deliberately, not by accident.
+- **Satellite count is unavailable on web.** The browser Geolocation API exposes
+  accuracy but not satellite count or constellation. The status bar says so
+  rather than showing a fake number. Real values need the native `GnssStatus`
+  API in Phase 15.
+- Browser geolocation gives speed/heading only when the platform supplies them;
+  both read `—` when stationary or unsupported.
+- Do not run `pnpm build` while `pnpm dev` is live — the build clobbers `.next`
+  and the dev server then serves an unstyled page.
+- System Python is 3.9.15; Phase 8 wants 3.10+ (guide points that at Colab).
 
 ## NEXT PHASE
 
-**Phase 1 — Map + Live GNSS Marker** (2 hr)
-- MapLibre GL JS full-screen dark map, tile URL behind `apps/web/config/map.ts`
-  so Phase 9 can swap in offline PMTiles
-- `VehicleMarker` — heading-rotated arrow, colour by mode, CSS transitions
-- `TrailLayer` — GeoJSON LineString, last 500 points, **segment colour by mode**
-  so the estimated stretch is visually obvious
-- `hooks/useGeolocation.ts` — `watchPosition`, high accuracy, graceful denial
-- Status readout: satellite count and accuracy
+**Phase 2 — nav-core + Sensor Abstraction + Simulation** (3 hr)
+- `SensorSource` implementations: `SimulationSource` (realistic IMU — gravity,
+  Gaussian noise, constant bias, 15–25 Hz vibration, red-light stops),
+  `WebSource`, `ReplaySource`, `RecordingWrapper`
+- `simulateGnssOutage(startMs, durationMs)`
+- Two GeoJSON routes in `data/routes/`: 2 km city (4 turns, 3 stops),
+  3 km highway
+- Source selector UI with play/pause/reset and 1×–5× speed
+- **Delete `useMockTrack.ts`** — superseded

@@ -15,9 +15,10 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phase 0 complete** — monorepo, pure `nav-core` package, WGS84 geodesy with
-tests, static-export web app. See [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for
-the live picture and what is next.
+**Phase 1 complete** — full-screen MapLibre basemap, live GNSS marker that
+rotates with heading, and a travelled trail coloured per navigation mode.
+See [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for the live picture and what is
+next.
 
 ## Tech stack
 
@@ -51,6 +52,27 @@ pnpm build        # static export into apps/web/out
 | `pnpm test` | All workspace tests |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
+
+### Map configuration
+
+The basemap works with no setup: with no API key it falls back to OpenStreetMap
+raster tiles, darkened in CSS to match the HUD. For a proper vector dark style,
+put a MapTiler key in `apps/web/.env.local`:
+
+```
+NEXT_PUBLIC_MAPTILER_KEY=your_key_here
+```
+
+Style selection lives in `apps/web/config/map.ts` behind `resolveMapStyle()`, so
+Phase 9 can swap in an offline PMTiles basemap without touching `MapView`.
+
+### Development without GPS
+
+`http://localhost:3000/?mock=1` drives a synthetic track so the map, marker and
+trail can be exercised on a laptop with no GPS fix. It cycles through GNSS →
+degraded → dead reckoning → recovering so the trail's mode colouring is visible.
+This is a Phase 1 stopgap — Phase 2 replaces it with the real `SimulationSource`,
+which models IMU noise, bias and vibration behind the `SensorSource` interface.
 
 ## Repository layout
 
