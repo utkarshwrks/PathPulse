@@ -145,10 +145,11 @@ the badge to DEAD RECKONING and blanked accuracy.
 
 ## KNOWN ISSUES
 
-- **The APK has not been run on a physical device yet** — no phone was
-  connected when it was built. It compiles, packages and carries the right
-  permissions, but "installs and shows a map" is unverified. Do this before
-  trusting it.
+- **Device-verified 2026-08-27**: APK installed via LAN download on a physical
+  Android phone. Location permission granted, map rendered, live source
+  selected, and the marker tracked real movement while walking around indoors.
+  Installs → runs → real GNSS works inside the APK, confirming the
+  `androidScheme: 'https'` secure-context decision.
 - **`@capacitor/motion` has no native Android implementation.** It wraps the
   WebView's `DeviceMotionEvent`, so IMU rate is whatever the WebView allows,
   not `SENSOR_DELAY_FASTEST`, and it is throttled with the screen off.
