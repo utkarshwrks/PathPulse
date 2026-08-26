@@ -12,6 +12,8 @@ interface StatusBarProps {
   fixCount: number;
   distanceM: number;
   mapSourceLabel: string;
+  sourceName?: string;
+  inOutage?: boolean;
 }
 
 export default function StatusBar({
@@ -22,6 +24,8 @@ export default function StatusBar({
   fixCount,
   distanceM,
   mapSourceLabel,
+  sourceName,
+  inOutage,
 }: StatusBarProps) {
   const color = MODE_COLORS[mode];
 
@@ -42,9 +46,12 @@ export default function StatusBar({
           {fix ? (
             <>
               <div>
-                accuracy <span className="text-neutral-100">{fix.accuracyM.toFixed(1)} m</span>
+                accuracy{' '}
+                <span className="text-neutral-100">
+                  {inOutage ? '—' : `${fix.accuracyM.toFixed(1)} m`}
+                </span>
                 {'  ·  '}
-                fixes <span className="text-neutral-100">{fixCount}</span>
+                gnss <span className="text-neutral-100">{fixCount} Hz</span>
               </div>
               <div>
                 {fix.lat.toFixed(6)}, {fix.lon.toFixed(6)}
@@ -73,7 +80,20 @@ export default function StatusBar({
 
         {error ? <div className="mt-1 text-[11px] text-amber-400">{error}</div> : null}
 
+        {inOutage ? (
+          <div className="mt-1 text-[11px] leading-snug text-orange-300">
+            GNSS hidden. Position is held at the last fix — dead reckoning
+            propagation arrives in Phase 4.
+          </div>
+        ) : null}
+
         <div className="mt-1.5 border-t border-white/10 pt-1.5 text-[10px] text-neutral-500">
+          {sourceName ? (
+            <>
+              source: {sourceName}
+              <br />
+            </>
+          ) : null}
           {/* Honest about a real platform limit rather than faking a number. */}
           satellites: unavailable on web — native GnssStatus lands in Phase 15
           <br />

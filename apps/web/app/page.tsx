@@ -3,16 +3,16 @@
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import {
-  appendTrailPoint,
-  trailDistanceM,
-  type TrailPoint,
-} from '@pathpulse/nav-core';
+import { appendTrailPoint, trailDistanceM, type TrailPoint } from '@pathpulse/nav-core';
 import { FOLLOW_ZOOM, resolveMapStyle } from '@/config/map';
 import { useGeolocation } from '@/hooks/useGeolocation';
-import { useMockTrack } from '@/hooks/useMockTrack';
-import { deriveMode } from '@/lib/navMode';
+import {
+  useSensorSource,
+  type RouteKey,
+  type SourceKind,
+} from '@/hooks/useSensorSource';
 import StatusBar from '@/components/StatusBar';
+import SourcePanel from '@/components/SourcePanel';
 import PermissionGate from '@/components/PermissionGate';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
@@ -29,40 +29,33 @@ const MapView = dynamic(() => import('@/components/MapView'), {
 });
 
 export default function Home() {
-  // ?mock=1 drives a synthetic track for development on a machine with no GPS.
-  // Superseded by the real SimulationSource in Phase 2.
-  const [mockEnabled, setMockEnabled] = useState(false);
-  useEffect(() => {
-    setMockEnabled(new URLSearchParams(window.location.search).get('mock') === '1');
-  }, []);
+  const [kind, setKind] = useState<SourceKind>('simulation');
+  const [routeKey, setRouteKey] = useState<RouteKey>('city');
+  const source = useSensorSource(kind, routeKey);
 
-  const live = useGeolocation(true);
-  const mock = useMockTrack(mockEnabled);
+  // Still used for the live-mode permission UI; the source itself handles data.
+  const live = useGeolocation(false);
 
-  const { status, error, fixCount, start } = live;
-  const fix = mockEnabled ? mock.fix : live.fix;
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [following, setFollowing] = useState(true);
   const mapRef = useRef<MapLibreMap | null>(null);
   const styleInfo = useMemo(() => resolveMapStyle(), []);
 
-  const mode = mockEnabled ? mock.mode : deriveMode(fix?.accuracyM);
+  const { fix, mode } = source;
 
-  // Accumulate the trail. appendTrailPoint handles jitter filtering and the
-  // 500-point cap; this component just feeds it.
   useEffect(() => {
     if (!fix) return;
     setTrail((prev) =>
-      appendTrailPoint(prev, {
-        lat: fix.lat,
-        lon: fix.lon,
-        mode: mockEnabled ? mock.mode : deriveMode(fix.accuracyM),
-        t: fix.timestamp,
-      }),
+      appendTrailPoint(prev, { lat: fix.lat, lon: fix.lon, mode, t: fix.timestamp }),
     );
-  }, [fix, mockEnabled, mock.mode]);
+  }, [fix, mode]);
 
-  // Follow the marker, unless the user has taken manual control of the map.
+  // Clear the trail when the source or route changes — mixing two drives into
+  // one path would be actively misleading.
+  useEffect(() => {
+    setTrail([]);
+  }, [kind, routeKey]);
+
   useEffect(() => {
     if (!fix || !following) return;
     const map = mapRef.current;
@@ -70,7 +63,7 @@ export default function Home() {
     map.easeTo({
       center: [fix.lon, fix.lat],
       zoom: Math.max(map.getZoom(), FOLLOW_ZOOM),
-      duration: 700,
+      duration: 500,
     });
   }, [fix, following]);
 
@@ -90,7 +83,7 @@ export default function Home() {
             lon={fix.lon}
             headingDeg={fix.headingDeg}
             mode={mode}
-            accuracyM={fix.accuracyM}
+            accuracyM={source.inOutage ? null : fix.accuracyM}
           />
         ) : null}
       </MapView>
@@ -98,11 +91,35 @@ export default function Home() {
       <StatusBar
         mode={mode}
         fix={fix}
-        status={status}
-        error={error}
-        fixCount={fixCount}
+        status={kind === 'live' ? live.status : 'watching'}
+        error={kind === 'live' ? live.error : null}
+        fixCount={Math.round(source.gnssHz * 100) / 100}
         distanceM={distanceM}
         mapSourceLabel={styleInfo.label}
+        sourceName={source.sourceName}
+        inOutage={source.inOutage}
+      />
+
+      <SourcePanel
+        kind={kind}
+        routeKey={routeKey}
+        isRunning={source.isRunning}
+        inOutage={source.inOutage}
+        progress={source.progress}
+        imuHz={source.imuHz}
+        gnssHz={source.gnssHz}
+        recordedCount={source.recordedCount}
+        onKindChange={setKind}
+        onRouteChange={setRouteKey}
+        onPlay={() => {
+          if (kind === 'live') live.start();
+          source.play();
+        }}
+        onPause={source.pause}
+        onReset={source.reset}
+        onSpeed={source.setSpeed}
+        onOutage={() => source.triggerOutage(60_000)}
+        onDownload={source.downloadRecording}
       />
 
       {!following ? (
@@ -115,9 +132,9 @@ export default function Home() {
         </button>
       ) : null}
 
-      {mockEnabled ? null : (
-        <PermissionGate status={status} error={error} onRetry={start} />
-      )}
+      {kind === 'live' ? (
+        <PermissionGate status={live.status} error={live.error} onRetry={live.start} />
+      ) : null}
     </main>
   );
 }

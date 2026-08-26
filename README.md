@@ -15,8 +15,9 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phase 1 complete** — full-screen MapLibre basemap, live GNSS marker that
-rotates with heading, and a travelled trail coloured per navigation mode.
+**Phase 2 complete** — a realistic sensor simulator behind a four-implementation
+`SensorSource` interface, on top of the Phase 1 map, marker and mode-coloured
+trail.
 See [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for the live picture and what is
 next.
 
@@ -104,13 +105,38 @@ Three ways around it:
 self-signed certificate covers only `localhost`/`127.0.0.1`, so a phone hitting
 the LAN IP gets a certificate name mismatch.
 
-### Development without GPS
+### Development without a car, a tunnel, or even GPS
 
-`http://localhost:3000/?mock=1` drives a synthetic track so the map, marker and
-trail can be exercised on a laptop with no GPS fix. It cycles through GNSS →
-degraded → dead reckoning → recovering so the trail's mode colouring is visible.
-This is a Phase 1 stopgap — Phase 2 replaces it with the real `SimulationSource`,
-which models IMU noise, bias and vibration behind the `SensorSource` interface.
+Open the app, pick **Simulation → City**, press **Play**. A virtual vehicle
+drives a 2 km route emitting 50 Hz IMU and 1 Hz GNSS, at up to 5× speed.
+
+This is the single biggest time-saver in the build: a browser refresh is one
+second, an APK rebuild is three minutes, and driving to a real tunnel is an
+afternoon. Teams that skip it end up testing outdoors after every change.
+
+The simulator is deliberately realistic, because a simulator that lies makes
+every downstream number a lie:
+
+| Modelled | Why it matters |
+| --- | --- |
+| Gravity in the accelerometer (+9.81 up at rest) | It measures specific force, not acceleration. The sign error makes the estimator think you are accelerating upward forever. |
+| Constant sensor bias | Bias double-integrates into ~36 m of error per minute. White noise averages out; bias does not. This is what makes dead reckoning hard. |
+| Gaussian white noise | accel σ 0.05 m/s², gyro σ 0.002 rad/s |
+| 20 Hz vertical vibration | The engine/road shake that Phase 13's motion classifier must reject |
+| Red-light stops | Every stop is a chance for ZUPT to reset the error budget |
+| Cornering and bend speed limits | Exercises NHC and gives the gyroscope a real yaw rate |
+
+`simulateGnssOutage(startMs, durationMs)` removes the `gnss` field entirely —
+never zeroed, never faked — which is exactly the shape a real tunnel produces.
+
+Everything is seeded and deterministic: the same seed yields byte-identical
+samples, so the Phase 7 ablation table measures constraints rather than luck.
+
+Routes are generated, not hand-typed:
+
+```bash
+node scripts/make-routes.mjs   # data/routes/*.json
+```
 
 ## Repository layout
 
