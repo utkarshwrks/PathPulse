@@ -14,6 +14,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export type GeolocationStatus =
   | 'idle'
   | 'unsupported'
+  /** Page served over plain HTTP from a non-localhost origin. */
+  | 'insecure'
   | 'requesting'
   | 'watching'
   | 'denied'
@@ -73,6 +75,20 @@ export function useGeolocation(autoStart = false): UseGeolocationResult {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setStatus('unsupported');
       setError('This browser does not expose the Geolocation API.');
+      return;
+    }
+
+    // Browsers restrict geolocation to secure contexts. Chrome enforces this
+    // by firing PERMISSION_DENIED instantly instead of removing the API or
+    // showing a prompt — so an http:// LAN origin looks exactly like the user
+    // tapping "Block". Detect it up front and say what is actually wrong,
+    // rather than blaming the user for a denial they were never offered.
+    if (typeof window !== 'undefined' && window.isSecureContext === false) {
+      setStatus('insecure');
+      setError(
+        'Location needs a secure context. This page is plain HTTP, so the ' +
+          'browser blocks GNSS without ever prompting.',
+      );
       return;
     }
     if (watchIdRef.current !== null) return;

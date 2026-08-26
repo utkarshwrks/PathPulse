@@ -31,7 +31,15 @@ let clearWatch: ReturnType<typeof vi.fn>;
 let onSuccess: (p: unknown) => void;
 let onError: (e: unknown) => void;
 
+function setSecureContext(secure: boolean) {
+  Object.defineProperty(globalThis.window, 'isSecureContext', {
+    value: secure,
+    configurable: true,
+  });
+}
+
 beforeEach(() => {
+  setSecureContext(true);
   onSuccess = () => {};
   onError = () => {};
   watchPosition = vi.fn((succ: (p: unknown) => void, err: (e: unknown) => void) => {
@@ -149,6 +157,24 @@ describe('useGeolocation — failure modes', () => {
     act(() => onError(makeError(ERR.POSITION_UNAVAILABLE)));
     await waitFor(() => expect(result.current.status).toBe('unavailable'));
     expect(clearWatch).not.toHaveBeenCalled();
+  });
+
+  it('names the insecure origin instead of blaming the user', async () => {
+    // Chrome does NOT prompt on an http:// LAN origin — it fires
+    // PERMISSION_DENIED instantly. Reporting that as "you denied it" sends
+    // people to a browser setting that cannot fix it.
+    setSecureContext(false);
+    const { result } = renderHook(() => useGeolocation(true));
+    await waitFor(() => expect(result.current.status).toBe('insecure'));
+    expect(result.current.error).toMatch(/secure context/i);
+    // Do not even open a watch that is guaranteed to fail.
+    expect(watchPosition).not.toHaveBeenCalled();
+  });
+
+  it('still watches normally on a secure origin', () => {
+    setSecureContext(true);
+    renderHook(() => useGeolocation(true));
+    expect(watchPosition).toHaveBeenCalledTimes(1);
   });
 
   it('degrades cleanly when the browser has no Geolocation API', async () => {

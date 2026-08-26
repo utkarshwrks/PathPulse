@@ -86,7 +86,7 @@ certificate it generates covers only `localhost`/`127.0.0.1`, not the LAN IP.
 ## HOW TO TEST
 
 ```bash
-pnpm test                # 70/70 pass
+pnpm test                # 72/72 pass
 pnpm typecheck           # clean across 4 packages
 pnpm lint:core-purity    # 0 violations across 8 files
 pnpm build               # emits apps/web/out
@@ -95,7 +95,7 @@ pnpm build               # emits apps/web/out
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `nav-core` | 33 | geodesy (18), trail buffer + segments (15) |
-| `apps/web` | 37 | geolocation hook (14), map config (11), mode colours (6), mode derivation (5), mock script (3) |
+| `apps/web` | 39 | geolocation hook (16), map config (11), mode colours (6), mode derivation (5), mock script (3) |
 
 `apps/web` runs Vitest under jsdom with `@testing-library/react`, so the
 geolocation hook is tested against a mocked `navigator.geolocation` — including
@@ -126,6 +126,11 @@ export** (the same bundle Capacitor will wrap):
 - **`deriveMode` lives in `lib/navMode.ts`, not inside the page component**, so
   the accuracy thresholds are unit tested rather than buried in JSX. Phase 4
   supersedes it with the real hysteresis machine in nav-core.
+- **Insecure origins are reported as such, not as a user denial.** Chrome
+  restricts geolocation to secure contexts and enforces it by firing
+  `PERMISSION_DENIED` *instantly, with no prompt* — the API stays defined. Naively
+  mapping code 1 to "you denied it" sends people to a browser setting that cannot
+  fix it. The hook checks `window.isSecureContext` first and reports `insecure`.
 - **The geolocation hook guards on `navigator.geolocation` truthiness, not
   `'geolocation' in navigator`.** The property can exist holding `undefined` in
   insecure contexts and some embedded webviews; the `in` check passes there and
