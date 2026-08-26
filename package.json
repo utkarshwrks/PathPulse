@@ -10,7 +10,9 @@
     "test": "pnpm -r test",
     "test:watch": "pnpm --filter @pathpulse/nav-core test:watch",
     "typecheck": "pnpm -r typecheck",
-    "lint:core-purity": "node scripts/check-core-purity.mjs"
+    "lint:core-purity": "node scripts/check-core-purity.mjs",
+    "dev:lan": "pnpm --filter @pathpulse/web dev:lan",
+    "dev:https": "pnpm --filter @pathpulse/web dev:https"
   },
   "packageManager": "pnpm@10.11.0",
   "engines": {

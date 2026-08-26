@@ -8,7 +8,9 @@
     "start": "npx serve out",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dev:lan": "next dev -H 0.0.0.0",
+    "dev:https": "next dev --experimental-https -H 0.0.0.0"
   },
   "dependencies": {
     "@pathpulse/nav-core": "workspace:*",

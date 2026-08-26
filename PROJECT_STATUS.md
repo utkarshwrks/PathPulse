@@ -69,6 +69,20 @@ Optional vector dark basemap — `apps/web/.env.local`:
 NEXT_PUBLIC_MAPTILER_KEY=your_key_here
 ```
 
+## HOW TO TEST ON A PHONE
+
+Same Wi-Fi, then `pnpm dev:lan` and open `http://<lan-ip>:3000/?mock=1`.
+That exercises map, marker and trail without needing a fix.
+
+**Real GPS will not work over plain-HTTP LAN.** Browsers gate
+`navigator.geolocation` behind a secure context (HTTPS or `localhost`), so an
+`http://192.168.x.x` origin gets no API at all — the app correctly shows its
+unsupported screen. Workarounds and their trade-offs are in the README; the
+real fix is the Phase 3 APK, which uses native permissions.
+
+`pnpm dev:https` does not help: mkcert needs an interactive sudo prompt, and the
+certificate it generates covers only `localhost`/`127.0.0.1`, not the LAN IP.
+
 ## HOW TO TEST
 
 ```bash

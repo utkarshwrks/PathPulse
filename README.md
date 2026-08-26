@@ -66,6 +66,44 @@ NEXT_PUBLIC_MAPTILER_KEY=your_key_here
 Style selection lives in `apps/web/config/map.ts` behind `resolveMapStyle()`, so
 Phase 9 can swap in an offline PMTiles basemap without touching `MapView`.
 
+### Testing on a phone (before the Phase 3 APK)
+
+Your laptop and phone must be on the same Wi-Fi. Start the server bound to all
+interfaces:
+
+```bash
+pnpm dev:lan          # serves on http://<your-lan-ip>:3000
+```
+
+Then on the phone:
+
+| What you want | URL | Works? |
+| --- | --- | --- |
+| Map, marker, trail, mode colours | `http://<lan-ip>:3000/?mock=1` | ✅ works as-is |
+| **Real GPS** | `http://<lan-ip>:3000` | ❌ blocked — see below |
+
+**Why real GPS is blocked over LAN:** browsers only expose
+`navigator.geolocation` in a *secure context* — HTTPS, or `localhost`. A plain
+`http://192.168.x.x` origin is neither, so the API is unavailable and the app
+shows its "Geolocation unsupported" screen. This is a browser rule, not a bug.
+
+Three ways around it:
+
+1. **Android Chrome flag** (fastest, no certificates). Open
+   `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, add
+   `http://<lan-ip>:3000`, set the flag to Enabled, relaunch Chrome. Chrome now
+   treats that origin as secure and geolocation works. Remove it when done.
+2. **HTTPS tunnel** (works on iOS too). Any tunnel that gives a public HTTPS
+   URL — e.g. `ngrok http 3000` or `cloudflared tunnel --url http://localhost:3000`
+   — makes the origin secure. Note this exposes your dev server publicly for the
+   life of the tunnel.
+3. **Wait for Phase 3.** The Capacitor APK uses native location permissions and
+   has no secure-context requirement at all. This is the real answer.
+
+`next dev --experimental-https` (`pnpm dev:https`) is *not* a solution here: its
+self-signed certificate covers only `localhost`/`127.0.0.1`, so a phone hitting
+the LAN IP gets a certificate name mismatch.
+
 ### Development without GPS
 
 `http://localhost:3000/?mock=1` drives a synthetic track so the map, marker and
