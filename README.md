@@ -15,8 +15,8 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phase 3 complete** — installable Android APK with native sensors, on top of
-the Phase 2 simulator and the Phase 1 map/marker/trail.
+**Phase 4 complete** — the dot now survives a GNSS outage. Full
+GNSS → dead reckoning → smooth recovery loop with a measured drift figure.
 See [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for the live picture and what is
 next.
 
@@ -197,6 +197,55 @@ pathpulse/
 ├── scripts/                  Build + lint tooling
 └── docs/                     Generated benchmarks
 ```
+
+## How it works
+
+```
+INITIALIZING
+   └─ 3 consecutive fixes under 20 m ────────→ GNSS
+
+GNSS  (dead reckoning is ALSO running here — shadow mode)
+   └─ accuracy > 25 m, or < 4 sats,
+      or no fix for 1.5 s ───────────────────→ GNSS_DEGRADED
+
+GNSS_DEGRADED
+   ├─ 2 consecutive good fixes ──────────────→ GNSS
+   └─ degraded for 2 s ──────────────────────→ DEAD_RECKONING
+
+DEAD_RECKONING
+   ├─ propagate from IMU every sample
+   └─ 2 consecutive good fixes ──────────────→ RECOVERING
+
+RECOVERING
+   ├─ measure drift = |estimate − truth|
+   ├─ slew the offset to zero over 2 s
+   └─ done ──────────────────────────────────→ GNSS
+```
+
+Three decisions do most of the work:
+
+**Shadow mode.** Dead reckoning is not started when GNSS fails — it runs
+continuously in every mode, reset by each good fix. When GNSS drops there is
+nothing to spin up and no initialisation to perform. That is how the problem
+statement's *"seamless handover within milliseconds"* is met: there is no
+handover.
+
+**Hysteresis everywhere.** Every transition needs several consecutive
+confirmations or a sustained condition, never a single sample. Without it a fix
+hovering near the accuracy threshold makes the badge strobe several times a
+second, and the demo reads as broken however good the maths is.
+
+**Never teleport.** When GNSS returns, our estimate is some metres from truth.
+Snapping to the correct answer is mathematically ideal and looks like a bug, so
+the offset is eased to zero over two seconds instead — against a *live* GNSS
+target, because the vehicle is still moving.
+
+### Why attitude accuracy is position accuracy
+
+An accelerometer measures gravity and motion mixed together. A **1 degree**
+error in knowing which way is down injects sin(1°) × 9.81 = 0.171 m/s² of false
+acceleration — which double-integrates to **~308 metres of position error per
+minute**. One degree. This is why Phase 12 builds a real alignment engine.
 
 ## Architecture
 

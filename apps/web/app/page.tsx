@@ -6,11 +6,8 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { appendTrailPoint, trailDistanceM, type TrailPoint } from '@pathpulse/nav-core';
 import { FOLLOW_ZOOM, resolveMapStyle } from '@/config/map';
 import { useGeolocation } from '@/hooks/useGeolocation';
-import {
-  useSensorSource,
-  type RouteKey,
-  type SourceKind,
-} from '@/hooks/useSensorSource';
+import { useNavigationEngine } from '@/hooks/useNavigationEngine';
+import { useSensorSource, type RouteKey, type SourceKind } from '@/hooks/useSensorSource';
 import StatusBar from '@/components/StatusBar';
 import SourcePanel from '@/components/SourcePanel';
 import PermissionGate from '@/components/PermissionGate';
@@ -18,8 +15,6 @@ import DeviceInfo from '@/components/DeviceInfo';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
 
-// MapLibre touches window/document at import time, and this app is statically
-// exported — so it must never be evaluated during prerender.
 const MapView = dynamic(() => import('@/components/MapView'), {
   ssr: false,
   loading: () => (
@@ -32,96 +27,84 @@ const MapView = dynamic(() => import('@/components/MapView'), {
 export default function Home() {
   const [kind, setKind] = useState<SourceKind>('simulation');
   const [routeKey, setRouteKey] = useState<RouteKey>('city');
-  const source = useSensorSource(kind, routeKey);
+  const [showDeviceInfo, setShowDeviceInfo] = useState(false);
 
-  // Still used for the live-mode permission UI; the source itself handles data.
+  // ★ The navigation engine is now the single source of truth for what the
+  // map draws. Raw GNSS is only an input to it, never drawn directly — that is
+  // what lets the marker keep moving when GNSS disappears.
+  const nav = useNavigationEngine();
+  const source = useSensorSource(kind, routeKey, nav.feed);
   const live = useGeolocation(false);
 
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [following, setFollowing] = useState(true);
-  const [showDeviceInfo, setShowDeviceInfo] = useState(false);
   const mapRef = useRef<MapLibreMap | null>(null);
   const styleInfo = useMemo(() => resolveMapStyle(), []);
 
-  const { fix, mode } = source;
+  const navState = nav.state;
 
   useEffect(() => {
-    if (!fix) return;
+    if (!navState) return;
     setTrail((prev) =>
-      appendTrailPoint(prev, { lat: fix.lat, lon: fix.lon, mode, t: fix.timestamp }),
+      appendTrailPoint(prev, {
+        lat: navState.position.lat,
+        lon: navState.position.lon,
+        mode: navState.mode,
+        t: navState.t,
+      }),
     );
-  }, [fix, mode]);
+  }, [navState]);
 
-  // Clear the trail when the source or route changes — mixing two drives into
-  // one path would be actively misleading.
   useEffect(() => {
     setTrail([]);
+    nav.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, routeKey]);
 
   useEffect(() => {
-    if (!fix || !following) return;
+    if (!navState || !following) return;
     const map = mapRef.current;
     if (!map) return;
     map.easeTo({
-      center: [fix.lon, fix.lat],
+      center: [navState.position.lon, navState.position.lat],
       zoom: Math.max(map.getZoom(), FOLLOW_ZOOM),
-      duration: 500,
+      duration: 400,
     });
-  }, [fix, following]);
+  }, [navState, following]);
 
   const handleReady = useCallback((map: MapLibreMap) => {
     mapRef.current = map;
   }, []);
 
   const distanceM = useMemo(() => trailDistanceM(trail), [trail]);
+  const hasPosition = navState !== null && navState.mode !== 'INITIALIZING';
 
   return (
     <main className="relative h-full w-full overflow-hidden">
       <MapView onReady={handleReady} onUserInteract={() => setFollowing(false)}>
         <TrailLayer trail={trail} />
-        {fix ? (
+        {hasPosition ? (
           <VehicleMarker
-            lat={fix.lat}
-            lon={fix.lon}
-            headingDeg={fix.headingDeg}
-            mode={mode}
-            accuracyM={source.inOutage ? null : fix.accuracyM}
+            lat={navState!.position.lat}
+            lon={navState!.position.lon}
+            headingDeg={navState!.headingDeg}
+            mode={navState!.mode}
+            accuracyM={navState!.covariance.alongM}
           />
         ) : null}
       </MapView>
 
       <StatusBar
-        mode={mode}
-        fix={fix}
+        navState={navState}
         status={kind === 'live' ? live.status : 'watching'}
         error={kind === 'live' ? live.error : null}
-        fixCount={Math.round(source.gnssHz * 100) / 100}
         distanceM={distanceM}
         mapSourceLabel={styleInfo.label}
         sourceName={source.sourceName}
-        inOutage={source.inOutage}
-      />
-
-      <SourcePanel
-        kind={kind}
-        routeKey={routeKey}
-        isRunning={source.isRunning}
-        inOutage={source.inOutage}
-        progress={source.progress}
+        updateHz={nav.updateHz}
         imuHz={source.imuHz}
         gnssHz={source.gnssHz}
-        recordedCount={source.recordedCount}
-        onKindChange={setKind}
-        onRouteChange={setRouteKey}
-        onPlay={() => {
-          if (kind === 'live') live.start();
-          source.play();
-        }}
-        onPause={source.pause}
-        onReset={source.reset}
-        onSpeed={source.setSpeed}
-        onOutage={() => source.triggerOutage(60_000)}
-        onDownload={source.downloadRecording}
+        events={nav.events}
       />
 
       <button
@@ -140,6 +123,32 @@ export default function Home() {
           onClose={() => setShowDeviceInfo(false)}
         />
       ) : null}
+
+      <SourcePanel
+        kind={kind}
+        routeKey={routeKey}
+        isRunning={source.isRunning}
+        inOutage={source.inOutage}
+        progress={source.progress}
+        imuHz={source.imuHz}
+        gnssHz={source.gnssHz}
+        recordedCount={source.recordedCount}
+        onKindChange={setKind}
+        onRouteChange={setRouteKey}
+        onPlay={() => {
+          if (kind === 'live') live.start();
+          source.play();
+        }}
+        onPause={source.pause}
+        onReset={() => {
+          source.reset();
+          nav.reset();
+          setTrail([]);
+        }}
+        onSpeed={source.setSpeed}
+        onOutage={() => source.triggerOutage(60_000)}
+        onDownload={source.downloadRecording}
+      />
 
       {!following ? (
         <button

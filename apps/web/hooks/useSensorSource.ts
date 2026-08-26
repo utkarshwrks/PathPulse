@@ -64,7 +64,12 @@ export interface SensorSourceState {
  * this sits alongside it and will be the single input to NavigationEngine in
  * Phase 4.
  */
-export function useSensorSource(kind: SourceKind, routeKey: RouteKey) {
+export function useSensorSource(
+  kind: SourceKind,
+  routeKey: RouteKey,
+  /** Called for every raw sample, before any UI throttling. */
+  onSample?: (s: SensorSample) => void,
+) {
   const [state, setState] = useState<SensorSourceState>({
     fix: null,
     mode: 'INITIALIZING',
@@ -89,7 +94,12 @@ export function useSensorSource(kind: SourceKind, routeKey: RouteKey) {
   const imuTimes = useRef<number[]>([]);
   const gnssTimes = useRef<number[]>([]);
 
+  const onSampleRef = useRef(onSample);
+  onSampleRef.current = onSample;
+
   const handleSample = useCallback((s: SensorSample) => {
+    // Feed the navigation engine first, at full sensor rate.
+    onSampleRef.current?.(s);
     const now = s.t;
     if (s.imu) {
       imuTimes.current.push(now);

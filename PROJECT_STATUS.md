@@ -1,8 +1,16 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 3 — Android APK via Capacitor ✅ COMPLETE
+**CURRENT PHASE:** Phase 4 — State Machine + Dead Reckoning + Recovery ✅ COMPLETE
 **LAST UPDATED:** 2026-08-27
-**NEXT PHASE:** Phase 4 — State Machine + Dead Reckoning + Recovery ★ the demo
+**NEXT PHASE:** Phase 5 — HUD + Debug Panel + Trust Features
+
+> ### ⚠️ Current drift: 27% — above the PS target of <10%
+> This is expected and not yet a problem. Phase 4 is unconstrained dead
+> reckoning: filters only, no NHC, no ZUPT, no ZARU, no road snapping. The
+> guide's own ablation table puts naive integration at 38% and filtered-only
+> at 22%, so 27% sits exactly where it should. **Phase 6 is what brings this
+> under 10%**, and Phase 7 measures each constraint's contribution.
+> Do not quote this number as a result.
 
 ---
 
@@ -87,6 +95,43 @@ package `in.avinya.pathpulse`, all 9 permissions present including
 `HIGH_SAMPLING_RATE_SENSORS`, web assets bundled under `assets/public/`
 including `index.html`. **4.7 MB.**
 
+### Phase 4 — State Machine + Dead Reckoning + Recovery
+
+All in `nav-core`, still pure (24 files, 0 violations).
+
+- `filters/` — `MedianFilter` (spike/pothole rejection), `LowPassFilter`
+  (2nd-order Butterworth, primed at the first sample so it injects no startup
+  transient), `StationarityDetector` (keys on accel *variance*, not magnitude —
+  magnitude is ~9.81 whether parked or cruising)
+- `alignment/` — `GravityRemover` (quaternion path preferred, low-pass
+  fallback) and `SimpleAlignment`. Carries the project's most important
+  comment: **1° attitude error = 0.171 m/s² false acceleration ≈ 308 m of
+  position error per minute.**
+- `deadreckoning/` — `DeadReckoningEngine`. Compass sign convention documented
+  explicitly. Speed priority: GNSS Doppler → integrated accel, clamped to
+  0–40 m/s. Seeds an outage from a **smoothed** pre-outage state and rejects a
+  final fix whose accuracy is an outlier, because the last fix before a tunnel
+  is usually the worst one in the drive.
+- `state/` — `NavigationStateMachine` with hysteresis on every transition, plus
+  a bounded `EventLog` recording each change *with its reason*.
+- `fusion/` — `RecoveryBlender`. Eased slew over 2 s (1 s for gross drift), and
+  it decays the offset against a **live** GNSS target, not a frozen one, since
+  the vehicle keeps moving during recovery.
+- `engine/` — `NavigationEngine` ties it together and suppresses non-finite
+  states rather than letting a NaN move the marker to nowhere.
+
+**★ Shadow mode**: dead reckoning propagates on *every* sample in *every* mode,
+reset by each good fix. There is no start-up when GNSS drops because there is
+no handover — that is how the PS's "seamless within milliseconds" is met.
+
+`apps/web` now renders **from `NavigationState`**, never from raw GNSS. That
+single change is what lets the marker keep moving during an outage.
+
+**Verified in-browser** on the production export: full
+GNSS → DEAD RECKONING → RECOVERING → GNSS loop, marker moving at 50 km/h with
+GNSS gone, drift and confidence live on screen, measured update rate
+**11–12 Hz** (requirement is ≥10).
+
 ## HOW TO RUN
 
 ```bash
@@ -100,7 +145,7 @@ Pick **Simulation → City**, press **Play**. No GPS, no car, no tunnel needed.
 ## HOW TO TEST
 
 ```bash
-pnpm test             # 101/101
+pnpm test             # 144/144
 pnpm typecheck        # clean across 4 packages
 pnpm lint:core-purity # 0 violations
 pnpm build            # static export
@@ -109,8 +154,8 @@ node scripts/make-routes.mjs   # regenerate routes
 
 | Package | Tests |
 | --- | --- |
-| `nav-core` | 33 — geodesy (18), trail (15) |
-| `sensor-sources` | 32 — simulation (21), replay/recording (11) |
+| `nav-core` | 70 — geodesy (18), trail (15), filters (10), engine (27) |
+| `sensor-sources` | 38 — simulation (21), replay/recording (11), engine integration (6) |
 | `apps/web` | 36 — geolocation (16), map config (11), modes (6), deriveMode (5) |
 
 Verified in a browser against the production static export: IMU **50.0 Hz**,
