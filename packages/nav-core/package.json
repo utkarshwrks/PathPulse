@@ -1,0 +1,21 @@
+{
+  "name": "@pathpulse/nav-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "//": "★ PURITY RULE — DO NOT BREAK ★ This package is pure TypeScript math. It must NEVER import or reference window, document, fetch, navigator, localStorage, React, or any browser/Node runtime API. Only pure functions: input in, output out. This is what lets the exact same code run in the browser, inside the Capacitor APK, in headless replay tests, and in the Part B 200 Hz Node edge engine with zero rewrites. Sensor access belongs in @pathpulse/sensor-sources; UI belongs in @pathpulse/web. Enforced by `pnpm lint:core-purity`.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,52 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# next.js
+.next/
+out/
+next-env.d.ts
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# android / capacitor
+android/
+ios/
+*.apk
+*.aab
+local.properties
+
+# env
+.env
+.env.local
+.env*.local
+
+# python / ml
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+ml/data/raw/
+ml/checkpoints/
+*.pth
+*.onnx
+*.tflite
+
+# large map data (regenerate with scripts/build-road-graph.mjs)
+data/maps/*.pmtiles
+data/maps/*.osm.pbf
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+coverage/

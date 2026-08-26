@@ -1,0 +1,24 @@
+{
+  "name": "pathpulse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-ML based Intelligent Dead Reckoning system for seamless navigation (SIH26168, ISRO)",
+  "scripts": {
+    "dev": "pnpm --filter @pathpulse/web dev",
+    "build": "pnpm --filter @pathpulse/web build",
+    "start": "pnpm --filter @pathpulse/web start",
+    "test": "pnpm -r test",
+    "test:watch": "pnpm --filter @pathpulse/nav-core test:watch",
+    "typecheck": "pnpm -r typecheck",
+    "lint:core-purity": "node scripts/check-core-purity.mjs"
+  },
+  "packageManager": "pnpm@10.11.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

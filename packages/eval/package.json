@@ -1,0 +1,18 @@
+{
+  "name": "@pathpulse/eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "//": "Replay a recorded log, punch an artificial GNSS outage in it, and measure drift against the recorded GNSS as ground truth. Built in Phase 7.",
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "echo \"[eval] no tests yet (Phase 7)\" && exit 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pathpulse/nav-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

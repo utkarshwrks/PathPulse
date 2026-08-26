@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: #0a0e14;
+  color: #e6edf3;
+  overscroll-behavior: none;
+}
+
+/* Numbers in the HUD must not reflow as digits change width. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
