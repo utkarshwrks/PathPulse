@@ -13,11 +13,20 @@ build/
 *.tsbuildinfo
 
 # android / capacitor
-android/
+# NOTE: apps/web/android IS committed. AndroidManifest.xml carries our
+# permissions (HIGH_SAMPLING_RATE_SENSORS et al); regenerating the project
+# with `cap add android` would silently drop them. Only build output and
+# machine-specific files are ignored.
+apps/web/android/build/
+apps/web/android/app/build/
+apps/web/android/.gradle/
+apps/web/android/local.properties
+apps/web/android/app/src/main/assets/public/
+apps/web/android/app/src/main/assets/capacitor.config.json
+apps/web/android/app/src/main/res/xml/config.xml
 ios/
 *.apk
 *.aab
-local.properties
 
 # env
 .env

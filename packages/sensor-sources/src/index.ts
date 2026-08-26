@@ -7,3 +7,4 @@ export * from './simulation/rng.js';
 export * from './replay/ReplaySource.js';
 export * from './recording/RecordingWrapper.js';
 export * from './web/WebSource.js';
+export * from './native/NativeSource.js';

@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 2 — Sensor Abstraction + Simulation ✅ COMPLETE
-**LAST UPDATED:** 2026-08-26
-**NEXT PHASE:** Phase 3 — Android APK via Capacitor ★ do this today
+**CURRENT PHASE:** Phase 3 — Android APK via Capacitor ✅ COMPLETE
+**LAST UPDATED:** 2026-08-27
+**NEXT PHASE:** Phase 4 — State Machine + Dead Reckoning + Recovery ★ the demo
 
 ---
 
@@ -62,11 +62,37 @@ eval harness never do.
   controls, 1×–5× slider, progress bar, GNSS-loss button, recording download
 - **`hooks/useMockTrack.ts` deleted** — superseded, as promised in Phase 1
 
+### Phase 3 — Android APK via Capacitor
+
+- **Capacitor 6.2.1**, not 8. Capacitor 7+ requires JDK 21; this machine has
+  JDK 17. Pinned deliberately, recorded here so it is revisited on purpose.
+- `capacitor.config.ts` — appId `in.avinya.pathpulse`, `webDir: 'out'`,
+  `androidScheme: 'https'`. That scheme matters: it makes the WebView a
+  **secure context**, so geolocation works inside the APK without the
+  http-origin block that stops it over a LAN.
+- `AndroidManifest.xml` — 9 permissions incl. `HIGH_SAMPLING_RATE_SENSORS`;
+  GPS/accelerometer/gyroscope declared `required="false"` so the app still
+  installs and degrades on a device that lacks them.
+- `sensor-sources/src/native/NativeSource.ts` — Capacitor Geolocation + Motion
+  behind the same `SensorSource` interface. Capacitor modules are imported
+  **lazily**, or they would be pulled into the web bundle and break
+  `next build`. Live mode picks Native inside the APK and Web in a browser.
+- `apps/web/lib/platform.ts` + `components/DeviceInfo.tsx` — Device screen
+  showing platform, model, OS, WebView version, secure-context flag, measured
+  IMU/GNSS rates and permission state.
+- `scripts/apk-path.mjs` — prints APK path and size after a build.
+
+**Verified by inspecting the built binary, not the source manifest:**
+package `in.avinya.pathpulse`, all 9 permissions present including
+`HIGH_SAMPLING_RATE_SENSORS`, web assets bundled under `assets/public/`
+including `index.html`. **4.7 MB.**
+
 ## HOW TO RUN
 
 ```bash
 pnpm install
 pnpm dev              # http://localhost:3000
+pnpm build:android    # -> apps/web/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Pick **Simulation → City**, press **Play**. No GPS, no car, no tunnel needed.
@@ -118,6 +144,18 @@ the badge to DEAD RECKONING and blanked accuracy.
   harness worthless.
 
 ## KNOWN ISSUES
+
+- **The APK has not been run on a physical device yet** — no phone was
+  connected when it was built. It compiles, packages and carries the right
+  permissions, but "installs and shows a map" is unverified. Do this before
+  trusting it.
+- **`@capacitor/motion` has no native Android implementation.** It wraps the
+  WebView's `DeviceMotionEvent`, so IMU rate is whatever the WebView allows,
+  not `SENSOR_DELAY_FASTEST`, and it is throttled with the screen off.
+  Satellite count and constellation are not exposed either. Both need the
+  native Kotlin sensor loop in Phase 15. The Device screen states this
+  on-screen rather than implying we have 200 Hz.
+- **Capacitor pinned to 6** for JDK 17. Moving to 7/8 means installing JDK 21.
 
 - **Dead reckoning does not exist yet.** During an outage the marker holds its
   last fix and the UI says so explicitly. Phase 4 adds propagation.

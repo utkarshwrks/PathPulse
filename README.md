@@ -15,9 +15,8 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phase 2 complete** — a realistic sensor simulator behind a four-implementation
-`SensorSource` interface, on top of the Phase 1 map, marker and mode-coloured
-trail.
+**Phase 3 complete** — installable Android APK with native sensors, on top of
+the Phase 2 simulator and the Phase 1 map/marker/trail.
 See [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for the live picture and what is
 next.
 
@@ -67,7 +66,51 @@ NEXT_PUBLIC_MAPTILER_KEY=your_key_here
 Style selection lives in `apps/web/config/map.ts` behind `resolveMapStyle()`, so
 Phase 9 can swap in an offline PMTiles basemap without touching `MapView`.
 
-### Testing on a phone (before the Phase 3 APK)
+### Building the Android APK
+
+Prerequisites: **JDK 17** (Capacitor 6 requires it — 7 and 8 need JDK 21),
+Android Studio with the SDK, and a phone with USB debugging on.
+
+```bash
+pnpm build:android
+```
+
+That runs `next build` → `cap sync android` → `gradlew assembleDebug` and
+prints the APK path. Install it:
+
+```bash
+adb install -r apps/web/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+| | |
+| --- | --- |
+| Package | `in.avinya.pathpulse` |
+| Size | ~4.7 MB |
+| Output | `apps/web/android/app/build/outputs/apk/debug/app-debug.apk` |
+
+**`apps/web/android/` is committed on purpose.** `AndroidManifest.xml` carries
+our permissions, and a fresh clone running `cap add android` would regenerate
+the project and silently drop them. Only build output and `local.properties`
+are ignored.
+
+Permissions requested, and why:
+
+| Permission | Why |
+| --- | --- |
+| `ACCESS_FINE_LOCATION` | GNSS-grade fixes. COARSE alone gives network positions off by hundreds of metres — the exact behaviour this project exists to beat. |
+| `ACCESS_BACKGROUND_LOCATION` | A real tunnel drive is not done with the app in the foreground. |
+| `HIGH_SAMPLING_RATE_SENSORS` | Mandatory from Android 12 to read the IMU above 200 Hz. Without it the rate is silently capped and dead reckoning quietly degrades instead of failing loudly. |
+| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION`, `WAKE_LOCK` | Back the Phase 15 foreground service. |
+| `INTERNET` | First map-tile download only. Everything after works offline. |
+
+Common failures:
+- **Gradle can't find the SDK** → `apps/web/android/local.properties` needs
+  `sdk.dir=$HOME/Library/Android/sdk`. It is machine-specific and gitignored.
+- **White screen in the APK** → `webDir` is wrong, or `out/` was not built.
+- **`output: export` error** → a server component crept in; every page needs
+  `'use client'`.
+
+### Testing on a phone in the browser (no APK)
 
 Your laptop and phone must be on the same Wi-Fi. Start the server bound to all
 interfaces:

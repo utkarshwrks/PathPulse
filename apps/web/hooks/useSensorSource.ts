@@ -5,10 +5,12 @@ import type { NavMode, SensorSample } from '@pathpulse/nav-core';
 import {
   CITY_VEHICLE,
   HIGHWAY_VEHICLE,
+  NativeSource,
   RecordingWrapper,
   SimulationSource,
   WebSource,
   type RouteGeoJson,
+  type SensorSource,
 } from '@pathpulse/sensor-sources';
 import cityRoute from '../../../data/routes/route_city.json';
 import highwayRoute from '../../../data/routes/route_highway.json';
@@ -78,7 +80,9 @@ export function useSensorSource(kind: SourceKind, routeKey: RouteKey) {
 
   const simRef = useRef<SimulationSource | null>(null);
   const recRef = useRef<RecordingWrapper | null>(null);
-  const webRef = useRef<WebSource | null>(null);
+  // Live mode resolves to NativeSource inside the APK and WebSource in a
+  // browser. Same interface either way, so nothing downstream changes.
+  const webRef = useRef<SensorSource | null>(null);
   const lastFixRef = useRef<GnssFix | null>(null);
 
   // Rate measurement: counted, never hardcoded.
@@ -161,10 +165,19 @@ export function useSensorSource(kind: SourceKind, routeKey: RouteKey) {
         progress: 0,
       }));
     } else {
-      const web = new WebSource();
-      web.onSample(handleSample);
-      webRef.current = web;
-      setState((p) => ({ ...p, sourceName: web.capabilities.name }));
+      let cancelled = false;
+      void NativeSource.isAvailable().then((native) => {
+        if (cancelled) return;
+        const src: SensorSource = native ? new NativeSource() : new WebSource();
+        src.onSample(handleSample);
+        webRef.current = src;
+        setState((p) => ({ ...p, sourceName: src.capabilities.name }));
+      });
+      return () => {
+        cancelled = true;
+        simRef.current?.stop();
+        webRef.current?.stop();
+      };
     }
 
     return () => {

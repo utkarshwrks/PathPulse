@@ -14,6 +14,7 @@ import {
 import StatusBar from '@/components/StatusBar';
 import SourcePanel from '@/components/SourcePanel';
 import PermissionGate from '@/components/PermissionGate';
+import DeviceInfo from '@/components/DeviceInfo';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
 
@@ -38,6 +39,7 @@ export default function Home() {
 
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [following, setFollowing] = useState(true);
+  const [showDeviceInfo, setShowDeviceInfo] = useState(false);
   const mapRef = useRef<MapLibreMap | null>(null);
   const styleInfo = useMemo(() => resolveMapStyle(), []);
 
@@ -121,6 +123,23 @@ export default function Home() {
         onOutage={() => source.triggerOutage(60_000)}
         onDownload={source.downloadRecording}
       />
+
+      <button
+        type="button"
+        onClick={() => setShowDeviceInfo(true)}
+        className="absolute right-3 top-3 z-10 rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
+      >
+        Device
+      </button>
+
+      {showDeviceInfo ? (
+        <DeviceInfo
+          imuHz={source.imuHz}
+          gnssHz={source.gnssHz}
+          sourceName={source.sourceName}
+          onClose={() => setShowDeviceInfo(false)}
+        />
+      ) : null}
 
       {!following ? (
         <button

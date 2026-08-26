@@ -12,7 +12,9 @@
     "typecheck": "pnpm -r typecheck",
     "lint:core-purity": "node scripts/check-core-purity.mjs",
     "dev:lan": "pnpm --filter @pathpulse/web dev:lan",
-    "dev:https": "pnpm --filter @pathpulse/web dev:https"
+    "dev:https": "pnpm --filter @pathpulse/web dev:https",
+    "build:android": "pnpm --filter @pathpulse/web build:android && node scripts/apk-path.mjs",
+    "cap:sync": "pnpm --filter @pathpulse/web cap:sync"
   },
   "packageManager": "pnpm@10.11.0",
   "engines": {

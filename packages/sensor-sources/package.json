@@ -20,5 +20,21 @@
   "devDependencies": {
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^6",
+    "@capacitor/geolocation": "^6",
+    "@capacitor/motion": "^6"
+  },
+  "peerDependenciesMeta": {
+    "@capacitor/core": {
+      "optional": true
+    },
+    "@capacitor/geolocation": {
+      "optional": true
+    },
+    "@capacitor/motion": {
+      "optional": true
+    }
   }
 }
