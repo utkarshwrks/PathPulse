@@ -1,3 +1,22 @@
+const { execSync } = require('node:child_process');
+
+/**
+ * Stamp the build into the bundle.
+ *
+ * The APK bundles its web assets at build time and never auto-updates, so
+ * "am I running the new build?" is otherwise unanswerable on a phone. The
+ * Device screen shows this.
+ */
+function buildStamp() {
+  try {
+    const sha = execSync('git rev-parse --short HEAD').toString().trim();
+    const dirty = execSync('git status --porcelain').toString().trim().length > 0;
+    return `${sha}${dirty ? '+dirty' : ''}`;
+  } catch {
+    return 'unknown';
+  }
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Capacitor needs a folder of plain static files to wrap into the APK.
@@ -9,6 +28,10 @@ const nextConfig = {
   // them itself. No separate build step, no stale dist/ to debug.
   transpilePackages: ['@pathpulse/nav-core', '@pathpulse/sensor-sources'],
   reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_BUILD_ID: buildStamp(),
+    NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
+  },
   webpack: (config) => {
     // nav-core uses explicit .js specifiers because that is what real ESM
     // requires — Node will need them verbatim for the Part B edge engine.

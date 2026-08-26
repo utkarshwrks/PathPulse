@@ -57,6 +57,19 @@ export default function DeviceInfo({ imuHz, gnssHz, sourceName, onClose }: Devic
           </button>
         </div>
 
+        <Section title="Build">
+          <Row k="version" v={process.env.NEXT_PUBLIC_BUILD_ID ?? 'unknown'} />
+          <Row
+            k="built"
+            v={
+              process.env.NEXT_PUBLIC_BUILD_TIME
+                ? new Date(process.env.NEXT_PUBLIC_BUILD_TIME).toLocaleString()
+                : 'unknown'
+            }
+          />
+          <Row k="phase" v="4 — dead reckoning + recovery" />
+        </Section>
+
         <Section title="Platform">
           <Row k="running as" v={info ? (info.isNative ? 'Native APK' : 'Web browser') : '…'} />
           <Row k="platform" v={info?.platform ?? '…'} />

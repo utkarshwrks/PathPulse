@@ -50,6 +50,11 @@ data/maps/*.osm.pbf
 
 # os / editor
 .DS_Store
+# macOS / iCloud duplication artifacts ("file 2.xml"). A space in a filename
+# breaks Android's resource merger outright — `config 2.xml` failed the APK
+# build once already.
+* [0-9].*
+*\ [0-9].*
 .idea/
 .vscode/
 *.swp
