@@ -15,10 +15,12 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phase 4 complete** — the dot now survives a GNSS outage. Full
-GNSS → dead reckoning → smooth recovery loop with a measured drift figure.
-See [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for the live picture and what is
-next.
+**Phase 4 complete, Phase 6 constraints brought forward.** The dot survives a
+GNSS outage, and the six defects that a real-phone field test exposed on
+2026-08-27 are fixed. Measured drift on the simulated 60 s city outage is
+**6.26%**, inside the problem statement's <10% target. The full ablation, the
+caveats, and the defect write-up are in
+[`PROJECT_STATUS.md`](./PROJECT_STATUS.md).
 
 ## Tech stack
 
@@ -49,7 +51,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (70) |
+| `pnpm test` | All workspace tests (170) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -239,6 +241,27 @@ second, and the demo reads as broken however good the maths is.
 Snapping to the correct answer is mathematically ideal and looks like a bug, so
 the offset is eased to zero over two seconds instead — against a *live* GNSS
 target, because the vehicle is still moving.
+
+## Constraints
+
+Each of these is a runtime flag on `EngineConfig`, so it can be switched off
+live — which is both the ablation table and the strongest anti-fake demo there
+is. A scripted animation cannot be broken on request.
+
+| Constraint | Physics | What it fixes |
+| --- | --- | --- |
+| **Attitude** (`alignment/attitude.ts`) | Gravity marks the vertical; yaw is rotation about it | Heading that only worked with the phone flat on its back |
+| **NHC** | A car cannot slide sideways or fly | Cross-track drift — the error that puts the marker inside a building |
+| **ZUPT** | A stopped vehicle has exactly zero velocity | A stationary phone inventing kilometres of travel; also calibrates accelerometer bias free at every red light |
+| **ZARU** | A stopped vehicle is not turning, so the gyro reading is pure bias | Heading drift — 0.01 rad/s of bias is 113° over a 197 s outage |
+| **Forward bias** | GNSS Doppler is an independent truth signal for longitudinal acceleration | Mount tilt: 2° of it is a steady 0.34 m/s² of phantom braking |
+| **Speed clamp** | Vehicles obey physics, and roads have limits | Integrated sensor error masquerading as motion |
+| **Adaptive fix timeout** | The receiver's cadence is observable, so observe it | "DEAD RECKONING" being announced under open sky on a 0.2 Hz receiver |
+
+The ablation is generated in CI by
+`packages/sensor-sources/test/ablation.test.ts`. Ground truth is the GNSS the
+simulator withheld: drive with good GNSS, record, then delete it in software —
+honest and reproducible.
 
 ### Why attitude accuracy is position accuracy
 

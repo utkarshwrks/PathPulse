@@ -5,6 +5,8 @@ export type NavEventType =
   | 'GNSS_LOST'
   | 'MODE_CHANGE'
   | 'ZUPT_TRIGGER'
+  | 'ZARU_TRIGGER'
+  | 'NHC_APPLIED'
   | 'DRIFT_MEASURED'
   | 'RECOVERY_COMPLETE'
   | 'WARNING';

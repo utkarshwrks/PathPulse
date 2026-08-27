@@ -31,10 +31,28 @@ function makeDrive(opts: {
   let nextGnssMs = 0;
 
   for (let tMs = 0; tMs <= durationS * 1000; tMs += dtMs) {
+    // A moving vehicle always shakes. The accelerometer of a car cruising at a
+    // constant speed is NOT quiet — it carries road and engine vibration, and
+    // that vibration is the only thing distinguishing "cruising" from "parked",
+    // since both have zero mean acceleration.
+    //
+    // This fixture used to emit a perfectly noiseless (0, 0, 9.80665). That is
+    // physically a parked car, so once ZUPT was implemented it correctly
+    // brought the vehicle to a halt. Deterministic vibration keeps the drive
+    // distinguishable from a stop without making the test flaky.
+    const phase = (tMs / 1000) * 2 * Math.PI * 20; // 20 Hz road vibration
+    const shake = 0.8;
     const s: SensorSample = {
       t: tMs,
       // Level, constant speed, heading due east (90 deg) -> no yaw, no accel.
-      imu: { ax: 0, ay: 0, az: 9.80665, gx: 0, gy: 0, gz: 0 },
+      imu: {
+        ax: shake * Math.sin(phase),
+        ay: shake * Math.sin(phase * 1.31),
+        az: 9.80665 + shake * Math.sin(phase * 0.77),
+        gx: 0,
+        gy: 0,
+        gz: 0,
+      },
     };
     if (tMs >= nextGnssMs) {
       nextGnssMs += 1000;

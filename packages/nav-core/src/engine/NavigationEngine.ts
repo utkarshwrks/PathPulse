@@ -1,7 +1,7 @@
 import type { EnuPoint, LatLon, NavigationState, SensorSample } from '../types.js';
 import { enuToLatLon, latLonToEnu } from '../geo/enu.js';
 import { haversineDistance } from '../geo/distance.js';
-import { GravityRemover } from '../alignment/gravity.js';
+import { AttitudeEstimator } from '../alignment/attitude.js';
 import { SimpleAlignment } from '../alignment/simpleAlignment.js';
 import { StationarityDetector, type StationarityResult } from '../filters/stationarity.js';
 import { Vec3LowPassFilter, Vec3MedianFilter } from '../filters/index.js';
@@ -9,24 +9,64 @@ import { DeadReckoningEngine } from '../deadreckoning/DeadReckoningEngine.js';
 import { NavigationStateMachine } from '../state/NavigationStateMachine.js';
 import { EventLog } from '../state/events.js';
 import { RecoveryBlender } from '../fusion/RecoveryBlender.js';
+import { ZuptProcessor } from '../constraints/zupt.js';
+import { ZaruProcessor } from '../constraints/zaru.js';
+import { DEFAULT_NHC_CONFIG } from '../constraints/nhc.js';
+import { ForwardBiasEstimator } from '../constraints/forwardBias.js';
 
-export interface EngineConfig {
-  /** Runtime feature switches. Phase 5 wires these to on-screen toggles. */
+/** Runtime feature switches. Every one of these is an ablation-table row. */
+export interface ConstraintFlags {
   medianFilter: boolean;
   lowPass: boolean;
+  /** Non-holonomic constraint: a vehicle does not slide sideways. */
+  nhc: boolean;
+  /** Zero-velocity update: a stopped vehicle has zero speed. */
+  zupt: boolean;
+  /** Zero-angular-rate update: a stopped vehicle's gyro reading is pure bias. */
+  zaru: boolean;
+  /** Plausibility ceiling plus the unaided-integration decay. */
+  speedClamp: boolean;
+  /** Learn forward-acceleration bias from GNSS Doppler while it is available. */
+  forwardBias: boolean;
+  /**
+   * Track the receiver's real fix cadence instead of assuming 1 Hz.
+   * Off means the old fixed 1.5 s timeout — useful for reproducing the bug.
+   */
+  adaptiveTimeout: boolean;
+}
+
+export interface EngineConfig extends ConstraintFlags {
   /** Accuracy at or below which a fix is trusted for reset/seed, metres. */
   trustedAccuracyM: number;
   gyroZSign: 1 | -1;
   /** Confidence decays to 1/e after this long without GNSS. */
   confidenceTimeConstantMs: number;
+  /** 0..1, how much lateral velocity NHC removes. */
+  nhcStrength: number;
+  /**
+   * Assumed residual gyro bias once ZARU has converged, rad/s. Drives the
+   * heading-uncertainty growth that feeds the cross-track error estimate.
+   */
+  residualGyroBiasRadPerSec: number;
+  /** Assumed residual bias with ZARU switched off, rad/s. */
+  uncorrectedGyroBiasRadPerSec: number;
 }
 
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   medianFilter: true,
   lowPass: true,
+  nhc: true,
+  zupt: true,
+  zaru: true,
+  speedClamp: true,
+  forwardBias: true,
+  adaptiveTimeout: true,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
+  nhcStrength: DEFAULT_NHC_CONFIG.strength,
+  residualGyroBiasRadPerSec: 0.001,
+  uncorrectedGyroBiasRadPerSec: 0.01,
 };
 
 /**
@@ -53,9 +93,12 @@ export class NavigationEngine {
   private readonly stateMachine: NavigationStateMachine;
   private readonly dr: DeadReckoningEngine;
   private readonly recovery = new RecoveryBlender();
-  private readonly gravity = new GravityRemover();
+  private readonly attitude = new AttitudeEstimator();
   private readonly alignment = new SimpleAlignment();
   private readonly stationarity = new StationarityDetector();
+  private readonly zupt = new ZuptProcessor();
+  private readonly zaru = new ZaruProcessor();
+  private readonly forwardBias = new ForwardBiasEstimator();
   private readonly accelMedian = new Vec3MedianFilter(5);
   private readonly accelLowPass = new Vec3LowPassFilter(5, 50);
 
@@ -64,6 +107,8 @@ export class NavigationEngine {
   private lastSampleT: number | null = null;
   private lastGnssT: number | null = null;
   private lastGnssEnu: EnuPoint | null = null;
+  /** Last time a trusted fix reported meaningful speed. Gates ZUPT. */
+  private lastMovingGnssT: number | null = null;
   private lastStationarity: StationarityResult = {
     isStationary: false,
     confidence: 0,
@@ -72,6 +117,8 @@ export class NavigationEngine {
   };
   private covarianceAlongM = 0;
   private covarianceCrossM = 0;
+  /** Accumulated heading uncertainty during an outage, radians. */
+  private headingSigmaRad = 0;
   private estimatedDriftM = 0;
   private lastState: NavigationState | null = null;
   /** When the current dead-reckoning stretch began. Drives confidence decay. */
@@ -79,8 +126,20 @@ export class NavigationEngine {
 
   constructor(config: Partial<EngineConfig> = {}) {
     this.config = { ...DEFAULT_ENGINE_CONFIG, ...config };
-    this.stateMachine = new NavigationStateMachine({}, this.log);
-    this.dr = new DeadReckoningEngine({ gyroZSign: this.config.gyroZSign });
+    this.stateMachine = new NavigationStateMachine(
+      { adaptiveTimeout: this.config.adaptiveTimeout },
+      this.log,
+    );
+    this.dr = new DeadReckoningEngine({
+      gyroZSign: this.config.gyroZSign,
+      // The engine resolves yaw about the true vertical and removes gyro bias
+      // before calling propagate, so the DR must not redo either.
+      yawRatePreCorrected: true,
+      nhc: this.config.nhc,
+      nhcStrength: this.config.nhcStrength,
+      zupt: this.config.zupt,
+      speedClamp: this.config.speedClamp,
+    });
   }
 
   get events(): EventLog {
@@ -89,6 +148,35 @@ export class NavigationEngine {
 
   get stationarityState(): StationarityResult {
     return this.lastStationarity;
+  }
+
+  /** Live constraint counters and attitude health, for the debug panel. */
+  get diagnostics(): {
+    zuptTriggers: number;
+    zaruTriggers: number;
+    accelBias: readonly number[];
+    gyroBias: readonly number[];
+    attitudeQuality: number;
+    attitudeSettled: boolean;
+    observedFixIntervalMs: number | null;
+    effectiveNoFixTimeoutMs: number;
+    unaidedMs: number;
+    forwardBiasMps2: number;
+    forwardBiasObservations: number;
+  } {
+    return {
+      zuptTriggers: this.zupt.triggerCount,
+      zaruTriggers: this.zaru.triggerCount,
+      accelBias: this.zupt.accelBias,
+      gyroBias: this.zaru.gyroBias,
+      attitudeQuality: this.attitude.quality,
+      attitudeSettled: this.attitude.isSettled,
+      observedFixIntervalMs: this.stateMachine.observedFixIntervalMs,
+      effectiveNoFixTimeoutMs: this.stateMachine.effectiveNoFixTimeoutMs,
+      unaidedMs: this.dr.current.unaidedMs,
+      forwardBiasMps2: this.forwardBias.estimateMps2,
+      forwardBiasObservations: this.forwardBias.observationCount,
+    };
   }
 
   startCalibration(nowMs: number): void {
@@ -107,19 +195,87 @@ export class NavigationEngine {
 
     // 2-4. Condition the IMU and read out motion state.
     let forwardAccel = 0;
-    let gyroZ = 0;
+    let lateralAccel = 0;
+    let yawRate = 0;
+    let stationaryForZupt = false;
     if (sample.imu) {
       const { ax, ay, az, gx, gy, gz, quat } = sample.imu;
+
+      // Attitude must see the RAW accelerometer: gravity is the signal it uses
+      // to find "down", so feeding it a gravity-removed value would leave it
+      // with nothing to track.
+      if (quat) this.attitude.pushQuaternion(quat);
+      else this.attitude.push(ax, ay, az, gx, gy, gz, dtMs);
+
       let a: [number, number, number] = [ax, ay, az];
       if (this.config.medianFilter) a = this.accelMedian.push(a[0], a[1], a[2]);
       if (this.config.lowPass) a = this.accelLowPass.push(a[0], a[1], a[2]);
 
-      const linear = this.gravity.remove(a[0], a[1], a[2], quat);
-      this.alignment.push(linear, sample.t);
-      forwardAccel = this.alignment.toVehicleFrame(linear[0], linear[1]).forward;
-      gyroZ = gz;
-
       this.lastStationarity = this.stationarity.push(ax, ay, az, gx, gy, gz);
+
+      // ★ INTERLOCK ★ A ZUPT asserted while the vehicle is moving is far more
+      // damaging than a ZUPT missed at a red light: it zeroes a real velocity
+      // and teaches the bias estimators from a moving vehicle. So if a trusted
+      // fix said we were moving very recently, refuse the stationary verdict
+      // however quiet the accelerometer looks. The window is short enough that
+      // a genuine tunnel stop still gets its ZUPT.
+      const gnssSaysMoving =
+        this.lastMovingGnssT !== null && sample.t - this.lastMovingGnssT < 3000;
+      const still = this.lastStationarity.isStationary && !gnssSaysMoving;
+      stationaryForZupt = still;
+
+      // Every stop is free calibration. Harvest it before using the sample.
+      if (this.config.zaru && this.zaru.push(gx, gy, gz, still)) {
+        this.log.push({
+          t: sample.t,
+          type: 'ZARU_TRIGGER',
+          message: `gyro bias [${this.zaru.gyroBias.map((v) => v.toFixed(4)).join(', ')}] rad/s`,
+        });
+      }
+      if (this.config.zupt) {
+        const r = this.zupt.push(ax, ay, az, this.attitude.upVector, still);
+        if (r.biasUpdated) {
+          this.log.push({
+            t: sample.t,
+            type: 'ZUPT_TRIGGER',
+            message: `stationary; accel bias [${this.zupt.accelBias
+              .map((v) => v.toFixed(3))
+              .join(', ')}] m/s2`,
+          });
+        }
+      }
+
+      // Remove the estimated bias, then remove gravity along the *measured*
+      // vertical rather than by low-passing each axis. Low-passing also eats
+      // sustained real acceleration, which a motorway on-ramp consists of.
+      const bias = this.config.zupt ? this.zupt.accelBias : ([0, 0, 0] as const);
+      const linear = this.attitude.removeGravity(a[0] - bias[0], a[1] - bias[1], a[2] - bias[2]);
+      this.alignment.push(linear, sample.t);
+
+      // Split into forward/lateral in a genuinely horizontal plane. The old
+      // code used device X/Y directly, which is only horizontal when the phone
+      // happens to be lying flat.
+      const h = this.attitude.toHorizontal(linear, this.alignment.state.yawOffsetRad);
+      lateralAccel = h.lateral;
+
+      // Feed the raw measurement to the estimator, then apply what it has
+      // learned. Feeding the corrected value back in would close a loop and
+      // drive the estimate to zero.
+      this.forwardBias.pushAccel(h.forward);
+      forwardAccel = this.config.forwardBias
+        ? h.forward + this.forwardBias.correctionMps2
+        : h.forward;
+
+      // ★ Yaw about the true vertical, not about device Z. ★ This is the fix
+      // for the marker setting off in a direction unrelated to the road.
+      yawRate = this.attitude.yawRate(
+        gx,
+        gy,
+        gz,
+        this.config.zaru ? (this.zaru.gyroBias as [number, number, number]) : [0, 0, 0],
+      );
+      this.dr.setGyroBias(this.zaru.gyroBias as [number, number, number]);
+      this.dr.setAccelBias(this.zupt.accelBias as [number, number, number]);
     }
 
     // Establish the ENU origin from the first fix we see.
@@ -136,6 +292,17 @@ export class NavigationEngine {
     if (sample.gnss && gnssEnu) {
       this.lastGnssT = sample.t;
       this.lastGnssEnu = gnssEnu;
+      // 1.5 m/s is walking pace — comfortably above GNSS speed noise at rest,
+      // comfortably below anything that could be called stopped.
+      if (trusted && (sample.gnss.speedMps ?? 0) > 1.5) {
+        this.lastMovingGnssT = sample.t;
+      }
+      // Learn the forward-acceleration error only from fixes we trust. A
+      // multipath speed learned here would be applied for the whole of the
+      // next outage, which is the worst possible time to be wrong.
+      if (trusted && sample.gnss.speedMps !== undefined) {
+        this.forwardBias.pushGnssSpeed(sample.t, sample.gnss.speedMps);
+      }
       if (trusted) {
         this.dr.pushFix({
           t: sample.t,
@@ -153,7 +320,10 @@ export class NavigationEngine {
     //    GNSS drops there is nothing to start: the estimate is already live.
     //    Feed GNSS speed while it is trustworthy so the estimate stays tight.
     const gnssSpeed = trusted ? sample.gnss?.speedMps : undefined;
-    this.dr.propagate(forwardAccel, gyroZ, dtMs, gnssSpeed);
+    this.dr.propagate(forwardAccel, yawRate, dtMs, gnssSpeed, {
+      lateralAccelMps2: lateralAccel,
+      isStationary: stationaryForZupt,
+    });
 
     // 6. Step the state machine.
     const recoveryDone = modeBefore === 'RECOVERING' && !this.recovery.isActive;
@@ -199,13 +369,35 @@ export class NavigationEngine {
         });
       }
       shownEnu = this.dr.current.enu;
-      // Uncertainty grows with distance travelled, and grows faster along the
-      // direction of travel than across it — which is why the UI draws an
-      // ellipse in Phase 9, not a circle.
+
+      // ★ UNCERTAINTY GROWTH, DERIVED RATHER THAN GUESSED ★
+      //
+      // The old model added a flat 0.02 m/s of cross-track error regardless of
+      // anything, so it reported 6 m of drift while the marker was visibly
+      // tens of metres off the road. An uncertainty figure that understates
+      // the real error is worse than none: it is the number a judge will check
+      // against the map.
+      //
+      // Cross-track error is dominated by heading error, and heading error is
+      // dominated by residual gyro bias. Integrate the bias to get a heading
+      // sigma, then cross-track error is distance x sin(sigma). With ZARU
+      // running the residual bias is roughly 0.001 rad/s; without it, ~0.01,
+      // which is an order of magnitude more heading drift and shows up as such.
       const dtS = dtMs / 1000;
-      this.covarianceAlongM += 0.15 * dtS * Math.max(1, this.dr.current.speedMps);
-      this.covarianceCrossM += 0.02 * dtS;
-      this.estimatedDriftM = this.covarianceAlongM;
+      const speed = Math.max(0, this.dr.current.speedMps);
+      const stepM = speed * dtS;
+
+      const biasRad = this.config.zaru
+        ? this.config.residualGyroBiasRadPerSec
+        : this.config.uncorrectedGyroBiasRadPerSec;
+      this.headingSigmaRad += biasRad * dtS;
+
+      // Along-track: speed error, dominated by accelerometer bias integrating.
+      this.covarianceAlongM += 0.15 * dtS * Math.max(1, speed);
+      // Cross-track: the arc swept by the heading error over this step.
+      this.covarianceCrossM += stepM * Math.sin(Math.min(this.headingSigmaRad, Math.PI / 2));
+
+      this.estimatedDriftM = Math.hypot(this.covarianceAlongM, this.covarianceCrossM);
     } else if (mode === 'RECOVERING') {
       if (modeBefore !== 'RECOVERING' && gnssEnu) {
         const drift = this.recovery.begin(sample.t, this.dr.current.enu, gnssEnu);
@@ -219,7 +411,29 @@ export class NavigationEngine {
           data: { driftM: drift, distanceM: this.dr.current.distanceTravelledM },
         });
       }
-      const target = gnssEnu ?? this.lastGnssEnu ?? this.dr.current.enu;
+      // ★ THE RECOVERY TARGET MUST MOVE AT FULL RATE ★
+      //
+      // The blender is documented as decaying against a *live* GNSS position,
+      // but it was being handed `gnssEnu ?? lastGnssEnu` — which only changes
+      // when a fix arrives. At a 1 Hz receiver that froze the target for a
+      // whole second at a time, so a vehicle at 14 m/s stepped 14 m on every
+      // fix instead of sliding. On the 0.2 Hz hardware we measured in the
+      // field it would have been a 70 m lurch, five seconds apart.
+      //
+      // Re-anchoring dead reckoning onto each fix and targeting the DR
+      // position instead gives a target that advances every sample, because DR
+      // propagates continuously. The blender's own offset is captured at
+      // begin() and is unaffected by re-anchoring.
+      if (trusted && gnssEnu) {
+        this.dr.resetTo({
+          t: sample.t,
+          enu: gnssEnu,
+          speedMps: sample.gnss?.speedMps ?? this.dr.current.speedMps,
+          headingDeg: sample.gnss?.headingDeg ?? this.dr.current.headingDeg,
+          accuracyM: sample.gnss!.accuracyM,
+        });
+      }
+      const target = this.dr.current.enu;
       const blended = this.recovery.update(sample.t, target);
       shownEnu = blended.enu;
       this.estimatedDriftM = blended.driftM;
@@ -240,6 +454,7 @@ export class NavigationEngine {
         }
         this.covarianceAlongM = 5;
         this.covarianceCrossM = 5;
+        this.headingSigmaRad = 0;
         this.drStartedAtMs = null;
       }
     }
@@ -341,8 +556,11 @@ export class NavigationEngine {
     this.stateMachine.reset();
     this.dr.reset();
     this.recovery.reset();
-    this.gravity.reset();
+    this.attitude.reset();
     this.alignment.reset();
+    this.zupt.reset();
+    this.zaru.reset();
+    this.forwardBias.reset();
     this.stationarity.reset();
     this.accelMedian.reset();
     this.accelLowPass.reset();
@@ -351,8 +569,10 @@ export class NavigationEngine {
     this.lastSampleT = null;
     this.lastGnssT = null;
     this.lastGnssEnu = null;
+    this.lastMovingGnssT = null;
     this.covarianceAlongM = 0;
     this.covarianceCrossM = 0;
+    this.headingSigmaRad = 0;
     this.estimatedDriftM = 0;
     this.lastState = null;
     this.drStartedAtMs = null;

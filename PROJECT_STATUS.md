@@ -1,16 +1,86 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 4 — State Machine + Dead Reckoning + Recovery ✅ COMPLETE
+**CURRENT PHASE:** Phase 6 (early) — Constraints, brought forward to fix field defects ✅
 **LAST UPDATED:** 2026-08-27
-**NEXT PHASE:** Phase 5 — HUD + Debug Panel + Trust Features
+**NEXT PHASE:** Phase 5 — HUD + Debug Panel + Trust Features, then Phase 6D (road snapping)
 
-> ### ⚠️ Current drift: 27% — above the PS target of <10%
-> This is expected and not yet a problem. Phase 4 is unconstrained dead
-> reckoning: filters only, no NHC, no ZUPT, no ZARU, no road snapping. The
-> guide's own ablation table puts naive integration at 38% and filtered-only
-> at 22%, so 27% sits exactly where it should. **Phase 6 is what brings this
-> under 10%**, and Phase 7 measures each constraint's contribution.
-> Do not quote this number as a result.
+> ### Drift on the simulated 60 s city outage: **6.26%** — inside the PS target
+> Measured, not claimed: `packages/sensor-sources/test/ablation.test.ts` runs
+> the table in CI. Ground truth is the GNSS the simulator withheld.
+>
+> | Configuration | Final error (m) | DR distance (m) | Drift % |
+> |---|---|---|---|
+> | naive (no constraints) | 417.3 | 237 | 175.73 |
+> | + filters | 417.8 | 239 | 174.62 |
+> | + ZARU | 415.8 | 240 | 173.61 |
+> | + ZUPT | 405.2 | 393 | 103.16 |
+> | + NHC | 194.3 | 343 | 56.65 |
+> | + forward-bias | 37.3 | 595 | 6.26 |
+> | full | 37.3 | 595 | 6.26 |
+>
+> Caveats, stated plainly: one route, one seed, one 60 s outage, in simulation.
+> Road snapping (Phase 6D) is **not** in this table — it needs the road graph.
+> Real-drive numbers arrive in Phase 18. Do not present this as a road result.
+
+---
+
+## ★ FIELD TEST 2026-08-27 — six defects found and fixed
+
+Testing the Phase 4 APK on a real phone showed the marker wandering off-road
+with GNSS on, and continuing to "drive" at 25 km/h while the handset was
+standing still. Six separate causes, all now fixed and pinned by tests in
+`packages/nav-core/test/constraints.test.ts`.
+
+**1. Yaw was read from device Z instead of the true vertical.**
+`DeadReckoningEngine` integrated `gz` directly. That is only yaw when the phone
+lies flat on its back; upright in a cradle, `gz` measures roll. New
+`alignment/attitude.ts` projects the gyro vector onto measured gravity, so yaw
+is correct in any orientation. Heading now tracks truth within 1-2° through a
+60 s outage; it was 14° out and growing.
+
+**2. Nothing ever called ZUPT, ZARU, or the bias setters.**
+`applyZeroVelocity()`, `setGyroBias()` and `setAccelBias()` existed since Phase
+4 and had **zero call sites**. Stationarity was computed every sample and
+discarded. With no ZUPT, `speed = speed + accel*dt` held the last speed forever:
+197 s of standing still produced 4 km of imaginary travel. Now in
+`constraints/zupt.ts` and `constraints/zaru.ts`.
+
+**3. DEAD RECKONING was announced under open sky.**
+The state machine's 1.5 s no-fix timeout assumes a 1 Hz receiver. The device
+delivered **0.05–0.20 Hz** — a fix every 5 to 20 s — so it dropped to dead
+reckoning ~3.5 s after every fix and free-ran until the next one. That is the
+sawtooth trail in the field screenshots. The timeout now tracks the receiver's
+observed median fix interval, with a 6 s provisional value during warm-up.
+
+**4. The simulator disagreed with every real device by a sign.**
+`simulation/imu.ts` emitted `gz` as a compass-sense yaw rate; real hardware
+(`DeviceMotionEvent.rotationRate`, Android `SensorManager`) uses the right-hand
+rule, where a right turn is negative. The engine could be tuned to look perfect
+in simulation while turning the wrong way on a phone. The contract is now
+documented on `SensorSample.imu` and the simulator obeys it.
+
+**5. The stationarity threshold was above the moving-vehicle distribution.**
+Measured against the simulator's own ground-truth speed: moving p05 = 0.0296,
+stopped p50 = 0.0065. The threshold was 0.05 — so a cruising vehicle read as
+"stationary" and ZUPT zeroed a real 13.8 m/s. Now 0.015, with asymmetric
+hysteresis: 25 samples to enter a stop, one sample to leave it.
+
+**6. Gravity removal ate the vehicle's acceleration.**
+A 0.25 Hz low-pass "gravity" estimate follows a five-second acceleration, so
+subtracting it cancels the very signal being measured — speed never rebuilt
+after a stop. Replaced with a complementary filter: gyro carries the vertical
+short-term, accelerometer anchors it over ~30 s.
+
+**Also fixed:** the marker teleported 63 m backwards on entering dead reckoning
+(the smoothed seed rewound position and heading — Golden Rule #6); the recovery
+slew targeted a frozen fix, so at 0.2 Hz it lurched instead of sliding; and both
+live sources emitted a second sample per fix, pushing the same IMU reading
+through every filter window twice.
+
+**New:** `constraints/forwardBias.ts` — learns the residual forward-acceleration
+error from GNSS Doppler while GNSS is available and cancels it during the
+outage. Capped at 0.35 m/s², which is sin(2°)×9.81: two degrees of mount tilt.
+Worth 194 m → 37 m in the table above.
 
 ---
 
@@ -203,8 +273,6 @@ the badge to DEAD RECKONING and blanked accuracy.
   on-screen rather than implying we have 200 Hz.
 - **Capacitor pinned to 6** for JDK 17. Moving to 7/8 means installing JDK 21.
 
-- **Dead reckoning does not exist yet.** During an outage the marker holds its
-  last fix and the UI says so explicitly. Phase 4 adds propagation.
 - **Browser timers throttle in background tabs.** `SimulationSource` drives
   itself with `setInterval`, which drops to ~1 Hz when the tab is hidden. Fine
   in the foreground; the same class of problem the guide flags for Android
@@ -215,11 +283,31 @@ the badge to DEAD RECKONING and blanked accuracy.
 - Real GPS needs a secure context — see README for phone testing.
 - Do not run `pnpm build` while `pnpm dev` is live.
 
+## KNOWN LIMITS AFTER THE FIELD FIXES
+
+- **Along-track error still dominates.** Heading is now good to 1-2° over a
+  60 s outage, so what remains is speed. Unaided accelerometer integration
+  cannot distinguish a parked car from one cruising at a steady 50 km/h, which
+  is a property of the sensor, not of the code. `coastingDecay` bleeds an
+  unaided estimate off after 45 s rather than asserting it indefinitely.
+  Road snapping (6D) and the ML speed model (Phase 8) are the real answers.
+- **Road snapping is not implemented.** `constraints/roadsnap.ts` and the road
+  graph are still to do, so cross-track error is bounded only by NHC.
+- **GNSS fix rate on the test device is 0.05-0.20 Hz**, not the 1 Hz the
+  Capacitor plugin implies. The engine now adapts to it, but the underlying
+  rate is a WebView/bridge limitation that Phase 15's native Kotlin loop is
+  meant to remove.
+- **The ablation is one route, one seed, one outage, in simulation.** It is a
+  regression guard, not a benchmark. Treat it as such in the deck.
+
 ## NEXT PHASE
 
-**Phase 3 — Android APK via Capacitor** (2.5 hr) ★ Golden Rule #2: today, not Day 4
-- Capacitor 6 + `@capacitor/geolocation`, `@capacitor/motion`
-- `capacitor.config.ts`, appId `in.avinya.pathpulse`, webDir `out`
-- AndroidManifest permissions incl. `HIGH_SAMPLING_RATE_SENSORS`
-- `NativeSource` behind the same `SensorSource` interface
-- `build:android` script, Device Info screen
+**Phase 5 — HUD + Debug Panel + Trust Features** (2.5 hr) ★ judge isi ko dekhega
+- Mode badge, speed, drift, drift %, distance, measured Hz, confidence bar
+- Debug panel: live raw sensor values, measured rates, **stationary flag,
+  accel/gyro bias, forward-bias estimate, observed GNSS interval** — the
+  `engine.diagnostics` getter already exposes all of these
+- Constraint toggles wired to `ConstraintFlags` (they are already runtime flags,
+  so this is UI only — and toggling them mid-outage is the anti-fake demo)
+- Event log with ms timestamps + JSON export (`ZUPT_TRIGGER` / `ZARU_TRIGGER`
+  already emitted), Walking Mode, session stats

@@ -16,6 +16,7 @@ export class WebSource implements SensorSource {
   private startedAt = 0;
 
   private latestImu: SensorSample['imu'] | undefined;
+  private pendingGnss: SensorSample['gnss'] | undefined;
   private imuCount = 0;
   private gnssCount = 0;
 
@@ -73,7 +74,16 @@ export class WebSource implements SensorSource {
             gy: ((rot?.gamma ?? 0) * Math.PI) / 180,
             gz: ((rot?.alpha ?? 0) * Math.PI) / 180,
           };
-          this.emit({ t: Date.now() - this.startedAt, imu: this.latestImu });
+          // One sample stream: a fix that arrived since the last motion event
+          // rides along here instead of being emitted as its own sample, which
+          // would push this same IMU reading through every filter window twice.
+          const gnss = this.pendingGnss;
+          this.pendingGnss = undefined;
+          this.emit({
+            t: Date.now() - this.startedAt,
+            imu: this.latestImu,
+            ...(gnss ? { gnss } : {}),
+          });
         };
         window.addEventListener('devicemotion', this.motionHandler);
       }
@@ -84,21 +94,20 @@ export class WebSource implements SensorSource {
         (pos) => {
           this.gnssCount++;
           const c = pos.coords;
-          this.emit({
-            t: Date.now() - this.startedAt,
-            imu: this.latestImu,
-            gnss: {
-              lat: c.latitude,
-              lon: c.longitude,
-              accuracyM: c.accuracy,
-              speedMps:
-                typeof c.speed === 'number' && !Number.isNaN(c.speed) ? c.speed : undefined,
-              headingDeg:
-                typeof c.heading === 'number' && !Number.isNaN(c.heading)
-                  ? c.heading
-                  : undefined,
-            },
-          });
+          const gnss = {
+            lat: c.latitude,
+            lon: c.longitude,
+            accuracyM: c.accuracy,
+            speedMps: typeof c.speed === 'number' && !Number.isNaN(c.speed) ? c.speed : undefined,
+            headingDeg:
+              typeof c.heading === 'number' && !Number.isNaN(c.heading) ? c.heading : undefined,
+          };
+          this.pendingGnss = gnss;
+          // With no motion events the fix would queue forever. Emit it alone.
+          if (!this.capabilities.hasImu) {
+            this.pendingGnss = undefined;
+            this.emit({ t: Date.now() - this.startedAt, gnss });
+          }
         },
         () => {
           // Errors are surfaced by the UI's own geolocation hook; a source

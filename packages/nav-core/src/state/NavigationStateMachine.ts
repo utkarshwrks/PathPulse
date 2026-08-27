@@ -18,6 +18,17 @@ export interface StateMachineConfig {
   degradedToDrMs: number;
   /** Consecutive good fixes needed to start recovering from dead reckoning. */
   fixesToStartRecovery: number;
+  /**
+   * Scale the no-fix timeout to the fix rate actually observed. A device that
+   * only produces a fix every 5 s must not be called "lost" after 1.5 s.
+   */
+  adaptiveTimeout: boolean;
+  /** Multiple of the observed median fix interval to wait before declaring loss. */
+  noFixIntervalFactor: number;
+  /** Ceiling on the adaptive timeout, ms. A real tunnel must still be detected. */
+  maxAdaptiveTimeoutMs: number;
+  /** Provisional timeout before the receiver's cadence has been observed, ms. */
+  warmupTimeoutMs: number;
 }
 
 export const DEFAULT_STATE_MACHINE_CONFIG: StateMachineConfig = {
@@ -29,6 +40,10 @@ export const DEFAULT_STATE_MACHINE_CONFIG: StateMachineConfig = {
   fixesToRecoverFromDegraded: 2,
   degradedToDrMs: 2000,
   fixesToStartRecovery: 2,
+  adaptiveTimeout: true,
+  noFixIntervalFactor: 2.5,
+  maxAdaptiveTimeoutMs: 20_000,
+  warmupTimeoutMs: 6000,
 };
 
 export interface FixQuality {
@@ -63,6 +78,8 @@ export class NavigationStateMachine {
   private lastFixAtMs: number | null = null;
   private degradedSinceMs: number | null = null;
   private modeEnteredAtMs = 0;
+  /** Recent gaps between fixes, ms. Feeds the adaptive timeout. */
+  private fixIntervals: number[] = [];
 
   constructor(config: Partial<StateMachineConfig> = {}, log = new EventLog()) {
     this.config = { ...DEFAULT_STATE_MACHINE_CONFIG, ...config };
@@ -81,6 +98,49 @@ export class NavigationStateMachine {
     return this.lastFixAtMs;
   }
 
+  /**
+   * How long we wait without a fix before calling GNSS degraded.
+   *
+   * ★ THIS IS THE FIX FOR "IT SAYS DEAD RECKONING WHILE GPS IS ON" ★
+   *
+   * The configured 1.5 s assumes a 1 Hz receiver. On real hardware the
+   * Capacitor/WebView geolocation bridge delivered 0.05-0.20 Hz in field
+   * testing — a fix every 5 to 20 seconds. Against a fixed 1.5 s timeout the
+   * machine dropped into DEAD_RECKONING roughly 3.5 s after every fix, under
+   * open sky, and stayed there until the next one arrived. The marker then
+   * free-ran on inertial data for seconds at a time and got snapped back on
+   * each fix, which is exactly the sawtooth the field screenshots show.
+   *
+   * The receiver's actual cadence is observable, so observe it: wait a
+   * multiple of the median gap between fixes instead of a constant. A 1 Hz
+   * device keeps the tight 1.5 s response; a 0.2 Hz device gets ~12 s and
+   * stops lying about being lost. Capped, so a genuine tunnel is still caught.
+   */
+  get effectiveNoFixTimeoutMs(): number {
+    if (!this.config.adaptiveTimeout) return this.config.noFixTimeoutMs;
+    if (this.fixIntervals.length < 3) {
+      // Warm-up: we do not know the cadence yet. Assuming 1 Hz is precisely the
+      // assumption that produced the bug, and on a slow receiver it trips
+      // DEAD_RECKONING within the first few seconds of the app opening — which
+      // is the first thing anyone sees. Stay provisional instead: a real tunnel
+      // is not missed by waiting a few more seconds before calling it.
+      return Math.max(this.config.noFixTimeoutMs, this.config.warmupTimeoutMs);
+    }
+    const sorted = [...this.fixIntervals].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)]!;
+    return Math.min(
+      this.config.maxAdaptiveTimeoutMs,
+      Math.max(this.config.noFixTimeoutMs, median * this.config.noFixIntervalFactor),
+    );
+  }
+
+  /** Median gap between fixes actually observed, ms. Null until enough data. */
+  get observedFixIntervalMs(): number | null {
+    if (this.fixIntervals.length < 3) return null;
+    const sorted = [...this.fixIntervals].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)]!;
+  }
+
   /** True in the two modes where the position shown is inertially derived. */
   get isDeadReckoning(): boolean {
     return this.mode === 'DEAD_RECKONING';
@@ -94,6 +154,16 @@ export class NavigationStateMachine {
     const good = this.isGoodFix(fix);
 
     if (fix.hasFix) {
+      if (this.lastFixAtMs !== null) {
+        const gap = nowMs - this.lastFixAtMs;
+        // Only learn from gaps that look like the receiver's natural cadence.
+        // A gap measured across a real tunnel would inflate the timeout and
+        // stop us ever detecting the next one.
+        if (gap > 0 && gap <= this.config.maxAdaptiveTimeoutMs) {
+          this.fixIntervals.push(gap);
+          if (this.fixIntervals.length > 10) this.fixIntervals.shift();
+        }
+      }
       this.lastFixAtMs = nowMs;
       this.consecutiveGoodFixes = good ? this.consecutiveGoodFixes + 1 : 0;
       if (good) {
@@ -172,7 +242,7 @@ export class NavigationStateMachine {
   }
 
   private isDegraded(fix: FixQuality, msSinceFix: number): boolean {
-    if (msSinceFix > this.config.noFixTimeoutMs) return true;
+    if (msSinceFix > this.effectiveNoFixTimeoutMs) return true;
     if (!fix.hasFix) return false; // between fixes but still inside the timeout
     if (fix.accuracyM !== undefined && fix.accuracyM > this.config.degradedAccuracyM) return true;
     if (fix.satCount !== undefined && fix.satCount < this.config.minSatellites) return true;
@@ -180,7 +250,7 @@ export class NavigationStateMachine {
   }
 
   private degradeReason(fix: FixQuality, msSinceFix: number): string {
-    if (msSinceFix > this.config.noFixTimeoutMs) {
+    if (msSinceFix > this.effectiveNoFixTimeoutMs) {
       return `no fix for ${(msSinceFix / 1000).toFixed(1)}s`;
     }
     if (fix.accuracyM !== undefined && fix.accuracyM > this.config.degradedAccuracyM) {
@@ -212,5 +282,6 @@ export class NavigationStateMachine {
     this.lastFixAtMs = null;
     this.degradedSinceMs = null;
     this.modeEnteredAtMs = 0;
+    this.fixIntervals = [];
   }
 }

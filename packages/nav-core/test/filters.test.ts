@@ -64,14 +64,35 @@ describe('StationarityDetector', () => {
     expect(d.evaluate().isStationary).toBe(false);
   });
 
-  it('detects a parked vehicle', () => {
+  it('detects a parked vehicle, but only after sustained confirmation', () => {
+    const d = new StationarityDetector({ windowSize: 50 });
+    const still = () =>
+      d.push(0.01 * Math.random(), 0.01 * Math.random(), 9.81, 0.001, 0.001, 0.001);
+
+    // 50 to fill the window, then 25 more to satisfy the entry hold. A real
+    // stop lasts seconds, so 1.5 s of confirmation costs nothing — and it is
+    // what stops the overlapping tails of the moving/stopped variance
+    // distributions from producing a ZUPT while the vehicle is still rolling.
+    let r = d.evaluate();
+    for (let i = 0; i < 60; i++) r = still();
+    expect(r.isStationary).toBe(false);
+
+    for (let i = 0; i < 40; i++) r = still();
+    expect(r.isStationary).toBe(true);
+    expect(r.confidence).toBeGreaterThan(0);
+  });
+
+  it('leaves the stationary state on a single moving sample', () => {
     const d = new StationarityDetector({ windowSize: 50 });
     let r = d.evaluate();
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 100; i++) {
       r = d.push(0.01 * Math.random(), 0.01 * Math.random(), 9.81, 0.001, 0.001, 0.001);
     }
     expect(r.isStationary).toBe(true);
-    expect(r.confidence).toBeGreaterThan(0);
+    // Pulling away must be believed immediately — holding "stopped" for even a
+    // second while accelerating would suppress a real velocity.
+    r = d.push(3, 2, 11, 0.3, 0.1, 0.4);
+    expect(r.isStationary).toBe(false);
   });
 
   it('does not call a moving vehicle stationary', () => {

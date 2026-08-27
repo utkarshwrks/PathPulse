@@ -21,6 +21,7 @@ export class NativeSource implements SensorSource {
   private orientationHandle: { remove: () => Promise<void> } | null = null;
 
   private latestImu: SensorSample['imu'] | undefined;
+  private pendingGnss: SensorSample['gnss'] | undefined;
   private imuCount = 0;
   private gnssCount = 0;
 
@@ -83,7 +84,16 @@ export class NativeSource implements SensorSource {
           gy: ((rot?.gamma ?? 0) * Math.PI) / 180,
           gz: ((rot?.alpha ?? 0) * Math.PI) / 180,
         };
-        this.emit({ t: Date.now() - this.startedAt, imu: this.latestImu });
+        // ★ ONE SAMPLE STREAM ★ A fix that arrived since the last IMU event
+        // rides along on this sample rather than being emitted separately.
+        //
+        // Emitting a second sample for GNSS meant re-sending an IMU reading
+        // the engine had already consumed, so that reading entered the median,
+        // low-pass and stationarity windows twice. It biased the variance the
+        // stationarity detector keys on, and it consumed a dt of zero.
+        const gnss = this.pendingGnss;
+        this.pendingGnss = undefined;
+        this.emit({ t: Date.now() - this.startedAt, imu: this.latestImu, ...(gnss ? { gnss } : {}) });
       });
     } catch {
       this.capabilities.hasImu = false;
@@ -97,17 +107,21 @@ export class NativeSource implements SensorSource {
             if (err || !position) return;
             this.gnssCount++;
             const c = position.coords;
-            this.emit({
-              t: Date.now() - this.startedAt,
-              imu: this.latestImu,
-              gnss: {
-                lat: c.latitude,
-                lon: c.longitude,
-                accuracyM: c.accuracy,
-                speedMps: c.speed ?? undefined,
-                headingDeg: c.heading ?? undefined,
-              },
-            });
+            const gnss = {
+              lat: c.latitude,
+              lon: c.longitude,
+              accuracyM: c.accuracy,
+              speedMps: typeof c.speed === 'number' && !Number.isNaN(c.speed) ? c.speed : undefined,
+              headingDeg:
+                typeof c.heading === 'number' && !Number.isNaN(c.heading) ? c.heading : undefined,
+            };
+            this.pendingGnss = gnss;
+            // If the IMU is dead or throttled to nothing, the fix would sit in
+            // the queue forever. Emit it on its own rather than lose it.
+            if (!this.capabilities.hasImu) {
+              this.pendingGnss = undefined;
+              this.emit({ t: Date.now() - this.startedAt, gnss });
+            }
           },
         );
       } catch {

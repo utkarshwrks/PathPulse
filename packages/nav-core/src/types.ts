@@ -40,7 +40,16 @@ export interface SensorSample {
     ax: number;
     ay: number;
     az: number;
-    /** Angular rate, rad/s, device frame. */
+    /**
+     * Angular rate, rad/s, device frame, RIGHT-HAND RULE — the convention the
+     * hardware itself uses (DeviceMotionEvent.rotationRate, Android's
+     * SensorManager). Viewed from above with +Z out of the screen, a right
+     * turn is clockwise and therefore NEGATIVE.
+     *
+     * Sources must NOT pre-convert this to a compass sense. nav-core resolves
+     * yaw by projecting the gyro vector onto measured gravity, which needs the
+     * raw axes; converting early also assumes the phone is lying flat.
+     */
     gx: number;
     gy: number;
     gz: number;

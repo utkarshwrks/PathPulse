@@ -88,6 +88,19 @@ export function synthesizeImu(
     az: GRAVITY_MPS2 + vibration + noise.accelBias[2] + noise.accelSigma * gaussian(),
     gx: noise.gyroBias[0] + noise.gyroSigma * gaussian(),
     gy: noise.gyroBias[1] + noise.gyroSigma * gaussian(),
-    gz: state.yawRateRadPerSec + noise.gyroBias[2] + noise.gyroSigma * gaussian(),
+    // ★ RIGHT-HAND RULE, LIKE THE REAL HARDWARE ★
+    //
+    // `yawRateRadPerSec` is d(compass heading)/dt, so it is positive when the
+    // vehicle turns right. A real accelerometer/gyro package — and
+    // DeviceMotionEvent.rotationRate.alpha, which is what both the browser and
+    // Capacitor sources hand us — follows the right-hand rule about device +Z,
+    // pointing out of the screen. Viewed from above, a right turn is clockwise,
+    // which is NEGATIVE under that rule.
+    //
+    // The simulator used to emit the compass sense directly. That made it
+    // disagree with every real device by a sign, so the engine could be tuned
+    // to look perfect in simulation while turning the wrong way on a phone —
+    // precisely the class of lie that makes a simulator worse than useless.
+    gz: -state.yawRateRadPerSec + noise.gyroBias[2] + noise.gyroSigma * gaussian(),
   };
 }
