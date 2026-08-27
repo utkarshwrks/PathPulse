@@ -1,8 +1,13 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 6 (early) — Constraints, brought forward to fix field defects ✅
+**CURRENT PHASE:** Phase 5 — HUD + Debug Panel + Trust Features ✅ COMPLETE
 **LAST UPDATED:** 2026-08-27
-**NEXT PHASE:** Phase 5 — HUD + Debug Panel + Trust Features, then Phase 6D (road snapping)
+**NEXT PHASE:** Phase 6D — road graph + road snapping (6A/6B/6C already done)
+
+> Phase 6's constraints (NHC, ZUPT, ZARU) were built ahead of order while
+> fixing the field defects below, because three of those defects could not be
+> fixed without them. Phase 5 has now been completed in place. **Only 6D —
+> the road graph, spatial index and snapping — remains outstanding in Phase 6.**
 
 > ### Drift on the simulated 60 s city outage: **6.26%** — inside the PS target
 > Measured, not claimed: `packages/sensor-sources/test/ablation.test.ts` runs
@@ -300,14 +305,49 @@ the badge to DEAD RECKONING and blanked accuracy.
 - **The ablation is one route, one seed, one outage, in simulation.** It is a
   regression guard, not a benchmark. Treat it as such in the deck.
 
+### Phase 5 — HUD + Debug Panel + Trust Features
+
+- **`components/Hud.tsx`** (5A) — large mode badge, speed in 2 rem monospace,
+  heading, drift and drift %, distance, time since GNSS, along/cross
+  uncertainty, confidence bar. The measured output rate turns amber below
+  10 Hz, so falling under the PS floor is visible rather than silent.
+- **`components/TrustPanel.tsx`** — the four anti-fake features as tabs, so it
+  stays legible on a phone held up in front of a judge:
+  - **SENSORS** (5B) — raw accel/gyro every frame, measured IMU/GNSS/engine
+    rates, the *observed* GNSS fix interval and the resulting loss timeout,
+    stationarity and accel variance, accel/gyro/forward biases, ZUPT and ZARU
+    counters. Satellites and C/N0 show `n/a`, not a fabricated number.
+  - **CONSTRAINTS** (5C) — eight live toggles plus Walking Mode. Wired to real
+    `ConstraintFlags`, not placeholders: `NavigationEngine.setConfig()` applies
+    them on the next sample with no restart.
+  - **EVENTS** (5D) — newest first, `mm:ss.mmm` timestamps, colour-coded by
+    type, JSON export.
+  - **STATS** (5F) — from a new pure `state/SessionStats.ts`: duration,
+    distance, max speed, outage count/total/longest, and best/worst/mean drift
+    **measured on recovery** rather than modelled.
+- **Walking Mode** (5E) — drops the speed ceiling to 3 m/s through the same
+  live config path.
+- `components/StatusBar.tsx` deleted — superseded by `Hud.tsx`.
+
+**Tested:** `SessionStats` has 8 unit tests; `setConfig` has 4, including one
+that drives two engines through an identical 20 s aided run and a 70 s
+stationary outage with ZUPT toggled off on one of them, asserting they end
+**more than 100 m apart**. That is the assertion the demo claim rests on — a
+toggle that produced identical output would make the whole panel theatre.
+
+**Verified:** `pnpm build` static export succeeds; the dev server renders the
+page with no console or hydration errors. **Not verified: interactive
+behaviour in a real browser** — no browser automation was available in this
+session. Run the TEST steps below on the phone before relying on it.
+
 ## NEXT PHASE
 
-**Phase 5 — HUD + Debug Panel + Trust Features** (2.5 hr) ★ judge isi ko dekhega
-- Mode badge, speed, drift, drift %, distance, measured Hz, confidence bar
-- Debug panel: live raw sensor values, measured rates, **stationary flag,
-  accel/gyro bias, forward-bias estimate, observed GNSS interval** — the
-  `engine.diagnostics` getter already exposes all of these
-- Constraint toggles wired to `ConstraintFlags` (they are already runtime flags,
-  so this is UI only — and toggling them mid-outage is the anti-fake demo)
-- Event log with ms timestamps + JSON export (`ZUPT_TRIGGER` / `ZARU_TRIGGER`
-  already emitted), Walking Mode, session stats
+**Phase 6D — road graph + road snapping** (the rest of Phase 6)
+- `scripts/build-road-graph.mjs` — OSM Overpass bbox → `data/maps/road_graph.json`
+- `nav-core/src/mapmatch/` — 100 m grid spatial index, `getNearbyWays()`
+- `constraints/roadsnap.ts` — perpendicular projection, candidate scoring with
+  a continuity bonus, blended snap strength driven by confidence.
+  **Cross-track only — never move along-track**
+- Feed the matched way's `maxspeed` into the speed clamp, which already accepts
+  it and currently never receives one
+- Add its toggle to the CONSTRAINTS tab and a `roadsnap` row to the ablation

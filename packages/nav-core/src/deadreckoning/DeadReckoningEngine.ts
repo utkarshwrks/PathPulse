@@ -97,7 +97,7 @@ export class DeadReckoningEngine {
     unaidedMs: 0,
   };
 
-  private readonly config: DeadReckoningConfig;
+  private config: DeadReckoningConfig;
   /** Rolling window of recent good fixes, newest last. */
   private recentFixes: TrustedFix[] = [];
   private lastTrustedSpeed = 0;
@@ -109,6 +109,18 @@ export class DeadReckoningEngine {
 
   get current(): Readonly<DeadReckoningState> {
     return this.state;
+  }
+
+  /**
+   * Change configuration mid-run.
+   *
+   * Phase 5's on-screen toggles must take effect on the very next sample, with
+   * no restart — being able to switch a constraint off and watch the estimate
+   * degrade live is the demo that proves the system is real rather than a
+   * scripted animation. A toggle that needed a restart would prove nothing.
+   */
+  setConfig(patch: Partial<DeadReckoningConfig>): void {
+    this.config = { ...this.config, ...patch };
   }
 
   get isInitialised(): boolean {

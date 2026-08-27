@@ -51,7 +51,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (170) |
+| `pnpm test` | All workspace tests (182) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -241,6 +241,26 @@ second, and the demo reads as broken however good the maths is.
 Snapping to the correct answer is mathematically ideal and looks like a bug, so
 the offset is eased to zero over two seconds instead — against a *live* GNSS
 target, because the vehicle is still moving.
+
+## Demo features — and how to use them
+
+Phase 5 exists for one reason: a judge's default assumption is that the demo is
+playing back canned data, and nothing in a HUD can disprove that, because a
+scripted animation can display any numbers it likes. These five can.
+
+| Feature | Where | How to use it in the demo |
+| --- | --- | --- |
+| **HUD** | top-left | Big mode badge, speed, drift, drift %, distance, time since GNSS, confidence bar. The update rate is counted from real frames and turns amber below 10 Hz — the problem statement's floor. |
+| **Live raw sensors** | Debug → SENSORS | Put the phone flat on the table. The accelerometer still twitches by 0.01-0.05. Real sensor data is always slightly dirty; canned data is suspiciously smooth. Then hand the phone to the judge and let them rotate it — heading moves, gyro jumps. |
+| **Constraint toggles** | Debug → CONSTRAINTS | ★ The strongest one. Mid-outage, switch ZUPT or NHC off and the estimate visibly degrades; switch it back and it recovers. **A fake demo never breaks.** Anything you can break on request is real. Changes take effect on the next sample — no restart. |
+| **Event log** | Debug → EVENTS | Every mode change with its *reason* and a millisecond timestamp: `MODE_CHANGE GNSS -> GNSS_DEGRADED (accuracy 31.0m)`. An animation cannot explain itself. Exportable as JSON so the run can be checked afterwards. |
+| **Session stats** | Debug → STATS | Duration, distance, outage count and durations, best/worst/mean drift. The drift figures here are **measured against a real fix on recovery**, not the engine's own uncertainty model. |
+| **Walking Mode** | Debug → CONSTRAINTS | Clamps speed to 3 m/s so you can walk the corridor with the phone and watch the dot move. Live physics, no vehicle needed. |
+
+The debug panel states `n/a` for satellite count and C/N0 rather than inventing
+them — those need the native `GnssStatus` API in Phase 15. Road snapping has no
+toggle yet because it is not built; a switch that did nothing would be worse
+than its absence.
 
 ## Constraints
 

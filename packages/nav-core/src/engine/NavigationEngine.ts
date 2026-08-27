@@ -12,6 +12,7 @@ import { RecoveryBlender } from '../fusion/RecoveryBlender.js';
 import { ZuptProcessor } from '../constraints/zupt.js';
 import { ZaruProcessor } from '../constraints/zaru.js';
 import { DEFAULT_NHC_CONFIG } from '../constraints/nhc.js';
+import { DEFAULT_SPEED_CLAMP_CONFIG } from '../constraints/speedclamp.js';
 import { ForwardBiasEstimator } from '../constraints/forwardBias.js';
 
 /** Runtime feature switches. Every one of these is an ablation-table row. */
@@ -44,6 +45,11 @@ export interface EngineConfig extends ConstraintFlags {
   /** 0..1, how much lateral velocity NHC removes. */
   nhcStrength: number;
   /**
+   * Plausible speed ceiling, m/s. Phase 5's Walking Mode drops this to 3 so the
+   * engine can be demonstrated on foot in a corridor.
+   */
+  maxSpeedMps: number;
+  /**
    * Assumed residual gyro bias once ZARU has converged, rad/s. Drives the
    * heading-uncertainty growth that feeds the cross-track error estimate.
    */
@@ -65,6 +71,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
   nhcStrength: DEFAULT_NHC_CONFIG.strength,
+  maxSpeedMps: 40,
   residualGyroBiasRadPerSec: 0.001,
   uncorrectedGyroBiasRadPerSec: 0.01,
 };
@@ -88,7 +95,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
  *   8. emit NavigationState
  */
 export class NavigationEngine {
-  private readonly config: EngineConfig;
+  private config: EngineConfig;
   private readonly log = new EventLog();
   private readonly stateMachine: NavigationStateMachine;
   private readonly dr: DeadReckoningEngine;
@@ -139,7 +146,41 @@ export class NavigationEngine {
       nhcStrength: this.config.nhcStrength,
       zupt: this.config.zupt,
       speedClamp: this.config.speedClamp,
+      maxSpeedMps: this.config.maxSpeedMps,
+      speedClampConfig: {
+        ...DEFAULT_SPEED_CLAMP_CONFIG,
+        maxSpeedMps: this.config.maxSpeedMps,
+      },
     });
+  }
+
+  /** The live configuration, so the UI can render toggle state from truth. */
+  get currentConfig(): Readonly<EngineConfig> {
+    return this.config;
+  }
+
+  /**
+   * Change configuration mid-run — no restart, effective on the next sample.
+   *
+   * This is what makes the constraint toggles an anti-fake tool rather than
+   * decoration: a judge can switch road snapping or NHC off mid-outage and
+   * watch the marker start to wander, then switch it back. A scripted demo
+   * cannot be broken on request; this one can.
+   */
+  setConfig(patch: Partial<EngineConfig>): void {
+    this.config = { ...this.config, ...patch };
+    this.dr.setConfig({
+      nhc: this.config.nhc,
+      nhcStrength: this.config.nhcStrength,
+      zupt: this.config.zupt,
+      speedClamp: this.config.speedClamp,
+      maxSpeedMps: this.config.maxSpeedMps,
+      speedClampConfig: {
+        ...DEFAULT_SPEED_CLAMP_CONFIG,
+        maxSpeedMps: this.config.maxSpeedMps,
+      },
+    });
+    this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
   }
 
   get events(): EventLog {

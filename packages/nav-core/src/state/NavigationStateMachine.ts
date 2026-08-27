@@ -71,7 +71,7 @@ export interface FixQuality {
  */
 export class NavigationStateMachine {
   private mode: NavMode = 'INITIALIZING';
-  private readonly config: StateMachineConfig;
+  private config: StateMachineConfig;
   private readonly log: EventLog;
 
   private consecutiveGoodFixes = 0;
@@ -88,6 +88,11 @@ export class NavigationStateMachine {
 
   get current(): NavMode {
     return this.mode;
+  }
+
+  /** Change configuration mid-run, for Phase 5's live toggles. */
+  setConfig(patch: Partial<StateMachineConfig>): void {
+    this.config = { ...this.config, ...patch };
   }
 
   get events(): EventLog {
