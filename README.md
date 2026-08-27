@@ -20,10 +20,11 @@ survives a GNSS outage, and the six defects a real-phone field test exposed on
 2026-08-27 are fixed.
 
 Measured drift across 24 simulated scenarios — two routes, four seeds, three
-outage windows — is **19.1% mean**, which is **above** the problem statement's
-<10% target. Road snapping (Phase 6D) is the constraint expected to close that
-gap and is not built yet. The full ablation, the caveats and the defect
-write-up are in [`PROJECT_STATUS.md`](./PROJECT_STATUS.md).
+outage windows — is **12.7% mean**, still above the problem statement's <10%
+target. Road snapping (Phase 6D) is the constraint expected to close that gap
+and is not built yet. The full ablation — including one component reported as a
+negative result and disabled — is in
+[`PROJECT_STATUS.md`](./PROJECT_STATUS.md).
 
 ## Tech stack
 
@@ -54,7 +55,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (260) |
+| `pnpm test` | All workspace tests (266) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -277,7 +278,8 @@ is. A scripted animation cannot be broken on request.
 | **NHC** | A car cannot slide sideways or fly | Cross-track drift — the error that puts the marker inside a building |
 | **ZUPT** | A stopped vehicle has exactly zero velocity | A stationary phone inventing kilometres of travel; also calibrates accelerometer bias free at every red light |
 | **ZARU** | A stopped vehicle is not turning, so the gyro reading is pure bias | Heading drift — 0.01 rad/s of bias is 113° over a 197 s outage |
-| **Forward bias** | GNSS Doppler is an independent truth signal for longitudinal acceleration | Mount tilt: 2° of it is a steady 0.34 m/s² of phantom braking |
+| **Accel high-pass** | Real longitudinal acceleration averages to zero over a minute; tilt error does not | The acceleration runaway — dead reckoning speeding up on its own until it hits its clamp |
+| ~~Forward bias~~ | GNSS Doppler as a truth signal for longitudinal acceleration | **Off — measured worse.** 12.7% drift without it, 19.1% with. Superseded by the high-pass; kept and documented as a negative result |
 | **Speed clamp** | Vehicles obey physics, and roads have limits | Integrated sensor error masquerading as motion |
 | **Adaptive fix timeout** | The receiver's cadence is observable, so observe it | "DEAD RECKONING" being announced under open sky on a 0.2 Hz receiver |
 

@@ -223,7 +223,16 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
   { key: 'nhc', label: 'NHC', hint: 'A vehicle cannot slide sideways. Kills cross-track drift.' },
   { key: 'zupt', label: 'ZUPT', hint: 'Stopped means speed exactly zero, and free accel calibration.' },
   { key: 'zaru', label: 'ZARU', hint: 'Stopped means the gyro reading is pure bias. Stops heading drift.' },
-  { key: 'forwardBias', label: 'Forward bias', hint: 'Learns mount tilt from GNSS Doppler, applies it in the tunnel.' },
+  {
+    key: 'accelHighPass',
+    label: 'Accel high-pass',
+    hint: 'Removes the slow mean of forward acceleration — the tilt error that makes DR speed run away.',
+  },
+  {
+    key: 'forwardBias',
+    label: 'Forward bias (off — measured worse)',
+    hint: 'Learns mount tilt from GNSS Doppler. Superseded by the high-pass: 12.7% drift without it, 19.1% with. Left here to demonstrate.',
+  },
   { key: 'speedClamp', label: 'Speed clamp', hint: 'Plausibility ceiling plus decay of a stale unaided estimate.' },
   { key: 'lowPass', label: 'Low-pass filter', hint: 'Removes engine and road vibration before integration.' },
   { key: 'medianFilter', label: 'Median filter', hint: 'Rejects pothole spikes.' },

@@ -80,7 +80,11 @@ export const DEFAULT_CONTROLS: EngineControls = {
   zupt: true,
   zaru: true,
   speedClamp: true,
-  forwardBias: true,
+  // Off by default, matching the engine: the ablation shows it makes drift
+  // worse now that the acceleration high-pass exists. Still toggleable, so the
+  // negative result can be demonstrated rather than just asserted.
+  forwardBias: false,
+  accelHighPass: true,
   adaptiveTimeout: true,
   walkingMode: false,
 };
@@ -189,6 +193,7 @@ export function useNavigationEngine(): NavEngineOutput {
         zaru: next.zaru,
         speedClamp: next.speedClamp,
         forwardBias: next.forwardBias,
+        accelHighPass: next.accelHighPass,
         adaptiveTimeout: next.adaptiveTimeout,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });

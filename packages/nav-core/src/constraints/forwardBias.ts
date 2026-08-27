@@ -1,7 +1,15 @@
 export interface ForwardBiasConfig {
   /** EMA weight per accepted observation. Low, because GNSS speed is noisy. */
   alpha: number;
-  /** Below this speed GNSS Doppler is too noisy to differentiate, m/s. */
+  /**
+   * Below this speed the speed reference is too noisy to differentiate, m/s.
+   *
+   * 3 m/s excluded walking entirely, so on foot the estimator never received a
+   * single observation and the acceleration runaway went uncorrected. The
+   * caller now only supplies a derived speed when the displacement clearly
+   * exceeds the fix accuracy, so quality is guarded there and this can sit at
+   * a brisk walk instead.
+   */
   minSpeedMps: number;
   /** Reject observations with an implausible implied acceleration, m/s^2. */
   maxObservedAccelMps2: number;
@@ -25,7 +33,7 @@ export interface ForwardBiasConfig {
 
 export const DEFAULT_FORWARD_BIAS_CONFIG: ForwardBiasConfig = {
   alpha: 0.02,
-  minSpeedMps: 3,
+  minSpeedMps: 1.5,
   maxObservedAccelMps2: 4,
   maxBiasMps2: 0.35,
   maxObservationErrorMps2: 2,

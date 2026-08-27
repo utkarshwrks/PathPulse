@@ -27,8 +27,27 @@ export interface ConstraintFlags {
   zaru: boolean;
   /** Plausibility ceiling plus the unaided-integration decay. */
   speedClamp: boolean;
-  /** Learn forward-acceleration bias from GNSS Doppler while it is available. */
+  /**
+   * Learn forward-acceleration bias from GNSS Doppler while it is available.
+   *
+   * ★ OFF BY DEFAULT — IT MEASURABLY HURTS ★
+   * It was worth 194 m -> 37 m when it was the only thing removing the
+   * acceleration runaway. Now that `accelHighPass` does that job continuously,
+   * the ablation across 24 scenarios says: high-pass alone 12.7 % mean drift,
+   * high-pass plus forward-bias 19.1 %. Adding it makes the result half again
+   * worse, because a bias learned from an 11 s position-differenced speed is
+   * noisy and fixed, while the high-pass tracks whatever the error actually is
+   * right now.
+   *
+   * Kept, off, and reported — a component that stopped earning its place is
+   * worth more as a documented negative result than as a silently deleted one.
+   */
   forwardBias: boolean;
+  /**
+   * Remove the slow-moving mean of forward acceleration when no Doppler speed
+   * is available to learn it from. See the note where it is applied.
+   */
+  accelHighPass: boolean;
   /**
    * Track the receiver's real fix cadence instead of assuming 1 Hz.
    * Off means the old fixed 1.5 s timeout — useful for reproducing the bug.
@@ -56,6 +75,14 @@ export interface EngineConfig extends ConstraintFlags {
   residualGyroBiasRadPerSec: number;
   /** Assumed residual bias with ZARU switched off, rad/s. */
   uncorrectedGyroBiasRadPerSec: number;
+  /**
+   * Time constant of the forward-acceleration high-pass, ms.
+   *
+   * Long enough that a genuine sustained acceleration — a motorway on-ramp of
+   * fifteen or twenty seconds — survives largely intact, short enough that a
+   * constant error cannot integrate for minutes.
+   */
+  accelHighPassTauMs: number;
 }
 
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
@@ -65,7 +92,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   zupt: true,
   zaru: true,
   speedClamp: true,
-  forwardBias: true,
+  forwardBias: false,
+  accelHighPass: true,
   adaptiveTimeout: true,
   trustedAccuracyM: 20,
   gyroZSign: 1,
@@ -74,6 +102,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   maxSpeedMps: 40,
   residualGyroBiasRadPerSec: 0.001,
   uncorrectedGyroBiasRadPerSec: 0.01,
+  accelHighPassTauMs: 40_000,
 };
 
 /**
@@ -130,6 +159,9 @@ export class NavigationEngine {
   private headingSigmaRad = 0;
   /** Smoothed observed sample rate, Hz. Keeps the filters correctly tuned. */
   private measuredRateHz = 0;
+  /** Slow mean of forward acceleration — the high-pass fallback. */
+  private forwardAccelDc = 0;
+  private hasAccelDc = false;
   private estimatedDriftM = 0;
   private lastState: NavigationState | null = null;
   /** When the current dead-reckoning stretch began. Drives confidence decay. */
@@ -328,9 +360,41 @@ export class NavigationEngine {
       // learned. Feeding the corrected value back in would close a loop and
       // drive the estimate to zero.
       this.forwardBias.pushAccel(h.forward);
-      forwardAccel = this.config.forwardBias
-        ? h.forward + this.forwardBias.correctionMps2
-        : h.forward;
+
+      // Track the slow-moving mean of forward acceleration.
+      if (dtMs > 0 && dtMs < 1000) {
+        const a = Math.min(0.2, dtMs / this.config.accelHighPassTauMs);
+        this.forwardAccelDc = this.hasAccelDc
+          ? this.forwardAccelDc + a * (h.forward - this.forwardAccelDc)
+          : h.forward;
+        this.hasAccelDc = true;
+      }
+
+      // ★ TWO WAYS TO KILL THE SAME RUNAWAY, IN ORDER OF PREFERENCE ★
+      //
+      // A residual tilt of 1.58 degrees is 0.27 m/s^2 of acceleration that is
+      // not real. Integrated, that reaches a 3 m/s walking clamp in eleven
+      // seconds and a 40 m/s vehicle clamp in about two and a half minutes —
+      // which is precisely the "dead reckoning accelerates by itself" seen on
+      // the terrace, where the marker saturated its clamp during a 136 s
+      // outage and travelled 712 m on foot.
+      //
+      // 1. If GNSS Doppler has given us observations, use what was MEASURED.
+      //    That is truth-referenced and preserves genuine acceleration.
+      // 2. Otherwise subtract the slow mean. A vehicle's real longitudinal
+      //    acceleration averages to zero over a minute — it cannot accelerate
+      //    forever — while tilt and bias errors do not. So the slow mean IS
+      //    the error, near enough, and removing it costs almost nothing.
+      //
+      // The fallback matters most exactly where the estimator is blind: below
+      // walking pace, and on the many handsets that report no Doppler at all.
+      if (this.config.forwardBias && this.forwardBias.hasEstimate) {
+        forwardAccel = h.forward + this.forwardBias.correctionMps2;
+      } else if (this.config.accelHighPass && this.hasAccelDc) {
+        forwardAccel = h.forward - this.forwardAccelDc;
+      } else {
+        forwardAccel = h.forward;
+      }
 
       // ★ Yaw about the true vertical, not about device Z. ★ This is the fix
       // for the marker setting off in a direction unrelated to the road.
@@ -380,7 +444,12 @@ export class NavigationEngine {
         const de = gnssEnu.e - prev.enu.e;
         const dn = gnssEnu.n - prev.enu.n;
         const distM = Math.hypot(de, dn);
-        if (dtS > 0.2 && dtS < 30) {
+        // Only derive from a displacement clearly larger than the fix
+        // uncertainty. Over an 11 s baseline with 6 m accuracy, anything under
+        // ~18 m of movement is mostly noise, and a speed derived from noise is
+        // worse than admitting we do not know.
+        const trustworthy = distM > 3 * (sample.gnss?.accuracyM ?? 10);
+        if (dtS > 0.2 && dtS < 30 && trustworthy) {
           if (speedForFix === undefined || !Number.isFinite(speedForFix)) {
             speedForFix = distM / dtS;
           }
@@ -709,6 +778,8 @@ export class NavigationEngine {
     this.covarianceCrossM = 0;
     this.headingSigmaRad = 0;
     this.measuredRateHz = 0;
+    this.forwardAccelDc = 0;
+    this.hasAccelDc = false;
     this.estimatedDriftM = 0;
     this.lastState = null;
     this.drStartedAtMs = null;

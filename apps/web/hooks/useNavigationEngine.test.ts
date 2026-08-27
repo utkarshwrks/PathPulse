@@ -117,13 +117,16 @@ describe('useNavigationEngine', () => {
   });
 
   describe('controls', () => {
-    it('defaults to every constraint on', () => {
+    it('defaults to the configuration the ablation actually favours', () => {
       const { result } = renderHook(() => useNavigationEngine());
       const c = result.current.controls;
       expect(c.nhc).toBe(true);
       expect(c.zupt).toBe(true);
       expect(c.zaru).toBe(true);
-      expect(c.forwardBias).toBe(true);
+      // Off on purpose: the ablation shows it degrades drift now that the
+      // acceleration high-pass exists.
+      expect(c.forwardBias).toBe(false);
+      expect(c.accelHighPass).toBe(true);
       expect(c.walkingMode).toBe(false);
     });
 

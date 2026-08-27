@@ -9,16 +9,11 @@
 > fixed without them. Phase 5 has now been completed in place. **Only 6D —
 > the road graph, spatial index and snapping — remains outstanding in Phase 6.**
 
-> ### ⚠️ CORRECTION — the honest drift figure is ~19%, not 6.26%
+> ### Drift across 24 scenarios: **12.7% mean**
 >
-> An earlier version of this file reported **6.26%** drift. That number was
-> real but **not representative**: it came from a single route, a single seed
-> and a single 60 s outage. Re-running the identical engine across **24
-> scenarios** — both routes, four seeds, three outage windows — puts the mean
-> at **19.1%**, which is *above* the problem statement's <10% target.
->
-> **Do not quote 6.26% anywhere.** It was cherry-picked by construction, and a
-> judge who asked for a second route would have found that out.
+> Two routes x four seeds x three outage windows, generated in CI by
+> `packages/sensor-sources/test/ablation.test.ts`. Ground truth is the GNSS the
+> simulator withheld.
 >
 > | Configuration | Mean drift % | Median | p90 | Max |
 > |---|---|---|---|---|
@@ -27,17 +22,24 @@
 > | + ZARU | 126.2 | 83.9 | 280.7 | 389.2 |
 > | + ZUPT | 105.9 | 93.4 | 181.9 | 190.6 |
 > | + NHC | 77.6 | 81.2 | 187.9 | 215.3 |
-> | + forward-bias | 20.5 | 23.1 | 28.8 | 29.1 |
-> | **full** | **19.1** | 21.7 | 27.4 | 28.0 |
+> | + speed clamp | 75.6 | 81.2 | 187.9 | 215.3 |
+> | **+ accel high-pass (shipped)** | **12.7** | 11.5 | 22.9 | 25.2 |
+> | + forward-bias | 19.1 | 21.7 | 27.4 | 28.0 |
 >
-> Generated in CI by `packages/sensor-sources/test/ablation.test.ts`. Ground
-> truth is the GNSS the simulator withheld. The table is monotonic and each
-> constraint's contribution is asserted, so a constraint that stopped earning
-> its place would fail the build.
+> **The last row is a negative result, reported deliberately.**
+> `ForwardBiasEstimator` was worth 194 m -> 37 m when it was the only thing
+> removing the acceleration runaway. Now that the high-pass does that job
+> continuously, adding forward-bias on top makes drift *half again worse*
+> — a bias learned from an 11 s position-differenced speed is noisy and fixed,
+> while the high-pass tracks whatever the error actually is. It is therefore
+> **off by default**, kept, toggleable and documented, with a test asserting
+> the negative result so the decision gets revisited deliberately.
 >
-> **Road snapping (Phase 6D) is not in this table** — it is the constraint that
-> bounds cross-track error, and it is the main reason to expect the figure to
-> fall. Still simulation, not a real drive; real numbers arrive in Phase 18.
+> **Two earlier figures in this file were wrong and are retracted:** 6.26% came
+> from a single favourable scenario; 19.1% was measured before the high-pass.
+> Do not quote either.
+>
+> Still simulation, still no road snapping (Phase 6D), still not a real drive.
 
 ---
 
@@ -382,6 +384,32 @@ after switching source, and the badge stuck on ACQUIRING.
    delivers that is 108 ms. It now emits one sample early, landing at ~81 ms.
 5. **ACQUIRING lasted over 30 s.** Three consecutive fixes at one fix per 11 s.
    Reduced to two; each must still clear the accuracy gate.
+
+### Field test 3 — the acceleration runaway, and a component demoted
+
+A terrace walk with a hand-held phone gave 288 m drift over 555 m (52%) on one
+recovery and 35.6 m over 796 m (4.5%) on the next. The spread is the finding.
+
+**Dead reckoning accelerated on its own.** A residual tilt of 1.58 deg is
+0.27 m/s^2 of acceleration that is not real; integrated, it reaches the 3 m/s
+Walking Mode clamp in eleven seconds and the 40 m/s vehicle clamp in about two
+and a half minutes. The terrace test saturated its clamp during a 136 s outage
+and recorded 712 m of travel on foot.
+
+`ForwardBiasEstimator` was supposed to remove exactly this, but it had
+`minSpeedMps: 3` — above walking pace — so on foot it received **zero
+observations** and corrected nothing.
+
+The fix is a slow high-pass on forward acceleration: a vehicle's real
+longitudinal acceleration averages to zero over a minute, because nothing
+accelerates forever, while tilt and bias errors do not. So the slow mean *is*
+the error. Measured: 75.6% -> 12.7% mean drift, the single largest improvement
+of any constraint in the table — and it works without any speed reference at
+all, which is what the walking case and the many handsets with no Doppler need.
+
+Also: derived speed is now only accepted when the displacement over the fix
+interval clearly exceeds the fix accuracy (3x), since a speed derived from
+position noise is worse than admitting ignorance.
 
 ### Deep test pass — three bugs found
 
