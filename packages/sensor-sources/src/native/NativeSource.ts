@@ -137,10 +137,17 @@ export class NativeSource implements SensorSource {
     this.accelHandle = null;
     this.orientationHandle = null;
     if (this.watchId) {
-      void import('@capacitor/geolocation').then(({ Geolocation }) =>
-        Geolocation.clearWatch({ id: this.watchId! }),
-      );
+      // ★ CAPTURE THE ID FIRST ★
+      // `this.watchId = null` runs synchronously, long before the dynamic
+      // import resolves — so reading it inside the callback found null and
+      // clearWatch was called with nothing. The GPS watch was never released:
+      // it kept running after stop(), draining battery and delivering fixes to
+      // a source the app believed was shut down. Nothing on screen showed it.
+      const id = this.watchId;
       this.watchId = null;
+      void import('@capacitor/geolocation').then(({ Geolocation }) =>
+        Geolocation.clearWatch({ id }),
+      );
     }
   }
 

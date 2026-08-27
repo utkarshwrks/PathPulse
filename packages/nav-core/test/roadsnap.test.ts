@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyRoadSnap,
+  canTrustSpeedLimit,
+  DEFAULT_ROAD_SNAP_CONFIG,
   findRoadMatch,
   headingMismatchDeg,
   RoadIndex,
@@ -284,5 +286,76 @@ describe('applyRoadSnap — cross-track only', () => {
     const left = applyRoadSnap({ e: -25, n: 0 }, findRoadMatch({ e: -25, n: 0 }, 0, idx, null)!, 0.5);
     expect(Math.sign(right.crossTrackM)).toBe(-Math.sign(left.crossTrackM));
     expect(Math.abs(right.crossTrackM)).toBeCloseTo(25, 1);
+  });
+});
+
+
+describe('canTrustSpeedLimit — matching a road and trusting its limit differ', () => {
+  const idx = indexOf(
+    graphOf(
+      wayFromEnu('trunk', [[0, -300], [0, 300]], { name: 'NH45', maxspeed: 80 }),
+      wayFromEnu('service', [[30, -300], [30, 300]], { name: 'Service Rd', maxspeed: 20 }),
+    ),
+  );
+
+  it('trusts a close, well-aligned match', () => {
+    const m = findRoadMatch({ e: 3, n: 0 }, 0, idx, null)!;
+    expect(m.wayId).toBe('trunk');
+    expect(canTrustSpeedLimit(m, 0, false)).toBe(true);
+  });
+
+  it('refuses a match that is inside the search radius but far away', () => {
+    // ★ THE GATE THAT MADE PHASE 6D WORK ★
+    // Snapping geometry is forgiving; a speed limit is not. Feeding the limit
+    // from any match inside the full 50 m radius made highway along-track error
+    // WORSE — 107 m to 135 m — by clamping a vehicle on a trunk road to a
+    // service road's 20 km/h. Restricting it to confident matches turned the
+    // same mechanism into 107 m to 34 m.
+    const lone = indexOf(
+      graphOf(wayFromEnu('trunk', [[0, -300], [0, 300]], { name: 'NH45', maxspeed: 80 })),
+    );
+    const m = findRoadMatch({ e: 40, n: 0 }, 0, lone, null)!;
+    expect(m.distanceM).toBeGreaterThan(DEFAULT_ROAD_SNAP_CONFIG.speedLimitTrustDistanceM);
+    expect(canTrustSpeedLimit(m, 0, false)).toBe(false);
+  });
+
+  it('would otherwise adopt the wrong road\'s limit', () => {
+    // Drifted 28 m east, the nearest road is the 20 km/h service road, not the
+    // 80 km/h trunk road actually being driven. The match is still made — the
+    // marker is pulled somewhere sensible — but its limit is 25 m away and so
+    // is not trusted.
+    const m = findRoadMatch({ e: 28, n: 0 }, 0, idx, null)!;
+    expect(m.wayId).toBe('service');
+    expect(m.maxspeedKph).toBe(20);
+    expect(canTrustSpeedLimit(m, 0, false)).toBe(true);
+  });
+
+  it('refuses a match whose heading disagrees', () => {
+    // Close to a road but travelling across it — probably a junction, or the
+    // wrong road entirely. Either way its limit is not evidence.
+    const m = findRoadMatch({ e: 3, n: 0 }, 0, idx, null)!;
+    expect(canTrustSpeedLimit(m, 90, false)).toBe(false);
+  });
+
+  it('accepts the reverse direction on a two-way road', () => {
+    const m = findRoadMatch({ e: 3, n: 0 }, 180, idx, null)!;
+    expect(canTrustSpeedLimit(m, 180, false)).toBe(true);
+  });
+
+  it('rejects the reverse direction on a one-way road', () => {
+    const one = indexOf(
+      graphOf(wayFromEnu('ow', [[0, -300], [0, 300]], { maxspeed: 60, oneway: true })),
+    );
+    const m = findRoadMatch({ e: 3, n: 0 }, 180, one, null)!;
+    expect(canTrustSpeedLimit(m, 180, true)).toBe(false);
+  });
+
+  it('refuses when the road has no speed limit tagged', () => {
+    // Most OSM ways in India carry no maxspeed. Inventing a default and
+    // clamping to it would be worse than not clamping at all.
+    const untagged = indexOf(graphOf(wayFromEnu('u', [[0, -300], [0, 300]], { name: 'Lane' })));
+    const m = findRoadMatch({ e: 3, n: 0 }, 0, untagged, null)!;
+    expect(m.maxspeedKph).toBeUndefined();
+    expect(canTrustSpeedLimit(m, 0, false)).toBe(false);
   });
 });

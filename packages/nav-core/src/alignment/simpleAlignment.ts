@@ -78,11 +78,32 @@ export class SimpleAlignment {
     this.calibrated = true;
   }
 
-  /** Rotate a device-frame horizontal vector into the vehicle frame. */
+  /**
+   * Rotate a device-frame horizontal vector into the vehicle frame.
+   *
+   * ★ SIGN CONVENTION, DERIVED RATHER THAN GUESSED ★
+   *
+   * `finishCalibration` sets `yawOffsetRad = atan2(meanX, meanY)` from the
+   * acceleration seen while driving straight — so the vehicle's FORWARD
+   * direction, expressed in device coordinates, is the unit vector
+   * (sin theta, cos theta), and its right-hand side is (cos theta, -sin theta).
+   *
+   * The components of a device vector are therefore its dot products with
+   * those axes:
+   *
+   *   forward = x sin(theta) + y cos(theta)
+   *   lateral = x cos(theta) - y sin(theta)
+   *
+   * The first version had both signs the other way round, which is the inverse
+   * rotation. It was invisible because the offset is zero until calibration
+   * runs and nothing calls `startCalibration` yet — but a phone mounted at 90
+   * degrees would have reported forward acceleration as backward, and dead
+   * reckoning would have driven the vehicle in reverse.
+   */
   toVehicleFrame(x: number, y: number): { forward: number; lateral: number } {
     const c = Math.cos(this.yawOffsetRad);
     const s = Math.sin(this.yawOffsetRad);
-    return { forward: y * c - x * s, lateral: x * c + y * s };
+    return { forward: y * c + x * s, lateral: x * c - y * s };
   }
 
   reset(): void {

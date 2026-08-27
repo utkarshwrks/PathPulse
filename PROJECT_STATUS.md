@@ -376,6 +376,48 @@ after switching source, and the badge stuck on ACQUIRING.
 5. **ACQUIRING lasted over 30 s.** Three consecutive fixes at one fix per 11 s.
    Reduced to two; each must still clear the accuracy gate.
 
+### Deep test pass 2 — coverage-driven, three latent bugs found
+
+Ran coverage rather than guessing where the holes were, then wrote tests for
+the least-covered code. Three real defects fell out, all of them silent.
+
+**1. `RecordingWrapper` recorded nothing unless somebody subscribed** — and
+recorded every sample TWICE if two things did. It registered its recording
+callback inside `onSample`, so the buffer's contents depended on who happened
+to be listening. A duplicated log still looks plausible: same timestamps, just
+twice each. Now subscribes to the inner source exactly once, in the
+constructor.
+
+**2. `NativeSource.stop()` never released the GPS watch.** `this.watchId = null`
+ran synchronously, long before the lazy `import('@capacitor/geolocation')`
+resolved — so `clearWatch` was called with `null`. The watch kept running after
+stop, draining battery and delivering fixes to a source the app believed was
+shut down, with nothing on screen to show it. The id is now captured first.
+
+**3. `SimpleAlignment.toVehicleFrame` applied the inverse rotation.** The offset
+is `atan2(meanX, meanY)`, so the vehicle's forward direction in device
+coordinates is `(sin θ, cos θ)` and the forward component must be
+`x·sin θ + y·cos θ`. Both signs were the other way round. Latent only because
+the offset is zero until calibration runs and nothing calls
+`startCalibration()` yet — but a phone mounted at 90 degrees would have
+reported forward acceleration as backward, and dead reckoning would have driven
+the vehicle in reverse.
+
+Also removed `GravityRemover` outright. It was dead code — defined, exported,
+referenced only in a comment — and its low-pass approach is the very thing the
+complementary filter replaced. Dead code that still looks plausible is worse
+than no code, because the next reader assumes it is the path in use.
+
+**Coverage:** nav-core 89.3% → **93.7%**, sensor-sources 63.6% → **93.1%**,
+`WebSource` 7.7% → **93.3%**, `NativeSource` 8.0% → **~93%**,
+`RecordingWrapper`/`nhc`/`roadsnap`/`events`/`gravity` at **100%**.
+**394 tests** (was 289).
+
+**Still uncovered, deliberately:** `apps/web/lib/platform.ts` (Capacitor Device
+plugin, no logic of its own) and the React components (rendering, not logic —
+and no browser automation has been available in any session, so the UI has
+still never been clicked).
+
 ### Phase 6D — road graph + road snapping ✅
 
 - **`scripts/build-road-graph.mjs`** — Overpass -> `data/maps/road_graph_<name>.json`
