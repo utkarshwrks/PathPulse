@@ -9,6 +9,7 @@ export type NavEventType =
   | 'NHC_APPLIED'
   | 'DRIFT_MEASURED'
   | 'RECOVERY_COMPLETE'
+  | 'POSITION_RESET'
   | 'WARNING';
 
 export interface NavEvent {

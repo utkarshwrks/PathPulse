@@ -126,6 +126,8 @@ export class NavigationEngine {
   private covarianceCrossM = 0;
   /** Accumulated heading uncertainty during an outage, radians. */
   private headingSigmaRad = 0;
+  /** Smoothed observed sample rate, Hz. Keeps the filters correctly tuned. */
+  private measuredRateHz = 0;
   private estimatedDriftM = 0;
   private lastState: NavigationState | null = null;
   /** When the current dead-reckoning stretch began. Drives confidence decay. */
@@ -234,6 +236,17 @@ export class NavigationEngine {
     const dtMs = this.lastSampleT === null ? 20 : sample.t - this.lastSampleT;
     this.lastSampleT = sample.t;
 
+    // Track the rate the samples are ACTUALLY arriving at and re-tune the
+    // filters to match. A phone's WebView delivers anywhere from 14 to 60 Hz
+    // depending on throttling, and a filter designed for a rate it is not
+    // getting has a different cutoff than the one it claims.
+    if (dtMs > 0 && dtMs < 1000) {
+      const instantHz = 1000 / dtMs;
+      this.measuredRateHz =
+        this.measuredRateHz === 0 ? instantHz : this.measuredRateHz * 0.99 + instantHz * 0.01;
+      this.accelLowPass.setSampleRate(this.measuredRateHz);
+    }
+
     // 2-4. Condition the IMU and read out motion state.
     let forwardAccel = 0;
     let lateralAccel = 0;
@@ -246,7 +259,17 @@ export class NavigationEngine {
       // to find "down", so feeding it a gravity-removed value would leave it
       // with nothing to track.
       if (quat) this.attitude.pushQuaternion(quat);
-      else this.attitude.push(ax, ay, az, gx, gy, gz, dtMs);
+      else
+        this.attitude.push(
+          ax,
+          ay,
+          az,
+          gx,
+          gy,
+          gz,
+          dtMs,
+          this.config.zaru ? (this.zaru.gyroBias as [number, number, number]) : [0, 0, 0],
+        );
 
       let a: [number, number, number] = [ax, ay, az];
       if (this.config.medianFilter) a = this.accelMedian.push(a[0], a[1], a[2]);
@@ -478,6 +501,16 @@ export class NavigationEngine {
       const blended = this.recovery.update(sample.t, target);
       shownEnu = blended.enu;
       this.estimatedDriftM = blended.driftM;
+      if (blended.didReset) {
+        // An explicit, logged jump. Never silent — a marker that moves a
+        // kilometre with no explanation is indistinguishable from a bug.
+        this.log.push({
+          t: sample.t,
+          type: 'POSITION_RESET',
+          message: `estimate was ${blended.driftM.toFixed(0)}m out — too far to slew, position reset`,
+          data: { driftM: blended.driftM },
+        });
+      }
       if (!blended.isRecovering) {
         this.log.push({
           t: sample.t,
@@ -614,6 +647,7 @@ export class NavigationEngine {
     this.covarianceAlongM = 0;
     this.covarianceCrossM = 0;
     this.headingSigmaRad = 0;
+    this.measuredRateHz = 0;
     this.estimatedDriftM = 0;
     this.lastState = null;
     this.drStartedAtMs = null;

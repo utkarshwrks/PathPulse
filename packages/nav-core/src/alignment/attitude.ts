@@ -50,6 +50,17 @@ export class AttitudeEstimator {
    * vertical with it. See the note on push().
    */
   private readonly steadyAlpha = 0.0007;
+  /**
+   * Slow average of |specific force|, used to gate the correction.
+   *
+   * Gating on the instantaneous magnitude does not work: 20 Hz road vibration
+   * swings it by ~1 m/s^2 every sample, which would suppress the correction
+   * permanently and leave the vertical to drift on gyro bias alone. Averaging
+   * over about a second lets vibration cancel while a sustained acceleration —
+   * which is exactly what must suppress the correction — still shows up.
+   */
+  private smoothedMag = 0;
+  private hasSmoothedMag = false;
 
   /** Unit vector pointing up, expressed in the device frame. */
   get upVector(): Readonly<Vec3> {
@@ -94,7 +105,16 @@ export class AttitudeEstimator {
    * This is the standard complementary-filter split: gyro for the short term,
    * accelerometer for the long term, each covering the other's weakness.
    */
-  push(ax: number, ay: number, az: number, gx = 0, gy = 0, gz = 0, dtMs = 20): void {
+  push(
+    ax: number,
+    ay: number,
+    az: number,
+    gx = 0,
+    gy = 0,
+    gz = 0,
+    dtMs = 20,
+    gyroBias: Readonly<Vec3> = [0, 0, 0],
+  ): void {
     if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(az)) return;
 
     const mag = Math.hypot(ax, ay, az);
@@ -119,19 +139,48 @@ export class AttitudeEstimator {
     const dt = dtMs / 1000;
     if (dt > 0 && dt < 1 && Number.isFinite(gx) && Number.isFinite(gy) && Number.isFinite(gz)) {
       // Predict: rotate the vertical by -omega.
+      //
+      // Bias is removed here, not just where yaw is read. The prediction is
+      // what carries the vertical through the seconds when the accelerometer
+      // cannot be trusted, so an uncorrected 0.01 rad/s bias would walk it
+      // 0.57 deg every second — and 1 degree of tilt is 0.171 m/s^2 of false
+      // acceleration. ZARU supplies the estimate for free at every stop.
+      const wx = gx - gyroBias[0];
+      const wy = gy - gyroBias[1];
+      const wz = gz - gyroBias[2];
       const [ux, uy, uz] = this.up;
       this.up = [
-        ux - (gy * uz - gz * uy) * dt,
-        uy - (gz * ux - gx * uz) * dt,
-        uz - (gx * uy - gy * ux) * dt,
+        ux - (wy * uz - wz * uy) * dt,
+        uy - (wz * ux - wx * uz) * dt,
+        uz - (wx * uy - wy * ux) * dt,
       ];
     }
 
-    // Correct, weighted by how much this sample looks like pure gravity. A
-    // reading far from 9.81 g contains motion, so trust it less — but never
-    // zero, or the vertical would drift away unchecked during a long turn.
-    const err = Math.abs(mag - GRAVITY_MPS2) / GRAVITY_MPS2;
-    const trust = Math.max(0.05, 1 - err * 4);
+    // Track |a| slowly, so vibration averages out but sustained acceleration
+    // does not. ~1 s at 50 Hz.
+    const magAlpha = 0.02;
+    if (!this.hasSmoothedMag) {
+      this.smoothedMag = mag;
+      this.hasSmoothedMag = true;
+    } else {
+      this.smoothedMag += magAlpha * (mag - this.smoothedMag);
+    }
+
+    // Correct, gated by how much this sample looks like pure gravity.
+    //
+    // When the averaged specific force departs from g, the accelerometer is
+    // measuring motion as well as gravity and is a BAD attitude reference —
+    // following it tilts the vertical toward the acceleration and cancels the
+    // very signal being integrated. That was field defect #6. The Gaussian
+    // gate falls away sharply: at 2 m/s^2 of sustained acceleration it is
+    // essentially zero, so the gyro carries the vertical instead.
+    //
+    // Never exactly zero, and never gated for long, because gravity is the
+    // only thing stopping gyro bias from walking the vertical away over a
+    // whole drive.
+    const err = Math.abs(this.smoothedMag - GRAVITY_MPS2) / GRAVITY_MPS2;
+    const gate = Math.exp(-((err / 0.02) ** 2));
+    const trust = Math.max(0.02, gate);
     const alpha = this.steadyAlpha * trust;
 
     const nx = ax / mag;
@@ -145,7 +194,7 @@ export class AttitudeEstimator {
     const pmag = Math.hypot(px, py, pz);
     if (pmag > 1e-6) this.up = [px / pmag, py / pmag, pz / pmag];
 
-    this.tiltQualityValue = Math.max(0, Math.min(1, 1 - err * 4));
+    this.tiltQualityValue = Math.max(0, Math.min(1, gate));
   }
 
   /** Seed the vertical immediately, bypassing the start-up ramp. */
@@ -270,6 +319,8 @@ export class AttitudeEstimator {
     this.settled = false;
     this.sampleCount = 0;
     this.tiltQualityValue = 0;
+    this.smoothedMag = 0;
+    this.hasSmoothedMag = false;
   }
 }
 

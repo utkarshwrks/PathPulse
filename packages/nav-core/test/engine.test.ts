@@ -271,15 +271,39 @@ describe('RecoveryBlender — never teleport', () => {
     const drift = b.begin(0, { e: 30, n: 40 }, { e: 0, n: 0 });
     expect(drift).toBeCloseTo(50, 6);
 
-    const half = b.update(1000, { e: 0, n: 0 });
-    expect(half.isRecovering).toBe(true);
-    // Halfway through, roughly halfway back.
-    expect(Math.hypot(half.enu.e, half.enu.n)).toBeLessThan(50);
-    expect(Math.hypot(half.enu.e, half.enu.n)).toBeGreaterThan(0);
+    const part = b.update(1000, { e: 0, n: 0 });
+    expect(part.isRecovering).toBe(true);
+    expect(Math.hypot(part.enu.e, part.enu.n)).toBeLessThan(50);
+    expect(Math.hypot(part.enu.e, part.enu.n)).toBeGreaterThan(0);
 
-    const done = b.update(2100, { e: 0, n: 0 });
+    // Duration is derived from the drift and the bounded slew rate, not fixed:
+    // 50 m at 60 m/s peak with an ease factor of 3 takes 2.5 s.
+    expect(b.update(2000, { e: 0, n: 0 }).isRecovering).toBe(true);
+    const done = b.update(2600, { e: 0, n: 0 });
     expect(done.isRecovering).toBe(false);
     expect(done.enu).toEqual({ e: 0, n: 0 });
+  });
+
+  it('never moves the marker faster than the bounded slew rate', () => {
+    // ★ The invariant the old fixed-duration version broke. ★
+    // A 300 m drift spread over a fixed 2 s moved the marker 21 m between
+    // consecutive 20 ms samples — over 1000 m/s, a teleport in all but name.
+    const b = new RecoveryBlender();
+    b.begin(0, { e: 300, n: 0 }, { e: 0, n: 0 });
+
+    let prev = 300;
+    let maxStepM = 0;
+    for (let t = 20; t <= 30_000; t += 20) {
+      const r = b.update(t, { e: 0, n: 0 });
+      const remaining = Math.hypot(r.enu.e, r.enu.n);
+      maxStepM = Math.max(maxStepM, Math.abs(prev - remaining));
+      prev = remaining;
+      if (!r.isRecovering) break;
+    }
+    // 60 m/s over a 20 ms frame is 1.2 m. Allow a little slack for the
+    // discrete step landing either side of the easing peak.
+    expect(maxStepM).toBeLessThan(1.6);
+    expect(prev).toBeCloseTo(0, 6);
   });
 
   it('tracks a moving GNSS target during the slew', () => {
@@ -292,13 +316,30 @@ describe('RecoveryBlender — never teleport', () => {
     expect(mid.enu.e).toBeLessThan(110);
   });
 
-  it('flags a gross drift and slews faster, but still slews', () => {
+  it('resets explicitly when the drift is too large to slew honestly', () => {
+    // Earlier behaviour was to slew a gross drift FASTER, on the reasoning that
+    // leaving the marker wrong for longer was worse. That is backwards: the
+    // faster the slew, the more it looks like the teleport it was meant to
+    // avoid. Past the threshold the estimate is not slightly wrong, it is
+    // worthless — so reset in one step and SAY SO, rather than performing a
+    // smooth correction that is really a jump in disguise.
     const b = new RecoveryBlender();
-    b.begin(0, { e: 500, n: 0 }, { e: 0, n: 0 });
-    const r = b.update(500, { e: 0, n: 0 });
+    const drift = b.begin(0, { e: 5000, n: 0 }, { e: 0, n: 0 });
+    expect(drift).toBeCloseTo(5000, 6);
+
+    const r = b.update(20, { e: 0, n: 0 });
+    expect(r.didReset).toBe(true);
     expect(r.warning).toBe(true);
+    expect(r.isRecovering).toBe(false);
+    expect(r.enu).toEqual({ e: 0, n: 0 });
+  });
+
+  it('slews rather than resets for a drift it can still cover', () => {
+    const b = new RecoveryBlender();
+    b.begin(0, { e: 300, n: 0 }, { e: 0, n: 0 });
+    const r = b.update(20, { e: 0, n: 0 });
+    expect(r.didReset).toBeFalsy();
     expect(r.isRecovering).toBe(true);
-    expect(b.update(1100, { e: 0, n: 0 }).isRecovering).toBe(false);
   });
 
   it('eases in and out', () => {

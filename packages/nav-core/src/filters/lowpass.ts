@@ -18,8 +18,32 @@ export class LowPassFilter {
 
   constructor(
     private readonly cutoffHz = 5,
-    private readonly sampleRateHz = 50,
+    private sampleRateHz = 50,
   ) {
+    this.design();
+  }
+
+  /**
+   * Re-tune for a different sample rate.
+   *
+   * ★ THE ASSUMED RATE IS NOT THE REAL RATE ★
+   * These coefficients are derived from the sample rate, so a filter designed
+   * for 50 Hz and fed 14 Hz is not a 5 Hz low-pass any more — its effective
+   * cutoff falls to 5 x (14/50) = 1.4 Hz, which smooths away real vehicle
+   * dynamics and adds lag to a signal that is about to be integrated twice.
+   *
+   * That is not hypothetical: field testing measured the IMU arriving at
+   * anywhere between 14 and 60 Hz on the same handset, because the WebView
+   * throttles DeviceMotion. Tracking the observed rate keeps the filter doing
+   * what it says it does.
+   *
+   * Coefficients only, so the filter state is preserved and re-tuning does not
+   * produce a transient.
+   */
+  setSampleRate(hz: number): void {
+    if (!Number.isFinite(hz) || hz <= 0) return;
+    if (Math.abs(hz - this.sampleRateHz) / this.sampleRateHz < 0.2) return;
+    this.sampleRateHz = hz;
     this.design();
   }
 
@@ -70,6 +94,13 @@ export class Vec3LowPassFilter {
     this.x = new LowPassFilter(cutoffHz, sampleRateHz);
     this.y = new LowPassFilter(cutoffHz, sampleRateHz);
     this.z = new LowPassFilter(cutoffHz, sampleRateHz);
+  }
+
+  /** Re-tune all three axes. See LowPassFilter.setSampleRate. */
+  setSampleRate(hz: number): void {
+    this.x.setSampleRate(hz);
+    this.y.setSampleRate(hz);
+    this.z.setSampleRate(hz);
   }
 
   push(x: number, y: number, z: number): [number, number, number] {

@@ -15,12 +15,15 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phase 4 complete, Phase 6 constraints brought forward.** The dot survives a
-GNSS outage, and the six defects that a real-phone field test exposed on
-2026-08-27 are fixed. Measured drift on the simulated 60 s city outage is
-**6.26%**, inside the problem statement's <10% target. The full ablation, the
-caveats, and the defect write-up are in
-[`PROJECT_STATUS.md`](./PROJECT_STATUS.md).
+**Phase 5 complete; Phase 6 constraints partly done (6D outstanding).** The dot
+survives a GNSS outage, and the six defects a real-phone field test exposed on
+2026-08-27 are fixed.
+
+Measured drift across 24 simulated scenarios — two routes, four seeds, three
+outage windows — is **19.1% mean**, which is **above** the problem statement's
+<10% target. Road snapping (Phase 6D) is the constraint expected to close that
+gap and is not built yet. The full ablation, the caveats and the defect
+write-up are in [`PROJECT_STATUS.md`](./PROJECT_STATUS.md).
 
 ## Tech stack
 
@@ -51,7 +54,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (182) |
+| `pnpm test` | All workspace tests (260) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 

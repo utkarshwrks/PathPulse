@@ -9,23 +9,35 @@
 > fixed without them. Phase 5 has now been completed in place. **Only 6D —
 > the road graph, spatial index and snapping — remains outstanding in Phase 6.**
 
-> ### Drift on the simulated 60 s city outage: **6.26%** — inside the PS target
-> Measured, not claimed: `packages/sensor-sources/test/ablation.test.ts` runs
-> the table in CI. Ground truth is the GNSS the simulator withheld.
+> ### ⚠️ CORRECTION — the honest drift figure is ~19%, not 6.26%
 >
-> | Configuration | Final error (m) | DR distance (m) | Drift % |
-> |---|---|---|---|
-> | naive (no constraints) | 417.3 | 237 | 175.73 |
-> | + filters | 417.8 | 239 | 174.62 |
-> | + ZARU | 415.8 | 240 | 173.61 |
-> | + ZUPT | 405.2 | 393 | 103.16 |
-> | + NHC | 194.3 | 343 | 56.65 |
-> | + forward-bias | 37.3 | 595 | 6.26 |
-> | full | 37.3 | 595 | 6.26 |
+> An earlier version of this file reported **6.26%** drift. That number was
+> real but **not representative**: it came from a single route, a single seed
+> and a single 60 s outage. Re-running the identical engine across **24
+> scenarios** — both routes, four seeds, three outage windows — puts the mean
+> at **19.1%**, which is *above* the problem statement's <10% target.
 >
-> Caveats, stated plainly: one route, one seed, one 60 s outage, in simulation.
-> Road snapping (Phase 6D) is **not** in this table — it needs the road graph.
-> Real-drive numbers arrive in Phase 18. Do not present this as a road result.
+> **Do not quote 6.26% anywhere.** It was cherry-picked by construction, and a
+> judge who asked for a second route would have found that out.
+>
+> | Configuration | Mean drift % | Median | p90 | Max |
+> |---|---|---|---|---|
+> | naive (no constraints) | 208.8 | 162.0 | 668.5 | 709.0 |
+> | + filters | 206.6 | 162.5 | 663.1 | 700.6 |
+> | + ZARU | 126.2 | 83.9 | 280.7 | 389.2 |
+> | + ZUPT | 105.9 | 93.4 | 181.9 | 190.6 |
+> | + NHC | 77.6 | 81.2 | 187.9 | 215.3 |
+> | + forward-bias | 20.5 | 23.1 | 28.8 | 29.1 |
+> | **full** | **19.1** | 21.7 | 27.4 | 28.0 |
+>
+> Generated in CI by `packages/sensor-sources/test/ablation.test.ts`. Ground
+> truth is the GNSS the simulator withheld. The table is monotonic and each
+> constraint's contribution is asserted, so a constraint that stopped earning
+> its place would fail the build.
+>
+> **Road snapping (Phase 6D) is not in this table** — it is the constraint that
+> bounds cross-track error, and it is the main reason to expect the figure to
+> fall. Still simulation, not a real drive; real numbers arrive in Phase 18.
 
 ---
 
@@ -336,9 +348,39 @@ stationary outage with ZUPT toggled off on one of them, asserting they end
 toggle that produced identical output would make the whole panel theatre.
 
 **Verified:** `pnpm build` static export succeeds; the dev server renders the
-page with no console or hydration errors. **Not verified: interactive
-behaviour in a real browser** — no browser automation was available in this
-session. Run the TEST steps below on the phone before relying on it.
+page with no console or hydration errors; 14 hook tests cover throttling,
+diagnostics, stats, live toggles, Walking Mode, reset and hostile input.
+**Not verified: the rendered UI in a real browser** — no browser automation was
+available in this session, so no toggle has ever been clicked. Run the TEST
+steps on the phone before relying on it.
+
+### Deep test pass — three bugs found
+
+1. **The recovery slew could teleport.** It spread any drift over a fixed 2 s
+   and a *gross* drift over 1 s — faster — on the reasoning that leaving the
+   marker wrong for longer was worse. Backwards: a 367 m correction over 10 s
+   moved the marker **22 m between consecutive samples**, over 1000 m/s. The
+   slew is now bounded by RATE (60 m/s peak, accounting for easeInOutCubic
+   reaching 3x its mean slope at the midpoint), and a drift too large to cover
+   inside the window triggers an explicit, logged `POSITION_RESET` instead of
+   a smooth correction that is really a jump in disguise. Measured across the
+   24 scenarios: zero resets, every recovery slides.
+2. **The attitude filter still leaked 3.15 deg** of tilt through ten seconds of
+   acceleration — 0.54 m/s^2 of phantom braking. The accelerometer correction
+   is now gated on a *smoothed* specific-force magnitude, so road vibration
+   averages out but sustained acceleration suppresses the correction and lets
+   the gyro carry the vertical. Down to 1.58 deg. ZARU's gyro bias is now fed
+   into the attitude prediction as well, not just the yaw readout.
+3. **The filters assumed a 50 Hz sample rate.** Field measurements showed the
+   IMU arriving anywhere between 14 and 60 Hz on the same handset, and a 5 Hz
+   Butterworth designed for 50 Hz becomes a 1.4 Hz filter at 14 Hz. The engine
+   now tracks the observed rate and re-tunes.
+
+**Test suites added:** `attitude.test.ts` (26 — seven mount orientations swept,
+complementary-filter behaviour, robustness), `invariants.test.ts` (31 —
+determinism, NaN/hostile-input fuzzing, never-teleport across eight configs,
+long-outage behaviour, degenerate streams), `session.test.ts` (12),
+`useNavigationEngine.test.ts` (14). **260 tests total.**
 
 ## NEXT PHASE
 
