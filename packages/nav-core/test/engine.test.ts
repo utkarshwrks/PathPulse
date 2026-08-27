@@ -247,13 +247,22 @@ describe('NavigationStateMachine — hysteresis', () => {
     expect(sm.current).toBe('DEAD_RECKONING');
   });
 
-  it('needs three good fixes to leave INITIALIZING', () => {
+  it('needs two good fixes to leave INITIALIZING', () => {
+    // Two, not three: on a receiver delivering a fix every 11 s — which the
+    // field-test handset did — three fixes leaves the badge on ACQUIRING for
+    // over half a minute after launch. Each fix must still clear the accuracy
+    // gate, so this is a confirmation rather than a guess.
     const sm = new NavigationStateMachine();
-    sm.update(0, { hasFix: true, accuracyM: 4, satCount: 9 });
-    sm.update(1000, { hasFix: true, accuracyM: 4, satCount: 9 });
+    const good = { hasFix: true, accuracyM: 5, satCount: 9 };
+    expect(sm.update(0, good)).toBe('INITIALIZING');
+    expect(sm.update(1000, good)).toBe('GNSS');
+  });
+
+  it('does not leave INITIALIZING on inaccurate fixes', () => {
+    const sm = new NavigationStateMachine();
+    const bad = { hasFix: true, accuracyM: 90, satCount: 9 };
+    for (let i = 0; i < 6; i++) sm.update(i * 1000, bad);
     expect(sm.current).toBe('INITIALIZING');
-    sm.update(2000, { hasFix: true, accuracyM: 4, satCount: 9 });
-    expect(sm.current).toBe('GNSS');
   });
 
   it('treats too-few satellites as degraded even with good accuracy', () => {

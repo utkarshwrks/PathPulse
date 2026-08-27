@@ -2,10 +2,11 @@
 
 import { useState } from 'react';
 import type { NavEvent, SensorSample, SessionSummary } from '@pathpulse/nav-core';
-import type { EngineControls, EngineDiagnostics } from '@/hooks/useNavigationEngine';
+import type { EngineControls, EngineDiagnostics, LastGnss } from '@/hooks/useNavigationEngine';
 
 interface TrustPanelProps {
   sample: SensorSample | null;
+  lastGnss: LastGnss | null;
   diagnostics: EngineDiagnostics;
   stats: SessionSummary;
   events: NavEvent[];
@@ -42,6 +43,7 @@ type Tab = 'sensors' | 'constraints' | 'events' | 'stats';
  */
 export default function TrustPanel({
   sample,
+  lastGnss,
   diagnostics,
   stats,
   events,
@@ -101,6 +103,7 @@ export default function TrustPanel({
             {tab === 'sensors' ? (
               <SensorsTab
                 sample={sample}
+                lastGnss={lastGnss}
                 diagnostics={diagnostics}
                 imuHz={imuHz}
                 gnssHz={gnssHz}
@@ -125,19 +128,23 @@ export default function TrustPanel({
 
 function SensorsTab({
   sample,
+  lastGnss,
   diagnostics,
   imuHz,
   gnssHz,
   updateHz,
 }: {
   sample: SensorSample | null;
+  lastGnss: LastGnss | null;
   diagnostics: EngineDiagnostics;
   imuHz: number;
   gnssHz: number;
   updateHz: number;
 }) {
   const imu = sample?.imu;
-  const gnss = sample?.gnss;
+  // Fixes are hundreds of times rarer than IMU samples, so read the last one
+  // rather than only whichever sample happens to be on screen.
+  const gnss = lastGnss?.gnss;
 
   return (
     <div className="tabular space-y-2.5 font-mono text-[10.5px] text-neutral-300">
@@ -164,9 +171,17 @@ function SensorsTab({
         />
       </Group>
 
-      <Group title="gnss">
+      <Group title="gnss (last fix)">
+        <Row
+          k="FIX AGE"
+          v={lastGnss ? `${(lastGnss.ageMs / 1000).toFixed(1)} s` : 'no fix yet'}
+          warn={lastGnss !== null && lastGnss.ageMs > diagnostics.effectiveNoFixTimeoutMs}
+        />
         <Row k="ACCURACY" v={gnss ? `${gnss.accuracyM.toFixed(1)} m` : '—'} />
-        <Row k="SPEED" v={gnss?.speedMps != null ? `${gnss.speedMps.toFixed(1)} m/s` : '—'} />
+        <Row
+          k="SPEED"
+          v={gnss?.speedMps != null ? `${gnss.speedMps.toFixed(1)} m/s` : 'not reported'}
+        />
         <Row k="SATELLITES" v={gnss?.satCount != null ? String(gnss.satCount) : 'n/a'} />
         <Row k="MEAN C/N0" v={gnss?.meanCn0 != null ? `${gnss.meanCn0.toFixed(1)} dB-Hz` : 'n/a'} />
       </Group>
@@ -194,7 +209,9 @@ function SensorsTab({
 
       <p className="pt-0.5 text-[9.5px] leading-snug text-neutral-500">
         Satellite count and C/N0 need the native GnssStatus API — Phase 15. Shown
-        as n/a rather than faked.
+        as n/a rather than faked. SPEED reading “not reported” is normal: many
+        Android devices return no Doppler speed, so the engine derives it from
+        consecutive fixes instead.
       </p>
     </div>
   );

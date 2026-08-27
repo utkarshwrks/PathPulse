@@ -287,6 +287,68 @@ describe('the field bugs, pinned', () => {
     expect(phantom).toBeLessThan(150);
   });
 
+  it('invents no motion before the first fix — the 144 km/h bug', () => {
+    // ★ FIELD DEFECT ★ On a handset that took ~40 s to acquire, the badge read
+    // ACQUIRING while the HUD showed 144 km/h and 551 m travelled. 144 km/h is
+    // 40 m/s: exactly the plausibility ceiling, which is what a runaway
+    // integration always saturates at. Dead reckoning was integrating hand
+    // movement and gravity leakage with nothing to correct against.
+    const engine = new NavigationEngine();
+
+    // A minute of the phone being handled, with no GNSS at all.
+    let last = engine.update({ t: 0, imu: imuMoving(0) });
+    for (let i = 1; i < 3000; i++) {
+      // Deliberately violent: being passed from hand to hand.
+      const p = i * 0.05;
+      last = engine.update({
+        t: i * 20,
+        imu: {
+          ax: 3 * Math.sin(p),
+          ay: 2.5 * Math.cos(p * 0.7),
+          az: G + 2 * Math.sin(p * 1.3),
+          gx: 0.4 * Math.sin(p),
+          gy: 0.3 * Math.cos(p),
+          gz: 0.5 * Math.sin(p * 0.9),
+        },
+      });
+    }
+
+    expect(last.mode).toBe('INITIALIZING');
+    expect(last.velocityMps).toBe(0);
+    expect(last.distanceTravelledM).toBe(0);
+  });
+
+  it('derives speed from consecutive fixes when the device reports none', () => {
+    // The Geolocation API marks coords.speed nullable and many Android devices
+    // return null — the field device did, leaving the engine with no speed
+    // reference at all and the forward-bias estimator with zero observations.
+    const engine = new NavigationEngine();
+    const lat = 28.6315;
+    const metresPerDegLon = 111_320 * Math.cos((lat * Math.PI) / 180);
+
+    let last = engine.update({ t: 0, imu: imuMoving(0) });
+    for (let i = 1; i < 2000; i++) {
+      const t = i * 20;
+      const sample: SensorSample = { t, imu: imuMoving(i) };
+      if (t % 2000 === 0) {
+        sample.gnss = {
+          lat,
+          // 10 m/s due east, but NO speedMps and NO headingDeg reported.
+          lon: 77.2167 + (10 * t) / 1000 / metresPerDegLon,
+          accuracyM: 6,
+          satCount: 9,
+        };
+      }
+      last = engine.update(sample);
+    }
+
+    expect(last.mode).toBe('GNSS');
+    expect(last.velocityMps).toBeGreaterThan(7);
+    expect(last.velocityMps).toBeLessThan(13);
+    // Heading derived from the displacement: due east is 90 degrees.
+    expect(Math.abs(last.headingDeg - 90)).toBeLessThan(15);
+  });
+
   it('does not claim DEAD RECKONING when a slow receiver is working fine', () => {
     // The field device delivered a fix every 5 s (0.20 Hz). Under the old
     // fixed 1.5 s timeout the machine dropped to dead reckoning 3.5 s after

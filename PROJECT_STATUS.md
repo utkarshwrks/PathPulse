@@ -354,6 +354,35 @@ diagnostics, stats, live toggles, Walking Mode, reset and hostile input.
 available in this session, so no toggle has ever been clicked. Run the TEST
 steps on the phone before relying on it.
 
+### Field test 2 — five more defects (2026-08-27, evening)
+
+Screenshots from the Xiaomi 2406ERN9CI showed 144 km/h while the phone was
+being moved hand to hand, a grey line drawn from Delhi to the user's location
+after switching source, and the badge stuck on ACQUIRING.
+
+1. **Dead reckoning ran before it had an anchor.** Shadow mode propagated on
+   every sample in every mode — including INITIALIZING, when there is no
+   position, heading or speed to correct against. It was integrating hand
+   movement and gravity leakage. 144 km/h is 40 m/s: exactly the plausibility
+   ceiling, which is what a runaway integration always saturates at. It also
+   claimed 551 m travelled before the system knew where it was. Propagation is
+   now gated on `dr.isInitialised`.
+2. **The device reports no Doppler speed or heading.** `coords.speed` is
+   nullable and this handset returns null, so the engine had NO speed
+   reference at all and `ForwardBiasEstimator` never received an observation —
+   the panel read `FWD BIAS 0.000 (0)` for a whole session. Both are now
+   derived from consecutive trusted fixes (heading only past 5 m of
+   displacement, below which the direction is fix noise).
+3. **The trail drew during ACQUIRING.** With no ENU origin the engine reports
+   (0, 0), and INITIALIZING is grey — hence a grey line from the old source's
+   position to the first real fix. The trail and the follow-camera now ignore
+   states with no valid position.
+4. **Engine output was 8.3 Hz, below the PS's 10 Hz floor.** The UI throttle
+   emitted on the first sample *past* 100 ms; at the 37 Hz this device
+   delivers that is 108 ms. It now emits one sample early, landing at ~81 ms.
+5. **ACQUIRING lasted over 30 s.** Three consecutive fixes at one fix per 11 s.
+   Reduced to two; each must still clear the accuracy gate.
+
 ### Deep test pass — three bugs found
 
 1. **The recovery slew could teleport.** It spread any drift over a fixed 2 s

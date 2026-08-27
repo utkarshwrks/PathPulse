@@ -116,6 +116,8 @@ export class NavigationEngine {
   private lastGnssEnu: EnuPoint | null = null;
   /** Last time a trusted fix reported meaningful speed. Gates ZUPT. */
   private lastMovingGnssT: number | null = null;
+  /** Previous trusted fix, used to derive speed and heading when absent. */
+  private lastTrustedFixForDerivation: { t: number; enu: EnuPoint } | null = null;
   private lastStationarity: StationarityResult = {
     isStationary: false,
     confidence: 0,
@@ -350,29 +352,72 @@ export class NavigationEngine {
     const gnssEnu = this.gnssToEnu(sample);
     const trusted =
       sample.gnss !== undefined &&
+      Number.isFinite(sample.gnss.accuracyM) &&
+      sample.gnss.accuracyM > 0 &&
       sample.gnss.accuracyM <= this.config.trustedAccuracyM &&
-      gnssEnu !== null;
+      gnssEnu !== null &&
+      Number.isFinite(gnssEnu.e) &&
+      Number.isFinite(gnssEnu.n);
+
+    // ★ MANY ANDROID DEVICES REPORT NO DOPPLER SPEED OR HEADING ★
+    //
+    // The Geolocation API marks coords.speed and coords.heading as nullable
+    // and plenty of handsets simply return null — the field-test device did,
+    // which left the engine with NO speed reference at all. Dead reckoning then
+    // ran on pure integration even while GNSS was healthy, and the forward-bias
+    // estimator never received a single observation (it read "0.000 (0)" on
+    // screen for a whole session).
+    //
+    // Consecutive fixes give both back. It is a coarse estimate over an 11 s
+    // baseline rather than an instantaneous Doppler reading, but a coarse
+    // truth every 11 s beats no truth at all.
+    let speedForFix = sample.gnss?.speedMps;
+    let headingForFix = sample.gnss?.headingDeg;
+    if (trusted && gnssEnu) {
+      const prev = this.lastTrustedFixForDerivation;
+      if (prev && sample.t > prev.t) {
+        const dtS = (sample.t - prev.t) / 1000;
+        const de = gnssEnu.e - prev.enu.e;
+        const dn = gnssEnu.n - prev.enu.n;
+        const distM = Math.hypot(de, dn);
+        if (dtS > 0.2 && dtS < 30) {
+          if (speedForFix === undefined || !Number.isFinite(speedForFix)) {
+            speedForFix = distM / dtS;
+          }
+          // Below a few metres the displacement is mostly fix noise, and its
+          // direction is meaningless — deriving a heading from it would spin
+          // the vehicle on the spot.
+          if (
+            (headingForFix === undefined || !Number.isFinite(headingForFix)) &&
+            distM > 5
+          ) {
+            headingForFix = normaliseDeg((Math.atan2(de, dn) * 180) / Math.PI);
+          }
+        }
+      }
+      this.lastTrustedFixForDerivation = { t: sample.t, enu: gnssEnu };
+    }
 
     if (sample.gnss && gnssEnu) {
       this.lastGnssT = sample.t;
       this.lastGnssEnu = gnssEnu;
       // 1.5 m/s is walking pace — comfortably above GNSS speed noise at rest,
       // comfortably below anything that could be called stopped.
-      if (trusted && (sample.gnss.speedMps ?? 0) > 1.5) {
+      if (trusted && (speedForFix ?? 0) > 1.5) {
         this.lastMovingGnssT = sample.t;
       }
       // Learn the forward-acceleration error only from fixes we trust. A
       // multipath speed learned here would be applied for the whole of the
       // next outage, which is the worst possible time to be wrong.
-      if (trusted && sample.gnss.speedMps !== undefined) {
-        this.forwardBias.pushGnssSpeed(sample.t, sample.gnss.speedMps);
+      if (trusted && speedForFix !== undefined && Number.isFinite(speedForFix)) {
+        this.forwardBias.pushGnssSpeed(sample.t, speedForFix);
       }
       if (trusted) {
         this.dr.pushFix({
           t: sample.t,
           enu: gnssEnu,
-          speedMps: sample.gnss.speedMps ?? this.dr.lastTrustedSpeedMps,
-          headingDeg: sample.gnss.headingDeg ?? this.dr.current.headingDeg,
+          speedMps: speedForFix ?? this.dr.lastTrustedSpeedMps,
+          headingDeg: headingForFix ?? this.dr.current.headingDeg,
           accuracyM: sample.gnss.accuracyM,
         });
       }
@@ -383,11 +428,26 @@ export class NavigationEngine {
     // 5. ★ SHADOW MODE ★ Propagate every single sample, in every mode. When
     //    GNSS drops there is nothing to start: the estimate is already live.
     //    Feed GNSS speed while it is trustworthy so the estimate stays tight.
-    const gnssSpeed = trusted ? sample.gnss?.speedMps : undefined;
-    this.dr.propagate(forwardAccel, yawRate, dtMs, gnssSpeed, {
-      lateralAccelMps2: lateralAccel,
-      isStationary: stationaryForZupt,
-    });
+    // ★ NOTHING TO SHADOW UNTIL THERE IS AN ANCHOR ★
+    //
+    // Shadow mode means dead reckoning runs continuously so there is no
+    // start-up cost when GNSS drops. It does NOT mean integrating before the
+    // first fix has ever arrived: with no position, no heading and no speed to
+    // correct against, the accelerometer is integrating hand movement and
+    // gravity leakage into a number with no meaning.
+    //
+    // On a real handset that took about forty seconds to get its first fix,
+    // this produced 144 km/h — exactly the 40 m/s plausibility ceiling, which
+    // is what a runaway integration always saturates at — and 551 m of travel,
+    // all while the badge still read ACQUIRING. Every one of those numbers was
+    // invented before the system knew where it was.
+    if (this.dr.isInitialised) {
+      const gnssSpeed = trusted ? speedForFix : undefined;
+      this.dr.propagate(forwardAccel, yawRate, dtMs, gnssSpeed, {
+        lateralAccelMps2: lateralAccel,
+        isStationary: stationaryForZupt,
+      });
+    }
 
     // 6. Step the state machine.
     const recoveryDone = modeBefore === 'RECOVERING' && !this.recovery.isActive;
@@ -409,8 +469,8 @@ export class NavigationEngine {
         this.dr.resetTo({
           t: sample.t,
           enu: gnssEnu,
-          speedMps: sample.gnss?.speedMps ?? this.dr.current.speedMps,
-          headingDeg: sample.gnss?.headingDeg ?? this.dr.current.headingDeg,
+          speedMps: speedForFix ?? this.dr.current.speedMps,
+          headingDeg: headingForFix ?? this.dr.current.headingDeg,
           accuracyM: sample.gnss!.accuracyM,
         });
         shownEnu = gnssEnu;
@@ -644,6 +704,7 @@ export class NavigationEngine {
     this.lastGnssT = null;
     this.lastGnssEnu = null;
     this.lastMovingGnssT = null;
+    this.lastTrustedFixForDerivation = null;
     this.covarianceAlongM = 0;
     this.covarianceCrossM = 0;
     this.headingSigmaRad = 0;
@@ -652,6 +713,11 @@ export class NavigationEngine {
     this.lastState = null;
     this.drStartedAtMs = null;
   }
+}
+
+/** Wrap an angle into [0, 360). */
+function normaliseDeg(d: number): number {
+  return ((d % 360) + 360) % 360;
 }
 
 function isFiniteState(s: NavigationState): boolean {

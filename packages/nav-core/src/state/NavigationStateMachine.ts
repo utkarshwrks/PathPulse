@@ -2,7 +2,15 @@ import type { NavMode } from '../types.js';
 import { EventLog } from './events.js';
 
 export interface StateMachineConfig {
-  /** Consecutive good fixes needed to leave INITIALIZING. */
+  /**
+   * Consecutive good fixes needed to leave INITIALIZING.
+   *
+   * Two, not three. On a receiver delivering a fix every 11 s — which is what
+   * the field-test handset actually did — three fixes means the badge reads
+   * ACQUIRING for over half a minute after the app opens, which looks broken
+   * and is the first thing anyone sees. Each fix must already be under
+   * `goodAccuracyM`, so two is a real confirmation, not a guess.
+   */
   fixesToInitialise: number;
   /** Accuracy at or below which a fix counts as good, metres. */
   goodAccuracyM: number;
@@ -32,7 +40,7 @@ export interface StateMachineConfig {
 }
 
 export const DEFAULT_STATE_MACHINE_CONFIG: StateMachineConfig = {
-  fixesToInitialise: 3,
+  fixesToInitialise: 2,
   goodAccuracyM: 20,
   degradedAccuracyM: 25,
   minSatellites: 4,

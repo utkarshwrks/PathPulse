@@ -12,8 +12,18 @@ import {
   type SessionSummary,
 } from '@pathpulse/nav-core';
 
-/** UI emit rate. The engine itself runs at full sensor rate (50 Hz), which is
- *  strictly better; the problem statement asks for at least 10 Hz *output*. */
+/**
+ * Target UI emit period. The engine itself consumes every sample; this only
+ * throttles React.
+ *
+ * ★ IT MUST LAND ABOVE 10 Hz, NOT BELOW ★
+ * Emitting only once the elapsed time has *reached* 100 ms means the emit
+ * always lands on the first sample past the boundary. At the 37 Hz the field
+ * device delivered, samples are 27 ms apart, so it fired at 108 ms — 9.2 Hz,
+ * measured on screen as 8.3 Hz and shown in amber for failing the problem
+ * statement's 10 Hz floor. Allowing the emit one sample early lands on 81 ms
+ * (12.3 Hz) instead, which clears the requirement at any sensor rate.
+ */
 const EMIT_INTERVAL_MS = 100;
 
 /** Everything the Phase 5 debug panel shows, sampled at the UI rate. */
@@ -51,6 +61,13 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   gyroMean: NaN,
 };
 
+/** The last GNSS fix seen, with its age at the time of the emit. */
+export interface LastGnss {
+  gnss: NonNullable<SensorSample['gnss']>;
+  t: number;
+  ageMs: number;
+}
+
 /** Phase 5C toggles plus Walking Mode, all live. */
 export interface EngineControls extends ConstraintFlags {
   walkingMode: boolean;
@@ -79,6 +96,8 @@ export interface NavEngineOutput {
   updateHz: number;
   /** The most recent raw sample, for the debug panel's live sensor readout. */
   lastSample: SensorSample | null;
+  /** The most recent fix and how old it is — fixes are far rarer than samples. */
+  lastGnss: LastGnss | null;
   diagnostics: EngineDiagnostics;
   stats: SessionSummary;
   controls: EngineControls;
@@ -98,21 +117,33 @@ export function useNavigationEngine(): NavEngineOutput {
   const [events, setEvents] = useState<NavEvent[]>([]);
   const [updateHz, setUpdateHz] = useState(0);
   const [lastSample, setLastSample] = useState<SensorSample | null>(null);
+  const [lastGnss, setLastGnss] = useState<LastGnss | null>(null);
   const [diagnostics, setDiagnostics] = useState<EngineDiagnostics>(EMPTY_DIAGNOSTICS);
   const [stats, setStats] = useState<SessionSummary>(EMPTY_SESSION_SUMMARY);
   const [controls, setControlsState] = useState<EngineControls>(DEFAULT_CONTROLS);
 
   const lastEmitRef = useRef(0);
   const emitTimesRef = useRef<number[]>([]);
+  const lastSampleTRef = useRef<number | null>(null);
+  const lastGnssRef = useRef<{ gnss: NonNullable<SensorSample['gnss']>; t: number } | null>(null);
 
   const feed = useCallback((sample: SensorSample) => {
     const engine = engineRef.current!;
     const next = engine.update(sample);
     statsRef.current!.push(next);
 
+    // Remember the last fix so the debug panel can show it between fixes. At
+    // 0.09 Hz the odds of the displayed sample being the one carrying GNSS are
+    // about one in four hundred, which is why every GNSS row read "—".
+    if (sample.gnss) lastGnssRef.current = { gnss: sample.gnss, t: sample.t };
+
+    const prevT = lastSampleTRef.current;
+    const sampleDtMs = prevT === null ? 20 : Math.max(0, sample.t - prevT);
+    lastSampleTRef.current = sample.t;
+
     // Throttle to the UI rate. React cannot usefully re-render at 50 Hz, and
     // trying makes the map stutter. The engine still consumed every sample.
-    if (next.t - lastEmitRef.current >= EMIT_INTERVAL_MS) {
+    if (next.t - lastEmitRef.current >= EMIT_INTERVAL_MS - sampleDtMs) {
       lastEmitRef.current = next.t;
       const all = engine.events.all;
       statsRef.current!.pushEvents(all);
@@ -120,6 +151,7 @@ export function useNavigationEngine(): NavEngineOutput {
       setState(next);
       setEvents([...all]);
       setLastSample(sample);
+      setLastGnss(lastGnssRef.current ? { ...lastGnssRef.current, ageMs: next.t - lastGnssRef.current.t } : null);
       const d = engine.diagnostics;
       const s = engine.stationarityState;
       setDiagnostics({
@@ -173,6 +205,9 @@ export function useNavigationEngine(): NavEngineOutput {
     setEvents([]);
     setUpdateHz(0);
     setLastSample(null);
+    setLastGnss(null);
+    lastGnssRef.current = null;
+    lastSampleTRef.current = null;
     setDiagnostics(EMPTY_DIAGNOSTICS);
     setStats(EMPTY_SESSION_SUMMARY);
   }, []);
@@ -187,6 +222,7 @@ export function useNavigationEngine(): NavEngineOutput {
       events,
       updateHz,
       lastSample,
+      lastGnss,
       diagnostics,
       stats,
       controls,
@@ -200,6 +236,7 @@ export function useNavigationEngine(): NavEngineOutput {
       events,
       updateHz,
       lastSample,
+      lastGnss,
       diagnostics,
       stats,
       controls,

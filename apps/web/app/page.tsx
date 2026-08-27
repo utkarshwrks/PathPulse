@@ -46,6 +46,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!navState) return;
+    // ★ NOTHING TO DRAW UNTIL THERE IS A REAL POSITION ★
+    // While ACQUIRING the engine has no ENU origin, so it reports (0, 0).
+    // Appending that produced a grey line stretching from the previous
+    // source's location to wherever the first real fix landed — the
+    // "white line from Delhi" seen after switching from simulation to live.
+    if (navState.mode === 'INITIALIZING') return;
+    if (!Number.isFinite(navState.position.lat) || !Number.isFinite(navState.position.lon)) return;
+    if (navState.position.lat === 0 && navState.position.lon === 0) return;
     setTrail((prev) =>
       appendTrailPoint(prev, {
         lat: navState.position.lat,
@@ -64,6 +72,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!navState || !following) return;
+    if (navState.mode === 'INITIALIZING') return;
+    if (navState.position.lat === 0 && navState.position.lon === 0) return;
     const map = mapRef.current;
     if (!map) return;
     map.easeTo({
@@ -120,6 +130,7 @@ export default function Home() {
 
       <TrustPanel
         sample={nav.lastSample}
+        lastGnss={nav.lastGnss}
         diagnostics={nav.diagnostics}
         stats={nav.stats}
         events={nav.events}
