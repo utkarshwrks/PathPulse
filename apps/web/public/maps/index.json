@@ -23,6 +23,18 @@
       ],
       "ways": 1041,
       "sizeKb": 206
+    },
+    {
+      "name": "jabalpur",
+      "file": "road_graph_jabalpur.json",
+      "bbox": [
+        79.8752732,
+        23.1146013,
+        79.9925268,
+        23.2223987
+      ],
+      "ways": 9462,
+      "sizeKb": 2265
     }
   ]
 }
