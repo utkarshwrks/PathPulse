@@ -15,16 +15,15 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phase 5 complete; Phase 6 constraints partly done (6D outstanding).** The dot
+**Phases 0-6 complete.** The dot
 survives a GNSS outage, and the six defects a real-phone field test exposed on
 2026-08-27 are fixed.
 
 Measured drift across 24 simulated scenarios — two routes, four seeds, three
-outage windows — is **12.7% mean**, still above the problem statement's <10%
-target. Road snapping (Phase 6D) is the constraint expected to close that gap
-and is not built yet. The full ablation — including one component reported as a
-negative result and disabled — is in
-[`PROJECT_STATUS.md`](./PROJECT_STATUS.md).
+outage windows — is **9.6% mean**, inside the problem statement's <10% target.
+The p90 is 21.5%, so the mean clears it and the worst cases do not. The full
+ablation — including one component reported as a negative result and disabled —
+is in [`PROJECT_STATUS.md`](./PROJECT_STATUS.md).
 
 ## Tech stack
 
@@ -55,7 +54,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (266) |
+| `pnpm test` | All workspace tests (289) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -181,6 +180,26 @@ never zeroed, never faked — which is exactly the shape a real tunnel produces.
 Everything is seeded and deterministic: the same seed yields byte-identical
 samples, so the Phase 7 ablation table measures constraints rather than luck.
 
+### Road graphs
+
+Road snapping needs a local road graph. They are generated once from
+OpenStreetMap and committed, so nothing touches the network at runtime:
+
+```bash
+node scripts/build-road-graph.mjs --route city         # the demo routes
+node scripts/build-road-graph.mjs --route highway
+node scripts/build-road-graph.mjs --centre 23.18,79.99 --radius 4000 --name local
+```
+
+Each run writes `data/maps/road_graph_<name>.json`, a copy into
+`apps/web/public/maps/`, and updates `index.json` — a manifest of bounding
+boxes. The app reads the manifest on the first fix and loads whichever graph
+covers where it actually is, so testing outside the demo area degrades to "no
+graph here" (visible on the SENSORS tab) rather than to silence.
+
+**Generate one for wherever you test.** Roughly 150–200 KB per 2 km square, and
+it ships inside the APK.
+
 Routes are generated, not hand-typed:
 
 ```bash
@@ -278,6 +297,7 @@ is. A scripted animation cannot be broken on request.
 | **NHC** | A car cannot slide sideways or fly | Cross-track drift — the error that puts the marker inside a building |
 | **ZUPT** | A stopped vehicle has exactly zero velocity | A stationary phone inventing kilometres of travel; also calibrates accelerometer bias free at every red light |
 | **ZARU** | A stopped vehicle is not turning, so the gyro reading is pure bias | Heading drift — 0.01 rad/s of bias is 113° over a 197 s outage |
+| **Road snapping** | A vehicle is on a road, and that fact is perpendicular to it | Cross-track error, and via the matched road's speed limit, along-track too |
 | **Accel high-pass** | Real longitudinal acceleration averages to zero over a minute; tilt error does not | The acceleration runaway — dead reckoning speeding up on its own until it hits its clamp |
 | ~~Forward bias~~ | GNSS Doppler as a truth signal for longitudinal acceleration | **Off — measured worse.** 12.7% drift without it, 19.1% with. Superseded by the high-pass; kept and documented as a negative result |
 | **Speed clamp** | Vehicles obey physics, and roads have limits | Integrated sensor error masquerading as motion |

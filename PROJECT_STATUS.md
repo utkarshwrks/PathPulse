@@ -1,15 +1,13 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 5 — HUD + Debug Panel + Trust Features ✅ COMPLETE
+**CURRENT PHASE:** Phase 6 — Constraints (NHC, ZUPT, ZARU, road snapping) ✅ COMPLETE
 **LAST UPDATED:** 2026-08-27
-**NEXT PHASE:** Phase 6D — road graph + road snapping (6A/6B/6C already done)
+**NEXT PHASE:** Phase 7 — eval harness + ablation CLI
 
-> Phase 6's constraints (NHC, ZUPT, ZARU) were built ahead of order while
-> fixing the field defects below, because three of those defects could not be
-> fixed without them. Phase 5 has now been completed in place. **Only 6D —
-> the road graph, spatial index and snapping — remains outstanding in Phase 6.**
+> Phases 0-6 are complete. Phase 7 formalises the ablation below into the
+> standalone eval CLI and config files the guide specifies.
 
-> ### Drift across 24 scenarios: **12.7% mean**
+> ### Drift across 24 scenarios: **9.6% mean** — inside the PS target
 >
 > Two routes x four seeds x three outage windows, generated in CI by
 > `packages/sensor-sources/test/ablation.test.ts`. Ground truth is the GNSS the
@@ -23,23 +21,16 @@
 > | + ZUPT | 105.9 | 93.4 | 181.9 | 190.6 |
 > | + NHC | 77.6 | 81.2 | 187.9 | 215.3 |
 > | + speed clamp | 75.6 | 81.2 | 187.9 | 215.3 |
-> | **+ accel high-pass (shipped)** | **12.7** | 11.5 | 22.9 | 25.2 |
-> | + forward-bias | 19.1 | 21.7 | 27.4 | 28.0 |
+> | + accel high-pass | 12.7 | 11.5 | 22.9 | 25.2 |
+> | **+ road snapping (shipped)** | **9.6** | 8.2 | 21.5 | 22.6 |
+> | + forward-bias | 12.6 | 12.1 | 23.0 | 29.7 |
 >
-> **The last row is a negative result, reported deliberately.**
-> `ForwardBiasEstimator` was worth 194 m -> 37 m when it was the only thing
-> removing the acceleration runaway. Now that the high-pass does that job
-> continuously, adding forward-bias on top makes drift *half again worse*
-> — a bias learned from an 11 s position-differenced speed is noisy and fixed,
-> while the high-pass tracks whatever the error actually is. It is therefore
-> **off by default**, kept, toggleable and documented, with a test asserting
-> the negative result so the decision gets revisited deliberately.
+> **The last row is a negative result, reported deliberately** — see Phase 6D
+> below. Three earlier figures in this file are retracted: 6.26% (one
+> favourable scenario), 19.1% and 12.7% (both measured before later fixes).
 >
-> **Two earlier figures in this file were wrong and are retracted:** 6.26% came
-> from a single favourable scenario; 19.1% was measured before the high-pass.
-> Do not quote either.
->
-> Still simulation, still no road snapping (Phase 6D), still not a real drive.
+> Still simulation, not a real drive. The p90 of 21.5% is the honest tail: the
+> mean clears the target, the worst cases do not.
 
 ---
 
@@ -384,6 +375,53 @@ after switching source, and the badge stuck on ACQUIRING.
    delivers that is 108 ms. It now emits one sample early, landing at ~81 ms.
 5. **ACQUIRING lasted over 30 s.** Three consecutive fixes at one fix per 11 s.
    Reduced to two; each must still clear the accuracy gate.
+
+### Phase 6D — road graph + road snapping ✅
+
+- **`scripts/build-road-graph.mjs`** — Overpass -> `data/maps/road_graph_<name>.json`
+  plus an `index.json` manifest of bounding boxes. Takes `--route city|highway`,
+  `--centre lat,lon --radius m`, or an explicit `--bbox`. Excludes footways and
+  cycleways, so a car can never be snapped onto a pavement. Run once and
+  committed: a demo that needs a live API is a demo that fails on bad wifi.
+  (Overpass answers **406** without an identifiable `User-Agent` — that cost
+  two failed runs before it was obvious.)
+- **`nav-core/src/mapmatch/RoadIndex.ts`** — 100 m grid, segments pre-projected
+  into ENU once at construction and stamped into *every* cell they cross, so a
+  1 km road is findable from its middle and not only its ends.
+- **`nav-core/src/constraints/roadsnap.ts`** — perpendicular projection,
+  candidate scoring (distance + heading + continuity bonus), and a blended
+  correction that is **cross-track only**. Two-way roads fold the reverse
+  direction to a zero mismatch; one-way roads keep it, which is what separates
+  the carriageways of a dual carriageway.
+- Wired in the guide's order — propagate -> NHC -> ZUPT/ZARU -> road snap ->
+  clamp — and applied to the position about to be *drawn*, never to the
+  dead-reckoning state, so a bad match cannot be integrated forward.
+- The app picks the graph whose bbox contains the first fix, from the manifest,
+  and reports "none here" when there isn't one rather than looking broken.
+
+**What it actually bought, measured honestly:**
+
+| | cross-track | along-track |
+|---|---|---|
+| off | 78.3 m | 68.1 m |
+| on | ~75 m | 31.9 m |
+
+Almost none of the gain is the snapping geometry. Cross-track error (~78 m)
+exceeds the 50 m search radius, so the nearest road is frequently the *wrong*
+road — the known failure of nearest-road matching, and exactly why the guide
+schedules Newson-Krumm HMM for Phase 14.
+
+**The gain is 6E, the road speed-limit clamp** — and it only works when gated
+on match confidence. Feeding the limit from any match inside the full radius
+made highway along-track error *worse*, 107 m -> 135 m, by applying a service
+road's limit to a vehicle on a trunk road. Restricting it to matches within
+20 m and 45 degrees turns the same mechanism into 107 m -> 34 m, and the result
+becomes stable across search radii of 25, 50 and 80 m — parameter-insensitivity
+being the difference between a fix and a fitted constant.
+
+Road snapping is still shipped and on: it does what it claims (92% match rate,
+cross-track only, tested), it is what keeps the marker off the buildings during
+a demo, and it is the hook Phase 14 replaces with a real map matcher.
 
 ### Field test 3 — the acceleration runaway, and a component demoted
 

@@ -11,6 +11,7 @@ import {
   type SensorSample,
   type SessionSummary,
 } from '@pathpulse/nav-core';
+import { loadRoadGraphFor, type RoadGraphEntry } from '@/lib/roadGraph';
 
 /**
  * Target UI emit period. The engine itself consumes every sample; this only
@@ -42,6 +43,10 @@ export interface EngineDiagnostics {
   isStationary: boolean;
   accelVariance: number;
   gyroMean: number;
+  roadSnapAppliedFraction: number;
+  matchedRoadName: string | null;
+  matchedRoadDistanceM: number | null;
+  hasRoadGraph: boolean;
 }
 
 const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
@@ -59,6 +64,10 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   isStationary: false,
   accelVariance: NaN,
   gyroMean: NaN,
+  roadSnapAppliedFraction: 0,
+  matchedRoadName: null,
+  matchedRoadDistanceM: null,
+  hasRoadGraph: false,
 };
 
 /** The last GNSS fix seen, with its age at the time of the emit. */
@@ -86,6 +95,7 @@ export const DEFAULT_CONTROLS: EngineControls = {
   forwardBias: false,
   accelHighPass: true,
   adaptiveTimeout: true,
+  roadSnap: true,
   walkingMode: false,
 };
 
@@ -102,6 +112,8 @@ export interface NavEngineOutput {
   lastSample: SensorSample | null;
   /** The most recent fix and how old it is — fixes are far rarer than samples. */
   lastGnss: LastGnss | null;
+  /** Which road graph is loaded, if any. Null means snapping cannot engage. */
+  roadGraphEntry: RoadGraphEntry | null;
   diagnostics: EngineDiagnostics;
   stats: SessionSummary;
   controls: EngineControls;
@@ -122,6 +134,8 @@ export function useNavigationEngine(): NavEngineOutput {
   const [updateHz, setUpdateHz] = useState(0);
   const [lastSample, setLastSample] = useState<SensorSample | null>(null);
   const [lastGnss, setLastGnss] = useState<LastGnss | null>(null);
+  const [roadGraphEntry, setRoadGraphEntry] = useState<RoadGraphEntry | null>(null);
+  const graphRequestedRef = useRef(false);
   const [diagnostics, setDiagnostics] = useState<EngineDiagnostics>(EMPTY_DIAGNOSTICS);
   const [stats, setStats] = useState<SessionSummary>(EMPTY_SESSION_SUMMARY);
   const [controls, setControlsState] = useState<EngineControls>(DEFAULT_CONTROLS);
@@ -135,6 +149,19 @@ export function useNavigationEngine(): NavEngineOutput {
     const engine = engineRef.current!;
     const next = engine.update(sample);
     statsRef.current!.push(next);
+
+    // Load the road graph covering wherever we actually are, once, on the first
+    // fix. It cannot be chosen before that: the app does not know where it is,
+    // and the index has to be built against the engine's ENU origin anyway.
+    if (sample.gnss && !graphRequestedRef.current) {
+      graphRequestedRef.current = true;
+      const { lat, lon } = sample.gnss;
+      void loadRoadGraphFor(lat, lon).then((found) => {
+        if (!found) return;
+        engineRef.current?.setRoadGraph(found.graph);
+        setRoadGraphEntry(found.entry);
+      });
+    }
 
     // Remember the last fix so the debug panel can show it between fixes. At
     // 0.09 Hz the odds of the displayed sample being the one carrying GNSS are
@@ -195,6 +222,7 @@ export function useNavigationEngine(): NavEngineOutput {
         forwardBias: next.forwardBias,
         accelHighPass: next.accelHighPass,
         adaptiveTimeout: next.adaptiveTimeout,
+        roadSnap: next.roadSnap,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });
       return next;
@@ -211,6 +239,8 @@ export function useNavigationEngine(): NavEngineOutput {
     setUpdateHz(0);
     setLastSample(null);
     setLastGnss(null);
+    setRoadGraphEntry(null);
+    graphRequestedRef.current = false;
     lastGnssRef.current = null;
     lastSampleTRef.current = null;
     setDiagnostics(EMPTY_DIAGNOSTICS);
@@ -228,6 +258,7 @@ export function useNavigationEngine(): NavEngineOutput {
       updateHz,
       lastSample,
       lastGnss,
+      roadGraphEntry,
       diagnostics,
       stats,
       controls,
@@ -242,6 +273,7 @@ export function useNavigationEngine(): NavEngineOutput {
       updateHz,
       lastSample,
       lastGnss,
+      roadGraphEntry,
       diagnostics,
       stats,
       controls,

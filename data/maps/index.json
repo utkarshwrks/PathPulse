@@ -1,0 +1,28 @@
+{
+  "graphs": [
+    {
+      "name": "city",
+      "file": "road_graph_city.json",
+      "bbox": [
+        77.2123288,
+        28.624083,
+        77.2280639,
+        28.6393122
+      ],
+      "ways": 725,
+      "sizeKb": 146
+    },
+    {
+      "name": "highway",
+      "file": "road_graph_highway.json",
+      "bbox": [
+        77.180025,
+        28.5417124,
+        77.2034059,
+        28.5642923
+      ],
+      "ways": 1041,
+      "sizeKb": 206
+    }
+  ]
+}

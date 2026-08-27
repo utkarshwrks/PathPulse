@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { NavigationEngine, haversineDistance, type NavigationState } from '@pathpulse/nav-core';
+import {
+  NavigationEngine,
+  haversineDistance,
+  type NavigationState,
+  type RoadGraph,
+} from '@pathpulse/nav-core';
 import {
   CITY_VEHICLE,
   HIGHWAY_VEHICLE,
@@ -15,6 +20,19 @@ const ROUTES = {
     readFileSync(ROOT + 'data/routes/route_highway.json', 'utf8'),
   ) as RouteGeoJson,
 };
+
+/**
+ * Road graphs covering each route, generated once by
+ * `scripts/build-road-graph.mjs` and committed. Nothing here touches the
+ * network — a benchmark that needs a live API is a benchmark that fails in CI.
+ */
+const GRAPHS: Record<RouteKeyName, RoadGraph> = {
+  city: JSON.parse(readFileSync(ROOT + 'data/maps/road_graph_city.json', 'utf8')) as RoadGraph,
+  highway: JSON.parse(
+    readFileSync(ROOT + 'data/maps/road_graph_highway.json', 'utf8'),
+  ) as RoadGraph,
+};
+type RouteKeyName = 'city' | 'highway';
 
 /**
  * The ablation, run over MANY scenarios rather than one.
@@ -67,6 +85,7 @@ function driftPercent(
   const sim = new SimulationSource(opts);
   sim.simulateGnssOutage(s.startMs, s.durMs);
   const engine = new NavigationEngine(config as never);
+  engine.setRoadGraph(GRAPHS[s.route]);
 
   let first: NavigationState | null = null;
   let last: NavigationState | null = null;
@@ -128,6 +147,7 @@ const ALL_OFF = {
   medianFilter: false,
   forwardBias: false,
   accelHighPass: false,
+  roadSnap: false,
 };
 
 const STEPS: Array<[string, Record<string, boolean>]> = [
@@ -137,7 +157,8 @@ const STEPS: Array<[string, Record<string, boolean>]> = [
   ['+ ZUPT', { zupt: true }],
   ['+ NHC', { nhc: true }],
   ['+ speed clamp', { speedClamp: true }],
-  ['+ accel high-pass (full)', { accelHighPass: true }],
+  ['+ accel high-pass', { accelHighPass: true }],
+  ['+ road snapping (full)', { roadSnap: true }],
   // Reported as a NEGATIVE result, deliberately. See the assertion below.
   ['+ forward-bias', { forwardBias: true }],
 ];
@@ -175,11 +196,11 @@ describe('ablation — 24 scenarios (2 routes x 4 seeds x 3 outage windows)', ()
   const get = (name: string) => results.get(name)!;
 
   it('every scenario produces a usable measurement', () => {
-    expect(get('+ accel high-pass (full)').n).toBe(SCENARIOS.length);
+    expect(get('+ road snapping (full)').n).toBe(SCENARIOS.length);
   });
 
   it('the full configuration beats naive integration by a wide margin', () => {
-    expect(get('+ accel high-pass (full)').mean).toBeLessThan(get('naive (no constraints)').mean * 0.5);
+    expect(get('+ road snapping (full)').mean).toBeLessThan(get('naive (no constraints)').mean * 0.5);
   });
 
   it('NHC earns its place', () => {
@@ -187,7 +208,11 @@ describe('ablation — 24 scenarios (2 routes x 4 seeds x 3 outage windows)', ()
   });
 
   it('the acceleration high-pass earns its place', () => {
-    expect(get('+ accel high-pass (full)').mean).toBeLessThan(get('+ speed clamp').mean);
+    expect(get('+ accel high-pass').mean).toBeLessThan(get('+ speed clamp').mean);
+  });
+
+  it('road snapping earns its place', () => {
+    expect(get('+ road snapping (full)').mean).toBeLessThan(get('+ accel high-pass').mean);
   });
 
   it('every shipped step improves on the one before it', () => {
@@ -212,7 +237,7 @@ describe('ablation — 24 scenarios (2 routes x 4 seeds x 3 outage windows)', ()
     // continuously and better, and stacking both is worse than the high-pass
     // alone. It is therefore OFF by default, and this test exists so the
     // decision is revisited deliberately if that ever stops being true.
-    expect(get('+ forward-bias').mean).toBeGreaterThan(get('+ accel high-pass (full)').mean);
+    expect(get('+ forward-bias').mean).toBeGreaterThan(get('+ road snapping (full)').mean);
   });
 
   it('ZARU and ZUPT each earn their place', () => {
@@ -225,12 +250,12 @@ describe('ablation — 24 scenarios (2 routes x 4 seeds x 3 outage windows)', ()
     // across all scenarios — well ABOVE the problem statement's <10%, which
     // road snapping (Phase 6D) is expected to close. If this ever passes at a
     // much lower value, update PROJECT_STATUS rather than leaving a stale claim.
-    expect(get('+ accel high-pass (full)').mean).toBeLessThan(25);
+    expect(get('+ road snapping (full)').mean).toBeLessThan(25);
   });
 
   it('the worst scenario is bounded, not just the mean', () => {
     // A good mean hiding a catastrophic tail is exactly what a judge will find
     // by picking the one drive that goes wrong.
-    expect(get('+ accel high-pass (full)').max).toBeLessThan(40);
+    expect(get('+ road snapping (full)').max).toBeLessThan(40);
   });
 });

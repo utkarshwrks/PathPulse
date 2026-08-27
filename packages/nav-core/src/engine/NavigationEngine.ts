@@ -14,6 +14,15 @@ import { ZaruProcessor } from '../constraints/zaru.js';
 import { DEFAULT_NHC_CONFIG } from '../constraints/nhc.js';
 import { DEFAULT_SPEED_CLAMP_CONFIG } from '../constraints/speedclamp.js';
 import { ForwardBiasEstimator } from '../constraints/forwardBias.js';
+import {
+  applyRoadSnap,
+  canTrustSpeedLimit,
+  DEFAULT_ROAD_SNAP_CONFIG,
+  findRoadMatch,
+  type RoadSnapConfig,
+} from '../constraints/roadsnap.js';
+import { RoadIndex } from '../mapmatch/RoadIndex.js';
+import type { RoadGraph, RoadPosition } from '../mapmatch/types.js';
 
 /** Runtime feature switches. Every one of these is an ablation-table row. */
 export interface ConstraintFlags {
@@ -53,6 +62,8 @@ export interface ConstraintFlags {
    * Off means the old fixed 1.5 s timeout — useful for reproducing the bug.
    */
   adaptiveTimeout: boolean;
+  /** Pull the estimate across onto the nearest plausible road. */
+  roadSnap: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -83,6 +94,7 @@ export interface EngineConfig extends ConstraintFlags {
    * constant error cannot integrate for minutes.
    */
   accelHighPassTauMs: number;
+  roadSnapConfig: RoadSnapConfig;
 }
 
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
@@ -95,6 +107,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   forwardBias: false,
   accelHighPass: true,
   adaptiveTimeout: true,
+  roadSnap: true,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
@@ -103,6 +116,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   residualGyroBiasRadPerSec: 0.001,
   uncorrectedGyroBiasRadPerSec: 0.01,
   accelHighPassTauMs: 40_000,
+  roadSnapConfig: DEFAULT_ROAD_SNAP_CONFIG,
 };
 
 /**
@@ -135,6 +149,15 @@ export class NavigationEngine {
   private readonly zupt = new ZuptProcessor();
   private readonly zaru = new ZaruProcessor();
   private readonly forwardBias = new ForwardBiasEstimator();
+  /** Built lazily, because the ENU origin is not known until the first fix. */
+  private roadIndex: RoadIndex | null = null;
+  private roadGraph: RoadGraph | null = null;
+  private lastMatchedWayId: string | null = null;
+  private lastMatch: RoadPosition | null = null;
+  private snapAppliedCount = 0;
+  private snapAttemptCount = 0;
+  /** Speed limit of the currently matched road, m/s. Feeds the clamp. */
+  private roadMaxSpeedMps: number | undefined;
   private readonly accelMedian = new Vec3MedianFilter(5);
   private readonly accelLowPass = new Vec3LowPassFilter(5, 50);
 
@@ -217,6 +240,11 @@ export class NavigationEngine {
       },
     });
     this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
+    if (!this.config.roadSnap) {
+      this.lastMatch = null;
+      this.lastMatchedWayId = null;
+      this.roadMaxSpeedMps = undefined;
+    }
   }
 
   get events(): EventLog {
@@ -240,6 +268,10 @@ export class NavigationEngine {
     unaidedMs: number;
     forwardBiasMps2: number;
     forwardBiasObservations: number;
+    roadSnapAppliedFraction: number;
+    matchedRoadName: string | null;
+    matchedRoadDistanceM: number | null;
+    hasRoadGraph: boolean;
   } {
     return {
       zuptTriggers: this.zupt.triggerCount,
@@ -253,7 +285,35 @@ export class NavigationEngine {
       unaidedMs: this.dr.current.unaidedMs,
       forwardBiasMps2: this.forwardBias.estimateMps2,
       forwardBiasObservations: this.forwardBias.observationCount,
+      roadSnapAppliedFraction: this.roadSnapAppliedFraction,
+      matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
+      matchedRoadDistanceM: this.lastMatch?.distanceM ?? null,
+      hasRoadGraph: this.roadGraph !== null,
     };
+  }
+
+  /**
+   * Provide a road graph for snapping.
+   *
+   * The index is built lazily on the first trusted fix, not here, because it
+   * projects every segment into the engine's ENU frame and that frame does not
+   * exist until there is an origin. Loading is the caller's job — nav-core does
+   * no I/O.
+   */
+  setRoadGraph(graph: RoadGraph | null): void {
+    this.roadGraph = graph;
+    this.roadIndex = null;
+    this.lastMatchedWayId = null;
+    this.lastMatch = null;
+  }
+
+  get matchedRoad(): RoadPosition | null {
+    return this.lastMatch;
+  }
+
+  /** Fraction of samples where a road match was found and applied, 0..1. */
+  get roadSnapAppliedFraction(): number {
+    return this.snapAttemptCount === 0 ? 0 : this.snapAppliedCount / this.snapAttemptCount;
   }
 
   startCalibration(nowMs: number): void {
@@ -515,6 +575,7 @@ export class NavigationEngine {
       this.dr.propagate(forwardAccel, yawRate, dtMs, gnssSpeed, {
         lateralAccelMps2: lateralAccel,
         isStationary: stationaryForZupt,
+        roadMaxSpeedMps: this.roadMaxSpeedMps,
       });
     }
 
@@ -662,10 +723,97 @@ export class NavigationEngine {
       }
     }
 
-    // 8. Emit.
+    // 8. Road snapping — the last constraint before emit, exactly as the build
+    //    guide orders it: propagate -> NHC -> ZUPT/ZARU -> road snap -> clamp.
+    //    It runs on the position that is about to be DRAWN rather than on the
+    //    dead-reckoning state, so a bad match can never be integrated forward
+    //    into the estimate and compound.
+    if (this.config.roadSnap && this.origin && mode !== 'INITIALIZING') {
+      if (!this.roadIndex && this.roadGraph) {
+        this.roadIndex = new RoadIndex(this.roadGraph, this.origin.lat, this.origin.lon);
+      }
+      if (this.roadIndex) {
+        this.snapAttemptCount++;
+        const match = findRoadMatch(
+          shownEnu,
+          this.dr.current.headingDeg,
+          this.roadIndex,
+          this.lastMatchedWayId,
+          this.config.roadSnapConfig,
+        );
+        if (match) {
+          const confidence = this.currentConfidence(sample.t, mode);
+          const snapped = applyRoadSnap(
+            shownEnu,
+            match,
+            confidence,
+            this.config.roadSnapConfig,
+          );
+          shownEnu = snapped.enu;
+          this.lastMatch = match;
+          if (this.lastMatchedWayId !== match.wayId) {
+            this.log.push({
+              t: sample.t,
+              type: 'ROAD_MATCH',
+              message: `${match.name ?? match.wayId} at ${match.distanceM.toFixed(0)}m`,
+              data: { wayId: match.wayId, distanceM: match.distanceM },
+            });
+          }
+          this.lastMatchedWayId = match.wayId;
+          this.snapAppliedCount++;
+          // 6E: the matched road's speed limit bounds the next propagation —
+          // but only when we are confident WHICH road it is. One sample of lag,
+          // because the match is only known after the position has been
+          // propagated, which is irrelevant at 50 Hz.
+          const oneway = this.roadIndex.getWay(match.wayId)?.oneway === true;
+          this.roadMaxSpeedMps = canTrustSpeedLimit(
+            match,
+            this.dr.current.headingDeg,
+            oneway,
+            this.config.roadSnapConfig,
+          )
+            ? match.maxspeedKph! / 3.6
+            : undefined;
+          // Cross-track error is what snapping bounds; along-track is not.
+          // Capping the wrong one would understate the error we actually have.
+          this.covarianceCrossM = Math.min(
+            this.covarianceCrossM,
+            this.config.roadSnapConfig.crossTrackCapM,
+          );
+        } else {
+          this.lastMatch = null;
+          this.lastMatchedWayId = null;
+          this.roadMaxSpeedMps = undefined;
+        }
+      }
+    }
+
+    // 9. Emit.
     const state = this.buildState(sample, mode, shownEnu);
     this.lastState = state;
     return state;
+  }
+
+  /**
+   * Confidence in the current estimate, 0..1.
+   *
+   * Extracted so road snapping and the emitted state cannot disagree: snap
+   * strength is driven by confidence, and computing it twice would eventually
+   * let the two drift apart.
+   *
+   * Keyed on time spent dead reckoning, NOT time since the last fix. Those
+   * differ: a fix can arrive while we are still showing a drifted position, and
+   * keying on time-since-fix made confidence climb back up while the displayed
+   * position was still wrong — exactly backwards.
+   */
+  private currentConfidence(tMs: number, mode: NavigationState['mode']): number {
+    if (mode === 'GNSS') return 1;
+    if (mode === 'GNSS_DEGRADED') return 0.7;
+    if (mode === 'INITIALIZING') return 0;
+    const drElapsedMs =
+      this.drStartedAtMs === null ? 0 : Math.max(0, tMs - this.drStartedAtMs);
+    const c = Math.exp(-drElapsedMs / this.config.confidenceTimeConstantMs);
+    return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
   }
 
   private gnssToEnu(sample: SensorSample): EnuPoint | null {
@@ -696,16 +844,7 @@ export class NavigationEngine {
     // drifted DR position (we only leave DR after several good fixes, and then
     // only after slewing). Keying on time-since-fix made confidence climb back
     // up while the displayed position was still wrong — exactly backwards.
-    const drElapsedMs =
-      this.drStartedAtMs === null ? 0 : Math.max(0, sample.t - this.drStartedAtMs);
-    const confidence =
-      mode === 'GNSS'
-        ? 1
-        : mode === 'GNSS_DEGRADED'
-          ? 0.7
-          : mode === 'INITIALIZING'
-            ? 0
-            : Math.exp(-drElapsedMs / this.config.confidenceTimeConstantMs);
+    const confidence = this.currentConfidence(sample.t, mode);
 
     const state: NavigationState = {
       t: sample.t,
@@ -723,6 +862,15 @@ export class NavigationEngine {
       timeSinceGnssMs,
       estimatedDriftM: this.estimatedDriftM,
       biases: this.dr.current.biases,
+      ...(this.lastMatch
+        ? {
+            matchedRoad: {
+              wayId: this.lastMatch.wayId,
+              arcLengthM: this.lastMatch.arcLengthM,
+              ...(this.lastMatch.name ? { name: this.lastMatch.name } : {}),
+            },
+          }
+        : {}),
     };
 
     // A NaN reaching the UI moves the marker to nowhere and is very hard to
@@ -774,6 +922,12 @@ export class NavigationEngine {
     this.lastGnssEnu = null;
     this.lastMovingGnssT = null;
     this.lastTrustedFixForDerivation = null;
+    this.roadIndex = null;
+    this.lastMatchedWayId = null;
+    this.lastMatch = null;
+    this.roadMaxSpeedMps = undefined;
+    this.snapAppliedCount = 0;
+    this.snapAttemptCount = 0;
     this.covarianceAlongM = 0;
     this.covarianceCrossM = 0;
     this.headingSigmaRad = 0;

@@ -10,6 +10,7 @@ export type NavEventType =
   | 'DRIFT_MEASURED'
   | 'RECOVERY_COMPLETE'
   | 'POSITION_RESET'
+  | 'ROAD_MATCH'
   | 'WARNING';
 
 export interface NavEvent {

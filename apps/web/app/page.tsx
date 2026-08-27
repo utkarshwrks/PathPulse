@@ -131,6 +131,7 @@ export default function Home() {
       <TrustPanel
         sample={nav.lastSample}
         lastGnss={nav.lastGnss}
+        roadGraphEntry={nav.roadGraphEntry}
         diagnostics={nav.diagnostics}
         stats={nav.stats}
         events={nav.events}

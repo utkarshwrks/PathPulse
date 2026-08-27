@@ -3,3 +3,4 @@ export * from './zupt.js';
 export * from './zaru.js';
 export * from './speedclamp.js';
 export * from './forwardBias.js';
+export * from './roadsnap.js';

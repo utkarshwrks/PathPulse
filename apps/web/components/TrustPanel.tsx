@@ -3,10 +3,12 @@
 import { useState } from 'react';
 import type { NavEvent, SensorSample, SessionSummary } from '@pathpulse/nav-core';
 import type { EngineControls, EngineDiagnostics, LastGnss } from '@/hooks/useNavigationEngine';
+import type { RoadGraphEntry } from '@/lib/roadGraph';
 
 interface TrustPanelProps {
   sample: SensorSample | null;
   lastGnss: LastGnss | null;
+  roadGraphEntry: RoadGraphEntry | null;
   diagnostics: EngineDiagnostics;
   stats: SessionSummary;
   events: NavEvent[];
@@ -44,6 +46,7 @@ type Tab = 'sensors' | 'constraints' | 'events' | 'stats';
 export default function TrustPanel({
   sample,
   lastGnss,
+  roadGraphEntry,
   diagnostics,
   stats,
   events,
@@ -104,6 +107,7 @@ export default function TrustPanel({
               <SensorsTab
                 sample={sample}
                 lastGnss={lastGnss}
+                roadGraphEntry={roadGraphEntry}
                 diagnostics={diagnostics}
                 imuHz={imuHz}
                 gnssHz={gnssHz}
@@ -129,6 +133,7 @@ export default function TrustPanel({
 function SensorsTab({
   sample,
   lastGnss,
+  roadGraphEntry,
   diagnostics,
   imuHz,
   gnssHz,
@@ -136,6 +141,7 @@ function SensorsTab({
 }: {
   sample: SensorSample | null;
   lastGnss: LastGnss | null;
+  roadGraphEntry: RoadGraphEntry | null;
   diagnostics: EngineDiagnostics;
   imuHz: number;
   gnssHz: number;
@@ -186,6 +192,27 @@ function SensorsTab({
         <Row k="MEAN C/N0" v={gnss?.meanCn0 != null ? `${gnss.meanCn0.toFixed(1)} dB-Hz` : 'n/a'} />
       </Group>
 
+      <Group title="road matching">
+        <Row
+          k="GRAPH"
+          v={roadGraphEntry ? `${roadGraphEntry.name} (${roadGraphEntry.ways} ways)` : 'none here'}
+          warn={roadGraphEntry === null}
+        />
+        <Row k="MATCHED" v={diagnostics.matchedRoadName ?? '—'} />
+        <Row
+          k="DISTANCE"
+          v={
+            diagnostics.matchedRoadDistanceM === null
+              ? '—'
+              : `${diagnostics.matchedRoadDistanceM.toFixed(1)} m`
+          }
+        />
+        <Row
+          k="COVERAGE"
+          v={`${(diagnostics.roadSnapAppliedFraction * 100).toFixed(0)} %`}
+        />
+      </Group>
+
       <Group title="estimator">
         <Row
           k="STATIONARY"
@@ -223,6 +250,11 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
   { key: 'nhc', label: 'NHC', hint: 'A vehicle cannot slide sideways. Kills cross-track drift.' },
   { key: 'zupt', label: 'ZUPT', hint: 'Stopped means speed exactly zero, and free accel calibration.' },
   { key: 'zaru', label: 'ZARU', hint: 'Stopped means the gyro reading is pure bias. Stops heading drift.' },
+  {
+    key: 'roadSnap',
+    label: 'Road snapping',
+    hint: 'Pulls the estimate across onto the nearest plausible road. Cross-track only — never along it.',
+  },
   {
     key: 'accelHighPass',
     label: 'Accel high-pass',
@@ -273,8 +305,8 @@ function ConstraintsTab({
       </div>
 
       <p className="pt-2 text-[9.5px] leading-snug text-neutral-500">
-        Road snapping is not built yet (Phase 6D), so it has no toggle. It will
-        appear here rather than being shown as a switch that does nothing.
+        Road snapping only engages where a road graph covers the area — check
+        GRAPH on the SENSORS tab.
       </p>
     </div>
   );
