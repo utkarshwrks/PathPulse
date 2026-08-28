@@ -376,6 +376,46 @@ after switching source, and the badge stuck on ACQUIRING.
 5. **ACQUIRING lasted over 30 s.** Three consecutive fixes at one fix per 11 s.
    Reduced to two; each must still clear the accuracy gate.
 
+### Deep test pass 3 — the UI, finally clicked
+
+Until this pass **no element of this app had ever been clicked by anything.**
+Browser automation has not been available in any session, so every toggle, tab
+and button was verified only through the logic behind it. A control wired to
+the wrong handler, a tab that renders nothing, or a label reading the wrong
+field are all invisible to a logic test and obvious the instant a judge taps
+the screen.
+
+That gap is now closed with `@testing-library/react` in jsdom — the components
+are really mounted and really clicked:
+
+- **`TrustPanel.test.tsx` (32)** — opens and closes, all four tabs switch,
+  **every constraint toggle is clicked and asserted to patch its own key and no
+  other**, Walking Mode, the export button, the event list ordering, the stats
+  figures, and the "no road graph here" warning.
+- **`Hud.test.tsx` (21)** — all five mode labels, m/s to km/h conversion,
+  drift %, the amber sub-10 Hz warning, the WALKING badge, and that it waits
+  rather than showing zeros before the first fix.
+- **`controls.test.tsx` (21)** — SourcePanel transport including the **GNSS
+  loss** button the whole demo hangs off, the speed slider, the
+  download-only-after-recording rule; PermissionGate's three
+  look-identical-but-are-not states; DeviceInfo.
+- **`mapLayers.test.tsx` (17)** — VehicleMarker against a mocked MapLibre:
+  **[lon, lat] ordering** (a swap would put the vehicle in the wrong hemisphere
+  and nothing else would notice), heading rotation, holding the last heading
+  when GNSS reports none at a standstill, mode colours from the shared palette,
+  cleanup on unmount. TrailLayer: exactly one data-driven layer rather than one
+  per segment, and the mode split that lets a judge see which stretch was
+  estimated.
+- **`useSensorSource.test.ts` (15)** — 10% -> 95% coverage. Transport, measured
+  rates, playback speed, that `triggerOutage` **removes** GNSS rather than
+  zeroing it, and that unmounting does not leak a timer.
+
+**Web coverage 59% -> 92.7%.** `TrustPanel` 99.5%, `Hud` 99.2%, `TrailLayer`
+100%, `VehicleMarker` 92.6%.
+
+**Still untested:** `MapView.tsx` (WebGL, needs a real browser) and
+`platform.ts` (a Capacitor Device wrapper with no logic of its own).
+
 ### Deep test pass 2 — coverage-driven, three latent bugs found
 
 Ran coverage rather than guessing where the holes were, then wrote tests for

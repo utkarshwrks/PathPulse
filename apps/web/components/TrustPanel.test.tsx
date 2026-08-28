@@ -1,0 +1,338 @@
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { NavEvent, SensorSample, SessionSummary } from '@pathpulse/nav-core';
+import TrustPanel from './TrustPanel';
+import { DEFAULT_CONTROLS, type EngineDiagnostics } from '@/hooks/useNavigationEngine';
+
+/**
+ * The Phase 5 anti-fake panel, rendered and actually clicked.
+ *
+ * Until this file existed no element of this app had ever been clicked by
+ * anything — every toggle and tab was verified only through the logic behind
+ * it. A control wired to the wrong handler, a tab that renders nothing, or a
+ * label that reads the wrong field are all invisible to a logic test and
+ * obvious the moment a judge taps the screen.
+ *
+ * NOTE: this project runs vitest with `globals: false`, so @testing-library's
+ * automatic cleanup — which registers itself on a global `afterEach` — never
+ * installs. Without the explicit cleanup below, every render stays mounted and
+ * later queries match elements from earlier tests.
+ */
+
+afterEach(cleanup);
+
+const DIAGNOSTICS: EngineDiagnostics = {
+  zuptTriggers: 3,
+  zaruTriggers: 7,
+  accelBias: [0.021, -0.004, 0.001],
+  gyroBias: [0.0011, -0.0002, 0.0104],
+  attitudeQuality: 0.86,
+  attitudeSettled: true,
+  observedFixIntervalMs: 11_000,
+  effectiveNoFixTimeoutMs: 20_000,
+  unaidedMs: 43_400,
+  forwardBiasMps2: -0.12,
+  forwardBiasObservations: 9,
+  isStationary: false,
+  accelVariance: 0.1635,
+  gyroMean: 0.05,
+  roadSnapAppliedFraction: 0.92,
+  matchedRoadName: 'NH45',
+  matchedRoadDistanceM: 4.2,
+  hasRoadGraph: true,
+};
+
+const STATS: SessionSummary = {
+  durationMs: 185_000,
+  distanceM: 1506,
+  outageCount: 2,
+  outageTotalMs: 136_000,
+  longestOutageMs: 90_000,
+  bestDriftM: 4.2,
+  worstDriftM: 35.6,
+  meanDriftM: 19.9,
+  maxSpeedMps: 13.9,
+  meanUpdateHz: 11.4,
+  zuptTriggers: 3,
+};
+
+const SAMPLE: SensorSample = {
+  t: 12_340,
+  imu: { ax: -1.9, ay: 9.1, az: 3.8, gx: -0.0209, gy: -0.1222, gz: 0.1239 },
+};
+
+const EVENTS: NavEvent[] = [
+  { t: 1000, type: 'GNSS_FIX', message: 'acc=6.0m sats=9' },
+  { t: 65_450, type: 'MODE_CHANGE', message: 'GNSS -> GNSS_DEGRADED (accuracy 31.0m)' },
+  { t: 90_120, type: 'DRIFT_MEASURED', message: '35.6m over 796m (4.47%)', data: { driftM: 35.6 } },
+];
+
+function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>> = {}) {
+  const onControlsChange = vi.fn();
+  const onExportEvents = vi.fn();
+  const utils = render(
+    <TrustPanel
+      sample={SAMPLE}
+      lastGnss={{ gnss: { lat: 23.16, lon: 79.93, accuracyM: 6 }, t: 10_000, ageMs: 2340 }}
+      roadGraphEntry={{
+        name: 'jabalpur',
+        file: 'road_graph_jabalpur.json',
+        bbox: [79.87, 23.11, 79.99, 23.22],
+        ways: 9462,
+        sizeKb: 2265,
+      }}
+      diagnostics={DIAGNOSTICS}
+      stats={STATS}
+      events={EVENTS}
+      controls={DEFAULT_CONTROLS}
+      onControlsChange={onControlsChange}
+      onExportEvents={onExportEvents}
+      imuHz={37}
+      gnssHz={0.09}
+      updateHz={11.5}
+      {...overrides}
+    />,
+  );
+  return { ...utils, onControlsChange, onExportEvents };
+}
+
+function openPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>> = {}) {
+  const utils = renderPanel(overrides);
+  fireEvent.click(screen.getByRole('button', { name: /debug/i }));
+  return utils;
+}
+
+describe('TrustPanel — opening and tabs', () => {
+  it('starts closed so it never covers the map by default', () => {
+    renderPanel();
+    expect(screen.queryByRole('button', { name: 'SENSORS' })).toBeNull();
+  });
+
+  it('opens and closes on the Debug button', () => {
+    renderPanel();
+    const toggle = screen.getByRole('button', { name: /debug/i });
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'SENSORS' })).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('button', { name: 'SENSORS' })).toBeNull();
+  });
+
+  it('shows all four tabs', () => {
+    openPanel();
+    for (const tab of ['SENSORS', 'CONSTRAINTS', 'EVENTS', 'STATS']) {
+      expect(screen.getByRole('button', { name: tab })).toBeTruthy();
+    }
+  });
+
+  it('opens on SENSORS and switches between every tab', () => {
+    // A tab that renders nothing is invisible to a logic test.
+    // Group headings are uppercased by CSS, and jsdom does not apply
+    // text-transform — so the DOM text is the lowercase source string.
+    openPanel();
+    expect(screen.getByText('raw imu')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'CONSTRAINTS' }));
+    expect(screen.getByText('Road snapping')).toBeTruthy();
+    expect(screen.queryByText('raw imu')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'EVENTS' }));
+    expect(screen.getByRole('button', { name: /export json/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'STATS' }));
+    expect(screen.getByText('DURATION')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'SENSORS' }));
+    expect(screen.getByText('raw imu')).toBeTruthy();
+  });
+});
+
+describe('TrustPanel — SENSORS reads the right fields', () => {
+  it('shows live raw accelerometer and gyro values', () => {
+    openPanel();
+    // Signed and fixed-width, so a table of numbers does not jitter.
+    expect(screen.getByText(/-1\.90 \+9\.10 \+3\.80/)).toBeTruthy();
+    expect(screen.getByText(/-0\.0209 -0\.1222 \+0\.1239/)).toBeTruthy();
+  });
+
+  it('shows measured rates, and flags a sub-10 Hz engine rate', () => {
+    openPanel({ updateHz: 8.3 });
+    const row = screen.getByText('ENGINE OUT').parentElement!;
+    expect(within(row).getByText('8.3 Hz').className).toMatch(/amber/);
+  });
+
+  it('does not flag a healthy engine rate', () => {
+    openPanel({ updateHz: 11.5 });
+    const row = screen.getByText('ENGINE OUT').parentElement!;
+    expect(within(row).getByText('11.5 Hz').className).not.toMatch(/amber/);
+  });
+
+  it('shows the observed fix interval and the timeout derived from it', () => {
+    openPanel();
+    expect(screen.getByText('11.0 s')).toBeTruthy();
+    expect(screen.getByText('20.0 s')).toBeTruthy();
+  });
+
+  it('reports a device that gives no Doppler speed honestly', () => {
+    // "not reported" is a different claim from 0 m/s, and the difference
+    // matters: one is a missing measurement, the other says "stopped".
+    openPanel();
+    expect(screen.getByText('not reported')).toBeTruthy();
+  });
+
+  it('shows n/a for satellites rather than inventing a number', () => {
+    openPanel();
+    expect(screen.getAllByText('n/a').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('shows the loaded road graph and the matched road', () => {
+    openPanel();
+    expect(screen.getByText('jabalpur (9462 ways)')).toBeTruthy();
+    expect(screen.getByText('NH45')).toBeTruthy();
+    expect(screen.getByText('4.2 m')).toBeTruthy();
+    expect(screen.getByText('92 %')).toBeTruthy();
+  });
+
+  it('warns when no road graph covers this area', () => {
+    // The case that must not look like road snapping being broken.
+    openPanel({ roadGraphEntry: null });
+    const row = screen.getByText('GRAPH').parentElement!;
+    expect(within(row).getByText('none here').className).toMatch(/amber/);
+  });
+
+  it('shows the estimator biases and counters', () => {
+    openPanel();
+    expect(screen.getByText('[0.021, -0.004, 0.001]')).toBeTruthy();
+    expect(screen.getByText('3 / 7')).toBeTruthy();
+    expect(screen.getByText('NO')).toBeTruthy();
+  });
+
+  it('renders with no sample at all rather than crashing', () => {
+    openPanel({ sample: null, lastGnss: null });
+    expect(screen.getByText('no fix yet')).toBeTruthy();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+});
+
+describe('TrustPanel — CONSTRAINTS toggles actually fire', () => {
+  it('renders every toggle plus Walking Mode', () => {
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'CONSTRAINTS' }));
+    for (const label of [
+      'NHC',
+      'ZUPT',
+      'ZARU',
+      'Road snapping',
+      'Accel high-pass',
+      'Speed clamp',
+      'Low-pass filter',
+      'Median filter',
+      'Walking Mode',
+    ]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+  });
+
+  it.each([
+    ['NHC', 'nhc'],
+    ['ZUPT', 'zupt'],
+    ['ZARU', 'zaru'],
+    ['Road snapping', 'roadSnap'],
+    ['Accel high-pass', 'accelHighPass'],
+    ['Speed clamp', 'speedClamp'],
+  ])('clicking %s patches only %s', (label, key) => {
+    // ★ The wiring the whole anti-fake demo depends on. ★ A toggle bound to
+    // the wrong key would still animate, still look right, and quietly change
+    // something else.
+    const { onControlsChange } = openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'CONSTRAINTS' }));
+    fireEvent.click(screen.getByText(label).closest('button')!);
+    expect(onControlsChange).toHaveBeenCalledTimes(1);
+    expect(onControlsChange).toHaveBeenCalledWith({ [key]: false });
+  });
+
+  it('turns a disabled constraint back on', () => {
+    const { onControlsChange } = openPanel({
+      controls: { ...DEFAULT_CONTROLS, nhc: false },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'CONSTRAINTS' }));
+    fireEvent.click(screen.getByText('NHC').closest('button')!);
+    expect(onControlsChange).toHaveBeenCalledWith({ nhc: true });
+  });
+
+  it('toggles Walking Mode', () => {
+    const { onControlsChange } = openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'CONSTRAINTS' }));
+    fireEvent.click(screen.getByText('Walking Mode').closest('button')!);
+    expect(onControlsChange).toHaveBeenCalledWith({ walkingMode: true });
+  });
+
+  it('labels forward-bias as the measured-worse negative result', () => {
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'CONSTRAINTS' }));
+    expect(screen.getByText(/Forward bias \(off — measured worse\)/)).toBeTruthy();
+  });
+});
+
+describe('TrustPanel — EVENTS', () => {
+  it('lists events newest first with millisecond timestamps', () => {
+    // During a demo the interesting line is the one that just happened.
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'EVENTS' }));
+    const items = screen.getAllByRole('listitem');
+    expect(items[0]!.textContent).toContain('DRIFT_MEASURED');
+    expect(items[items.length - 1]!.textContent).toContain('GNSS_FIX');
+    expect(items[0]!.textContent).toMatch(/\d\d:\d\d\.\d\d\d/);
+  });
+
+  it('shows each event message and its reason', () => {
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'EVENTS' }));
+    expect(screen.getByText(/GNSS -> GNSS_DEGRADED \(accuracy 31\.0m\)/)).toBeTruthy();
+  });
+
+  it('fires the export handler', () => {
+    const { onExportEvents } = openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'EVENTS' }));
+    fireEvent.click(screen.getByRole('button', { name: /export json/i }));
+    expect(onExportEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so when there are no events yet', () => {
+    openPanel({ events: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'EVENTS' }));
+    expect(screen.getByText('no events yet')).toBeTruthy();
+  });
+});
+
+describe('TrustPanel — STATS', () => {
+  it('shows session totals', () => {
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'STATS' }));
+    expect(screen.getByText('3m 05s')).toBeTruthy();
+    expect(screen.getByText('1506 m')).toBeTruthy();
+    expect(screen.getByText('50.0 km/h')).toBeTruthy();
+  });
+
+  it('shows MEASURED drift, not the engine uncertainty model', () => {
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'STATS' }));
+    expect(screen.getByText('4.2 m')).toBeTruthy();
+    expect(screen.getByText('35.6 m')).toBeTruthy();
+    expect(screen.getByText('19.9 m')).toBeTruthy();
+  });
+
+  it('shows a dash before any recovery has happened', () => {
+    openPanel({
+      stats: { ...STATS, bestDriftM: null, worstDriftM: null, meanDriftM: null },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'STATS' }));
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('shows outage counts and durations', () => {
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'STATS' }));
+    expect(screen.getByText('2m 16s')).toBeTruthy();
+    expect(screen.getByText('1m 30s')).toBeTruthy();
+  });
+});
