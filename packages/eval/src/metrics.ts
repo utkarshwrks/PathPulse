@@ -23,6 +23,14 @@ export interface EvalMetrics {
   outageStartMs: number;
   outageDurationS: number;
   samples: number;
+  /**
+   * Samples dropped because the estimate was not a finite position.
+   *
+   * Should always be zero — nav-core asserts it never emits a non-finite state
+   * — so anything else here is a signal that something upstream broke, and it
+   * is reported rather than absorbed.
+   */
+  discardedSamples: number;
   /** Distance the vehicle really covered during the outage, from truth. */
   distanceTravelledM: number;
   /** Final error as a percentage of that distance — the PS's own metric. */
@@ -192,12 +200,24 @@ export interface ComputeMetricsInput {
  */
 export function computeMetrics(input: ComputeMetricsInput): EvalMetrics {
   const errors: ErrorSample[] = [];
+  let discarded = 0;
 
   for (const s of input.outageStates) {
     const truthPos = truthAt(input.truth, s.t);
     if (!truthPos) continue;
     const heading = truthHeadingAt(input.truth, s.t);
     const d = decomposeError(s.position, truthPos, heading);
+
+    // ★ ONE BAD SAMPLE MUST NOT POISON THE WHOLE ROW ★
+    // A single non-finite position turned RMSE, MAE and max error into NaN
+    // while CEP95 still reported a perfectly plausible 90 m — because sorting
+    // pushes NaN to the end and the percentile index lands on a real value.
+    // Partially-corrupt numbers are far more dangerous than obviously-corrupt
+    // ones: an `n/a` gets investigated, a plausible number gets published.
+    if (!Number.isFinite(d.errorM) || !Number.isFinite(d.alongM) || !Number.isFinite(d.crossM)) {
+      discarded++;
+      continue;
+    }
     errors.push({ t: s.t, errorM: d.errorM, alongM: d.alongM, crossM: d.crossM });
   }
 
@@ -221,6 +241,7 @@ export function computeMetrics(input: ComputeMetricsInput): EvalMetrics {
     outageStartMs: input.outageStartMs,
     outageDurationS: input.outageDurationMs / 1000,
     samples: errors.length,
+    discardedSamples: discarded,
     distanceTravelledM,
     // Guarded: over a few metres of travel the ratio is dominated by its
     // denominator and says nothing useful.

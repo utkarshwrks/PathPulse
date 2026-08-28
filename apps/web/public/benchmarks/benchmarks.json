@@ -36,7 +36,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 0,
       "roadSnapPct": 0,
-      "positionResets": 10
+      "positionResets": 10,
+      "discardedSamples": 0
     },
     {
       "config": "filtered",
@@ -54,7 +55,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 0,
       "roadSnapPct": 0,
-      "positionResets": 10
+      "positionResets": 10,
+      "discardedSamples": 0
     },
     {
       "config": "zaru",
@@ -72,7 +74,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 0,
       "roadSnapPct": 0,
-      "positionResets": 10
+      "positionResets": 10,
+      "discardedSamples": 0
     },
     {
       "config": "zupt",
@@ -90,7 +93,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 18,
       "roadSnapPct": 0,
-      "positionResets": 10
+      "positionResets": 10,
+      "discardedSamples": 0
     },
     {
       "config": "nhc",
@@ -108,7 +112,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 18,
       "roadSnapPct": 0,
-      "positionResets": 0
+      "positionResets": 0,
+      "discardedSamples": 0
     },
     {
       "config": "speedclamp",
@@ -126,7 +131,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 18,
       "roadSnapPct": 0,
-      "positionResets": 0
+      "positionResets": 0,
+      "discardedSamples": 0
     },
     {
       "config": "highpass",
@@ -144,7 +150,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 18,
       "roadSnapPct": 0,
-      "positionResets": 0
+      "positionResets": 0,
+      "discardedSamples": 0
     },
     {
       "config": "full",
@@ -162,7 +169,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 18,
       "roadSnapPct": 95.60516210213116,
-      "positionResets": 0
+      "positionResets": 0,
+      "discardedSamples": 0
     },
     {
       "config": "full_forwardbias",
@@ -180,7 +188,8 @@
       "meanUpdateHz": 50,
       "totalZupt": 18,
       "roadSnapPct": 99.74445126609974,
-      "positionResets": 0
+      "positionResets": 0,
+      "discardedSamples": 0
     }
   ]
 }

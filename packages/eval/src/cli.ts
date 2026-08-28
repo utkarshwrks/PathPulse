@@ -102,7 +102,13 @@ function main(): void {
     ['ZUPT / ZARU', `${metrics.zuptTriggers} / ${metrics.zaruTriggers}`],
     ['road snap applied', `${fmt(metrics.roadSnapAppliedPct)} %`],
     ['position resets', String(metrics.positionResets)],
+    ['samples scored', String(metrics.samples)],
   ];
+  if (metrics.discardedSamples > 0) {
+    // Never silent. nav-core asserts it cannot emit a non-finite state, so a
+    // non-zero count here means something upstream is broken.
+    rows.push(['⚠ DISCARDED', `${metrics.discardedSamples} non-finite`]);
+  }
 
   for (const [k, v] of rows) {
     console.log(`  ${k.padEnd(20)} ${v.padStart(16)}`);

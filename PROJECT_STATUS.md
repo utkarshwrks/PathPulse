@@ -418,6 +418,41 @@ runs the same harness `pnpm ablation` publishes.
 exists as a test; wiring it to CI is a five-minute job whenever a CI runner
 exists.
 
+### Deep test pass 4 — the eval harness, edge-cased
+
+86 new tests against the Phase 7 code, mostly adversarial. One real bug, and one
+architectural problem that would have bitten later.
+
+**Bug: a single non-finite sample poisoned a whole benchmark row — dishonestly.**
+One NaN position turned RMSE, MAE and max error into `NaN` while **CEP95 still
+reported a perfectly plausible 90 m**, because sorting pushes NaN to the end and
+the percentile index lands on a real value. The sample count still claimed all
+three samples were scored. A partially-corrupt row is far more dangerous than an
+obviously-corrupt one: an `n/a` gets investigated, a plausible number gets
+published. Non-finite samples are now dropped, counted, and surfaced — in the
+CLI, in the console table, and as a warning block at the top of
+`docs/benchmarks.md`.
+
+**Architecture: `ablation.ts` and `cli.ts` were 0% coverage** because both were
+scripts that execute on import — untestable by construction. The pure half
+(aggregation, markdown, CSV, SVG) is now `report.ts` and fully tested, and the
+CLI is exercised end-to-end as a real subprocess.
+
+Also found while testing the report generator:
+- `markdown()` claimed "every log is SIMULATED" when given **no logs at all**,
+  because `[].every()` is `true`.
+- The SVG did not XML-escape config names, so a config called `a&b` would have
+  produced a chart that silently failed to render.
+- `svgChart` correctly refuses to colour **exactly 10.0%** as passing, since the
+  target is `<10%`. That matters here: `full` sits at exactly 10.0%, and a
+  boundary that rounded in our favour is how a benchmark starts flattering
+  itself. There is now a test pinning it.
+
+**Coverage:** `metrics.ts`, `harness.ts` and `report.ts` at **100%**, `paths.ts`
+at 94%. `cli.ts`/`ablation.ts`/`record.ts` read 0% only because they run in
+subprocesses that the parent's coverage instrumentation cannot see — the CLI has
+14 end-to-end tests including determinism, exit codes and JSON output.
+
 ### Deep test pass 3 — the UI, finally clicked
 
 Until this pass **no element of this app had ever been clicked by anything.**

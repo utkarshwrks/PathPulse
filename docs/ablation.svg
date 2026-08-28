@@ -4,31 +4,31 @@
   <text x="24" y="48" font-size="12" fill="#64748b">12 runs per configuration · lower is better · dashed line is the &lt;10% target</text>
   <text x="198" y="76.4" text-anchor="end" font-size="13" fill="#cbd5e1">naive</text>
   <rect x="210" y="56" width="600.0" height="30" rx="4" fill="#f97316" />
-  <text x="820" y="76.4" font-size="13" fill="#e2e8f0">61.2%</text>
+  <text x="820.0" y="76.4" font-size="13" fill="#e2e8f0">61.2%</text>
   <text x="198" y="116.4" text-anchor="end" font-size="13" fill="#cbd5e1">filtered</text>
   <rect x="210" y="96" width="596.8" height="30" rx="4" fill="#f97316" />
-  <text x="816.7553333556701" y="116.4" font-size="13" fill="#e2e8f0">60.8%</text>
+  <text x="816.8" y="116.4" font-size="13" fill="#e2e8f0">60.8%</text>
   <text x="198" y="156.4" text-anchor="end" font-size="13" fill="#cbd5e1">zaru</text>
   <rect x="210" y="136" width="580.5" height="30" rx="4" fill="#f97316" />
-  <text x="800.5089122052951" y="156.4" font-size="13" fill="#e2e8f0">59.2%</text>
+  <text x="800.5" y="156.4" font-size="13" fill="#e2e8f0">59.2%</text>
   <text x="198" y="196.4" text-anchor="end" font-size="13" fill="#cbd5e1">zupt</text>
   <rect x="210" y="176" width="580.6" height="30" rx="4" fill="#f97316" />
-  <text x="800.6202473896354" y="196.4" font-size="13" fill="#e2e8f0">59.2%</text>
+  <text x="800.6" y="196.4" font-size="13" fill="#e2e8f0">59.2%</text>
   <text x="198" y="236.4" text-anchor="end" font-size="13" fill="#cbd5e1">nhc</text>
   <rect x="210" y="216" width="287.2" height="30" rx="4" fill="#eab308" />
-  <text x="507.24199183207617" y="236.4" font-size="13" fill="#e2e8f0">29.3%</text>
+  <text x="507.2" y="236.4" font-size="13" fill="#e2e8f0">29.3%</text>
   <text x="198" y="276.4" text-anchor="end" font-size="13" fill="#cbd5e1">speedclamp</text>
   <rect x="210" y="256" width="264.5" height="30" rx="4" fill="#eab308" />
-  <text x="484.4557908804349" y="276.4" font-size="13" fill="#e2e8f0">27.0%</text>
+  <text x="484.5" y="276.4" font-size="13" fill="#e2e8f0">27.0%</text>
   <text x="198" y="316.4" text-anchor="end" font-size="13" fill="#cbd5e1">highpass</text>
   <rect x="210" y="296" width="133.3" height="30" rx="4" fill="#eab308" />
-  <text x="353.2570262059386" y="316.4" font-size="13" fill="#e2e8f0">13.6%</text>
+  <text x="353.3" y="316.4" font-size="13" fill="#e2e8f0">13.6%</text>
   <text x="198" y="356.4" text-anchor="end" font-size="13" fill="#cbd5e1">full</text>
   <rect x="210" y="336" width="98.1" height="30" rx="4" fill="#eab308" />
-  <text x="318.1235476846252" y="356.4" font-size="13" fill="#e2e8f0">10.0%</text>
+  <text x="318.1" y="356.4" font-size="13" fill="#e2e8f0">10.0%</text>
   <text x="198" y="396.4" text-anchor="end" font-size="13" fill="#cbd5e1">full_forwardbias</text>
   <rect x="210" y="376" width="125.1" height="30" rx="4" fill="#eab308" />
-  <text x="345.10918395826934" y="396.4" font-size="13" fill="#e2e8f0">12.8%</text>
+  <text x="345.1" y="396.4" font-size="13" fill="#e2e8f0">12.8%</text>
   <line x1="308.1" y1="48" x2="308.1" y2="428" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 4" />
   <text x="314.1" y="442" font-size="11" fill="#38bdf8">10% target</text>
 </svg>
