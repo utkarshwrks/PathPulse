@@ -1,0 +1,10 @@
+{
+  "name": "full",
+  "description": "Everything that earns its place, including road snapping. This is what ships.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": true,
+    "forwardBias": false, "roadSnap": true
+  }
+}

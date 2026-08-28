@@ -1,0 +1,10 @@
+{
+  "name": "zupt",
+  "description": "+ ZUPT. A stopped vehicle has exactly zero velocity, and every red light resets the error budget.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": false, "zupt": true, "zaru": true,
+    "speedClamp": false, "accelHighPass": false,
+    "forwardBias": false, "roadSnap": false
+  }
+}

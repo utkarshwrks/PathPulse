@@ -6,13 +6,20 @@
   "//": "Replay a recorded log, punch an artificial GNSS outage in it, and measure drift against the recorded GNSS as ground truth. Built in Phase 7.",
   "main": "./src/index.ts",
   "scripts": {
-    "test": "echo \"[eval] no tests yet (Phase 7)\" && exit 0",
+    "eval": "tsx src/cli.ts",
+    "ablation": "tsx src/ablation.ts",
+    "record": "tsx src/record.ts",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@pathpulse/nav-core": "workspace:*"
+    "@pathpulse/nav-core": "workspace:*",
+    "@pathpulse/sensor-sources": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.6.3"
+    "@types/node": "^22.20.1",
+    "tsx": "^4.23.12",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
   }
 }

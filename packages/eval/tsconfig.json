@@ -1,5 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": ".", "outDir": "dist" },
-  "include": ["src/**/*.ts"]
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    // A Node CLI, unlike nav-core which must stay runtime-free. DOM is here
+    // only because this package imports @pathpulse/sensor-sources for the
+    // simulator, and that package legitimately spans both environments —
+    // WebSource touches window, NativeSource touches Capacitor. Nothing in
+    // this package uses a browser API itself.
+    "types": ["node"],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

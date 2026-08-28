@@ -1,0 +1,10 @@
+{
+  "name": "speedclamp",
+  "description": "+ plausibility ceiling and the decay of a stale unaided estimate.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": false,
+    "forwardBias": false, "roadSnap": false
+  }
+}

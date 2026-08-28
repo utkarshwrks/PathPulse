@@ -1,0 +1,10 @@
+{
+  "name": "zaru",
+  "description": "+ ZARU. A stopped vehicle's gyro reading is pure bias, so every stop calibrates it free.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": false, "zupt": false, "zaru": true,
+    "speedClamp": false, "accelHighPass": false,
+    "forwardBias": false, "roadSnap": false
+  }
+}

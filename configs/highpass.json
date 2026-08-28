@@ -1,0 +1,10 @@
+{
+  "name": "highpass",
+  "description": "+ acceleration high-pass. Real longitudinal acceleration averages to zero over a minute; tilt error does not. Largest single improvement in the table.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": true,
+    "forwardBias": false, "roadSnap": false
+  }
+}

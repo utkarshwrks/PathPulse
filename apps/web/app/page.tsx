@@ -13,6 +13,7 @@ import TrustPanel from '@/components/TrustPanel';
 import SourcePanel from '@/components/SourcePanel';
 import PermissionGate from '@/components/PermissionGate';
 import DeviceInfo from '@/components/DeviceInfo';
+import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
 
@@ -29,6 +30,7 @@ export default function Home() {
   const [kind, setKind] = useState<SourceKind>('simulation');
   const [routeKey, setRouteKey] = useState<RouteKey>('city');
   const [showDeviceInfo, setShowDeviceInfo] = useState(false);
+  const [showBenchmarks, setShowBenchmarks] = useState(false);
 
   // ★ The navigation engine is now the single source of truth for what the
   // map draws. Raw GNSS is only an input to it, never drawn directly — that is
@@ -143,13 +145,24 @@ export default function Home() {
         updateHz={nav.updateHz}
       />
 
-      <button
-        type="button"
-        onClick={() => setShowDeviceInfo(true)}
-        className="absolute right-3 top-3 z-10 rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
-      >
-        Device
-      </button>
+      <div className="absolute right-3 top-3 z-10 flex gap-1.5">
+        <button
+          type="button"
+          onClick={() => setShowBenchmarks(true)}
+          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
+        >
+          Benchmarks
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowDeviceInfo(true)}
+          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
+        >
+          Device
+        </button>
+      </div>
+
+      {showBenchmarks ? <Benchmarks onClose={() => setShowBenchmarks(false)} /> : null}
 
       {showDeviceInfo ? (
         <DeviceInfo

@@ -1,0 +1,10 @@
+{
+  "name": "full_forwardbias",
+  "description": "NEGATIVE RESULT, kept deliberately. Full plus the GNSS-Doppler forward-bias estimator, which measurably WORSENS drift now that the high-pass exists. Reported rather than deleted.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": true,
+    "forwardBias": true, "roadSnap": true
+  }
+}

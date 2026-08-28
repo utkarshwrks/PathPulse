@@ -1,0 +1,10 @@
+{
+  "name": "naive",
+  "description": "Double integration and nothing else. The baseline the whole project exists to beat.",
+  "engine": {
+    "medianFilter": false, "lowPass": false,
+    "nhc": false, "zupt": false, "zaru": false,
+    "speedClamp": false, "accelHighPass": false,
+    "forwardBias": false, "roadSnap": false
+  }
+}
