@@ -15,7 +15,7 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phases 0-6 complete.** The dot
+**Phases 0-8 complete.** The dot
 survives a GNSS outage, and the six defects a real-phone field test exposed on
 2026-08-27 are fixed.
 
@@ -54,7 +54,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (628) |
+| `pnpm test` | All workspace tests (667) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -330,6 +330,66 @@ The debug panel states `n/a` for satellite count and C/N0 rather than inventing
 them — those need the native `GnssStatus` API in Phase 15. Road snapping has no
 toggle yet because it is not built; a switch that did nothing would be worse
 than its absence.
+
+## AI/ML — the IO-VNBD speed model
+
+The problem statement is titled "AI-ML based", and requires a position plot
+inferenced from IO-VNBD as a screening artefact. Both live in [`ml/`](./ml).
+
+**What it does:** reads two seconds of the phone's accelerometer and gyroscope
+and answers with the vehicle's speed. That is the hardest gap in dead
+reckoning — an accelerometer cannot tell a parked car from one cruising at a
+steady 50 km/h, so integration during an outage has no reference at all.
+
+**Trained on** 15.6 hours across 27 IO-VNBD sequences. Input is the dataset's
+*smartphone* IMU — the sensor we deploy on — and the label is the car's own
+**wheel-speed sensor**, not GPS, because GPS speed is unavailable in exactly the
+situation the model serves.
+
+Held out entirely (`Vw02`, `S1`, 10443 windows):
+
+| model | MAE | R² |
+| --- | --- | --- |
+| constant (training mean) | 7.24 m/s | −0.00 |
+| ridge, 42 statistics | 4.29 m/s | 0.61 |
+| **SpeedCNN, 26081 params** | **2.93 m/s** | **0.79** |
+
+Dead-reckoned drift over real outage windows, against the recorded GPS path:
+
+| outage | perfect speed (floor) | **CNN** | ridge | constant |
+| --- | --- | --- | --- | --- |
+| 30 s | 2.2 % | **17.6 %** | 24.9 % | 45.5 % |
+| 120 s | 7.7 % | **16.1 %** | 22.7 % | 41.6 % |
+| 300 s | 14.4 % | **17.9 %** | 22.9 % | 38.7 % |
+
+**On-device, no cloud API, no inference runtime.** The network is evaluated by
+150 lines of pure TypeScript in `nav-core` rather than by ONNX Runtime, which
+would have cost 14 MB of WebAssembly and taken the APK from 5.4 MB to ~20 MB for
+a 26081-parameter model. Weights ship as 135 KB of base64 float32 with BatchNorm
+folded in — over the guide's 100 KB target, which 26081 float32 parameters
+cannot meet before encoding, and reported as over rather than quoting the
+35 KB ONNX the app never opens; a test checks the TypeScript against probe vectors captured from
+PyTorch to 1e-3 m/s. ONNX is still exported (35 KB int8, verified) as the
+interoperable artefact — it just is not what runs.
+
+Because inference lives in `nav-core`, the Phase 16 edge engine and the eval
+harness get it for free. Inference runs every 500 ms and takes microseconds. The
+HUD tags speed `[GNSS]` / `[ML]` / `[INTEGRATED]` so you can see which one is
+answering, and the SENSORS tab compares the model's prediction to GNSS actual
+live.
+
+**It does not meet the guide's "under 2 m/s" bar, and the reason is physical:**
+absolute speed is encoded in tyre and road vibration, most of which sits above
+the 5 Hz Nyquist limit of IO-VNBD's 10 Hz smartphone log. An in-sequence upper
+bound — optimistic, since it leaks route identity — reaches only 2.50 m/s.
+
+**There is no `full_ml` row in the ablation table**, deliberately: those logs are
+simulated, and `python ml/check_sim_transfer.py` shows the model answers ~6 km/h
+whether the simulated vehicle is doing 34 or 81. Publishing a drift number from
+that would measure the simulator, not the model.
+
+Full write-up, including the two dataset defects found and the export gotchas:
+**[`ml/README.md`](./ml/README.md)**.
 
 ## Constraints
 

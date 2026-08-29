@@ -1,11 +1,11 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 7 — Eval Harness + Ablation Table ✅ COMPLETE
-**LAST UPDATED:** 2026-08-27
-**NEXT PHASE:** Phase 8 — AI/ML: IO-VNBD speed model + position plot ★ ISRO requires this
+**CURRENT PHASE:** Phase 8 — AI/ML: IO-VNBD speed model + position plot ✅ COMPLETE
+**LAST UPDATED:** 2026-08-30
+**NEXT PHASE:** Phase 9 — Wow features: confidence ellipse, turn detection, offline map
 
-> Phases 0-7 are complete. Phase 8 is the AI/ML work the problem statement
-> requires as a screening artefact and which the submitted deck is missing.
+> Phases 0-8 are complete. The ISRO screening artefact — a position plot
+> inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
 
 > ### Drift: **10.0% mean, 6.4% median, 22.6% p90** over 12 runs
 >
@@ -636,8 +636,162 @@ determinism, NaN/hostile-input fuzzing, never-teleport across eight configs,
 long-outage behaviour, degenerate streams), `session.test.ts` (12),
 `useNavigationEngine.test.ts` (14). **260 tests total.**
 
+### Phase 8 — AI/ML: IO-VNBD speed model + position plot ✅
+
+**The artefact the problem statement requires as a screening item now exists:**
+`ml/results/position_plot.png`. Full write-up in [`ml/README.md`](./ml/README.md).
+
+**What the model is.** A 1D-CNN, 26081 parameters, reading 2 s of phone
+accelerometer and gyroscope and answering with vehicle speed. It fills dead
+reckoning's worst gap: an accelerometer cannot distinguish a parked car from one
+holding a steady 50 km/h, so integrated speed has no reference and no error
+bound.
+
+**Trained on 15.6 hours over 27 IO-VNBD sequences.** Input is the dataset's
+*smartphone* IMU — our deployment sensor — and the label is the car's own
+**wheel-speed sensor** rather than GPS, because GPS speed is missing in exactly
+the situation the model exists for.
+
+| held-out model | MAE | RMSE | R² |
+|---|---|---|---|
+| constant (training mean) | 7.24 m/s | 8.46 | -0.00 |
+| ridge, 42 statistics | 4.29 m/s | 5.28 | 0.61 |
+| **SpeedCNN** | **2.93 m/s** | **3.91** | **0.79** |
+
+Dead-reckoned drift over realistic outage windows, versus the recorded GPS path:
+
+| outage | perfect speed (floor) | CNN | ridge | constant |
+|---|---|---|---|---|
+| 30 s | 2.2 % | **17.6 %** | 24.9 % | 45.5 % |
+| 60 s | 4.4 % | **17.6 %** | 28.5 % | 49.9 % |
+| 120 s | 7.7 % | **16.1 %** | 22.7 % | 41.6 % |
+| 300 s | 14.4 % | **17.9 %** | 22.9 % | 38.7 % |
+
+**Honest limits, stated before a judge finds them:**
+
+- **2.93 m/s does not meet the guide's "under 2 m/s" bar.** The cause is
+  physical: absolute speed is carried by tyre and road vibration, most of it
+  above the 5 Hz Nyquist limit of a 10 Hz log. An in-sequence bound — optimistic,
+  it leaks route identity — reaches only 2.50 m/s. That is this data's ceiling.
+- **The split proves generalisation to a new JOURNEY, not a new vehicle.** Other
+  sessions by the same two drivers are in training; the dataset has only two
+  drivers with enough data for a disjoint split.
+- **Past ~5 minutes the model stops mattering.** At 300 s the CNN's 17.9 % is
+  close to the 14.4 % floor achievable with perfect speed, because heading error
+  has taken over. That argues for Phase 11 (ESKF) and Phase 17 (turn
+  relocalisation), not a bigger network.
+
+**★ NO `full_ml` ROW IN THE ABLATION, DELIBERATELY.** `configs/full_ml.json`
+exists and the toggle is live, but `docs/benchmarks.md` replays `sim_*.jsonl`
+which our own physics model generated, and `python ml/check_sim_transfer.py`
+shows the model answers ~6 km/h whether the simulated vehicle is doing 34 or 81
+(MAE 8.0-20.7 m/s, r = +0.01 to +0.21, against 2.93 m/s and R² 0.79 on real
+data). The simulator's vibration is one 20 Hz sine plus Gaussian noise; the
+model keys on a road spectrum that is not in there. A drift number from that
+would measure the simulator. Re-run the check if the simulator ever improves.
+
+**Two dataset defects found and handled, not worked around:**
+
+1. **`Vw01` is 34 minutes of a car idling** — engine at 880 rpm, wheel speed
+   exactly zero for all 20475 rows. At 24 % of the first training set it taught
+   the model to answer "zero". There is now a degenerate-sequence guard in
+   `preprocess.py` refusing any sequence whose label std is below 0.5 m/s.
+2. **`Vtb01` has 5456 rows whose timestamp never advances** — logger
+   duplication, 17 % of that sequence. Dropped and counted, not silently.
+
+**Export.** ONNX float32 103.2 KB, int8 **35.2 KB**, both verified
+against PyTorch on 512 real windows: 7.6e-06 max deviation float32, 0.088 m/s
+mean after quantisation. Two traps pinned in code — torch 2.13's dynamo exporter
+writes weights to a sibling `.onnx.data` and leaves a 27 KB graph that looks
+like the whole model (shipping it gives a model with **no weights**), and every
+quantisation path over that graph dies on a shape-inference error. The legacy
+exporter fixes both. TFLite is not produced: TensorFlow has no Python 3.14
+wheel and nothing here would read one.
+
+**★ THE APP DOES NOT RUN ONNX RUNTIME.** `onnxruntime-web` needs a 14 MB WASM
+binary to evaluate 26081 parameters — the APK would go from 5.4 MB to ~20 MB —
+and it breaks Next's Terser pass so it does not build. Instead `export.py` also
+emits `speed_model.json` (same weights, BatchNorm folded into the convolutions,
+base64 float32, 138 KB) and `nav-core/src/ml/cnn.ts` evaluates the network in
+~150 lines of pure TypeScript. `test/cnn.test.ts` checks it against probe
+vectors captured from PyTorch to **1e-3 m/s**, so the reimplementation cannot
+drift. Keeping inference in nav-core also hands Phase 16's edge engine and the
+eval harness on-device inference with no dependency at all. The ONNX files stay
+in `ml/export/` as the interoperable artefact and are deliberately NOT copied
+into the APK.
+
+**In the app (8B).**
+- `nav-core/src/ml/speedModel.ts` — the `SpeedPredictor` interface, a 10 Hz
+  decimating `SpeedWindowBuffer`, and `SpeedSmoother`. Pure; no model loading.
+- `nav-core/src/ml/cnn.ts` — the forward pass, plus a base64 float32 decoder
+  that does not use `atob` (a browser global the purity rule forbids).
+- `apps/web/lib/ml/speedModel.ts` — fetches the weights, times each call.
+  Inference every 500 ms and synchronous, because it takes microseconds; a test
+  pins it under 5 ms against the guide's 20 ms budget.
+- Speed priority is **GNSS Doppler → ML → integration**. The model never
+  displaces a measurement, and does not reset `unaidedMs` — a 2.9 m/s estimate
+  has not earned the coasting decay a reset.
+- HUD tags speed `[GNSS]` / `[ML]` / `[INTEGRATED]`; the SENSORS tab shows model
+  vs GNSS actual live, so the error is visible while satellites are still up.
+- A failed load is never fatal: integrated speed continues, with the reason
+  shown on screen.
+
+**Tests:** `test/ml.test.ts`, `test/cnn.test.ts`, `test/ml-hostile.test.ts` and
+`apps/web/lib/ml/speedModel.test.ts`. Between them they cover the
+(channel, time) layout a transposed window would silently corrupt, 50 Hz -> 10 Hz
+decimation, no burst-accept after a stalled stream, the GNSS-over-ML priority,
+clamping an absurd prediction, NaN never reaching the emitted state, and that
+the model is fed **raw** device-frame IMU rather than the conditioned signal.
+**715 tests total** (was 628): 312 nav-core, 86 sensor-sources, 192 web, 125 eval.
+
+### Deep test pass 5 — the speed model, assuming it was broken
+
+13 failures, three real defects. The bar: nothing may crash the engine, and
+nothing may return a confident number from broken input.
+
+**1. A predictor that threw killed the engine.** `predict()` was unguarded. The
+model is the one part of this engine that is *data* rather than code — a
+downloaded file that can be truncated or replaced. The exception unwound out of
+`update()`, the sample was lost, the marker froze, and on a phone the screen
+goes blank. Now caught, logged as a new `ML_ERROR` event, model disabled, reason
+shown on screen.
+
+**2. The loader validated almost nothing** — a regression introduced when ONNX
+was swapped for the pure-TS runtime, since the ONNX path had checked window,
+rate and channels and those were not carried across. It accepted a weight block
+10 floats long where 960 were required (the convolution read past its end and
+answered NaN forever while the panel said "loaded"), weights containing NaN, a
+`windowSamples` of 100 against an engine building 20 (every prediction silently
+discarded while the app claimed the AI was live), and a scaler with a zero
+standard deviation. **Every one of those failed silently.** All now refused with
+the reason.
+
+**3. A backwards clock stalled the model permanently.** The accept deadline
+lives in the future, so a clock jumping back — Android's boot-time base, a
+WebView timestamp reset, a replay restarting — rejected every later sample for
+the rest of the session, with nothing on screen to say so. It re-bases now.
+
+**Two honesty bugs in our own reporting:** `export.py` was checking the 100 KB
+budget against the 35 KB ONNX the app never opens rather than the 135.8 KB it
+ships, and printed a "shipping ->" path nothing was written to. Both fixed; the
+budget is now reported as **exceeded**, because it is.
+
+**New accuracy guard.** Agreeing with PyTorch proves the reimplementation is
+faithful, not that either is any good — wrong exported weights would make both
+agree on the same wrong answer. The shipped TypeScript is now scored against 256
+real held-out windows with their real labels and must reach the published MAE,
+plus a variance check so a model silently returning a constant cannot pass.
+
 ## NEXT PHASE
 
+**Phase 9 — Wow features** (confidence ellipse, turn detection, offline map)
+- 9A confidence ellipse — the covariance is already computed and emitted; this
+  is drawing it
+- 9B turn detection + `turnDetector.ts`
+- 9C PMTiles offline basemap, or service-worker tile caching as the cheap route
+- 9D spoofing detection, 9E NavIC breakdown, 9F GPX export
+
+### Superseded — Phase 6D (done)
 **Phase 6D — road graph + road snapping** (the rest of Phase 6)
 - `scripts/build-road-graph.mjs` — OSM Overpass bbox → `data/maps/road_graph.json`
 - `nav-core/src/mapmatch/` — 100 m grid spatial index, `getNearbyWays()`
