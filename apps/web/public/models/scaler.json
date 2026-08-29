@@ -1,0 +1,31 @@
+{
+  "mean": [
+    -6.101657709223218e-05,
+    -0.024943919852375984,
+    9.408902168273926,
+    0.00020902611140627414,
+    -0.001751405536197126,
+    -0.00021194660803303123
+  ],
+  "std": [
+    2.5105414390563965,
+    2.465055227279663,
+    0.9570644497871399,
+    0.14032438397407532,
+    0.18657396733760834,
+    0.12341578304767609
+  ],
+  "channels": [
+    "ax",
+    "ay",
+    "az",
+    "gx",
+    "gy",
+    "gz"
+  ],
+  "windowSamples": 20,
+  "sampleRateHz": 10,
+  "inputName": "imu_window",
+  "outputName": "speed_mps",
+  "note": "Channel order and window length are a contract with apps/web/lib/ml/onnxSpeedPredictor.ts. Regenerate both together."
+}

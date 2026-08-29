@@ -119,6 +119,7 @@ export default function Home() {
       </MapView>
 
       <Hud
+        speedSource={nav.diagnostics.speedSource}
         navState={navState}
         error={kind === 'live' ? live.error : null}
         mapSourceLabel={styleInfo.label}
@@ -131,6 +132,7 @@ export default function Home() {
       />
 
       <TrustPanel
+        modelInfo={nav.modelInfo}
         sample={nav.lastSample}
         lastGnss={nav.lastGnss}
         roadGraphEntry={nav.roadGraphEntry}

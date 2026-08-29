@@ -40,6 +40,12 @@ const DIAGNOSTICS: EngineDiagnostics = {
   matchedRoadName: 'NH45',
   matchedRoadDistanceM: 4.2,
   hasRoadGraph: true,
+  mlReady: true,
+  mlSpeedMps: 12.5,
+  mlInferences: 40,
+  mlLatencyMs: 8.2,
+  mlError: null,
+  speedSource: 'ML' as const,
 };
 
 const STATS: SessionSummary = {
@@ -72,6 +78,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
   const onExportEvents = vi.fn();
   const utils = render(
     <TrustPanel
+      modelInfo={{ loaded: true, error: null, sizeBytes: 36076, latencyMs: 8.2, inferences: 40 }}
       sample={SAMPLE}
       lastGnss={{ gnss: { lat: 23.16, lon: 79.93, accuracyM: 6 }, t: 10_000, ageMs: 2340 }}
       roadGraphEntry={{

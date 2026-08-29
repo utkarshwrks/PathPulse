@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { NavEvent, SensorSample, SessionSummary } from '@pathpulse/nav-core';
 import type { EngineControls, EngineDiagnostics, LastGnss } from '@/hooks/useNavigationEngine';
 import type { RoadGraphEntry } from '@/lib/roadGraph';
+import type { ModelInfo } from '@/lib/ml/speedModel';
 
 interface TrustPanelProps {
   sample: SensorSample | null;
@@ -18,6 +19,8 @@ interface TrustPanelProps {
   imuHz: number;
   gnssHz: number;
   updateHz: number;
+  /** Phase 8 — what happened when the speed model was loaded. */
+  modelInfo: ModelInfo;
 }
 
 type Tab = 'sensors' | 'constraints' | 'events' | 'stats';
@@ -56,6 +59,7 @@ export default function TrustPanel({
   imuHz,
   gnssHz,
   updateHz,
+  modelInfo,
 }: TrustPanelProps) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('sensors');
@@ -109,6 +113,7 @@ export default function TrustPanel({
                 lastGnss={lastGnss}
                 roadGraphEntry={roadGraphEntry}
                 diagnostics={diagnostics}
+                modelInfo={modelInfo}
                 imuHz={imuHz}
                 gnssHz={gnssHz}
                 updateHz={updateHz}
@@ -135,6 +140,7 @@ function SensorsTab({
   lastGnss,
   roadGraphEntry,
   diagnostics,
+  modelInfo,
   imuHz,
   gnssHz,
   updateHz,
@@ -143,6 +149,7 @@ function SensorsTab({
   lastGnss: LastGnss | null;
   roadGraphEntry: RoadGraphEntry | null;
   diagnostics: EngineDiagnostics;
+  modelInfo: ModelInfo;
   imuHz: number;
   gnssHz: number;
   updateHz: number;
@@ -213,6 +220,54 @@ function SensorsTab({
         />
       </Group>
 
+      {/*
+        ★ PHASE 8 — the live proof the model is doing something. ★
+        The comparison line is the valuable one: while GNSS is up we know the
+        real speed, so we can show the model's error AS IT HAPPENS. A judge can
+        watch the prediction track the truth before the outage even starts,
+        which is a far stronger claim than a number on a slide.
+      */}
+      <Group title="ai speed model">
+        <Row
+          k="MODEL"
+          v={
+            diagnostics.mlError
+              ? `disabled: ${diagnostics.mlError}`
+              : modelInfo.loaded
+                ? `loaded, ${(modelInfo.sizeBytes / 1024).toFixed(0)} KB`
+                : (modelInfo.error ?? 'not loaded')
+          }
+          warn={!modelInfo.loaded || diagnostics.mlError !== null}
+        />
+        <Row k="SOURCE" v={diagnostics.speedSource} accent={diagnostics.speedSource === 'ML'} />
+        <Row
+          k="LATENCY"
+          v={Number.isFinite(modelInfo.latencyMs) ? `${modelInfo.latencyMs.toFixed(1)} ms` : '—'}
+          warn={Number.isFinite(modelInfo.latencyMs) && modelInfo.latencyMs > 20}
+        />
+        <Row k="INFERENCES" v={String(modelInfo.inferences)} />
+        <Row
+          k="PREDICTED"
+          v={
+            Number.isFinite(diagnostics.mlSpeedMps)
+              ? `${(diagnostics.mlSpeedMps * 3.6).toFixed(1)} km/h`
+              : '—'
+          }
+        />
+        <Row
+          k="GNSS ACTUAL"
+          v={gnss?.speedMps != null ? `${(gnss.speedMps * 3.6).toFixed(1)} km/h` : 'n/a'}
+        />
+        <Row
+          k="ERROR"
+          v={
+            Number.isFinite(diagnostics.mlSpeedMps) && gnss?.speedMps != null
+              ? `${Math.abs(diagnostics.mlSpeedMps - gnss.speedMps).toFixed(2)} m/s`
+              : '—'
+          }
+        />
+      </Group>
+
       <Group title="estimator">
         <Row
           k="STATIONARY"
@@ -254,6 +309,11 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
     key: 'roadSnap',
     label: 'Road snapping',
     hint: 'Pulls the estimate across onto the nearest plausible road. Cross-track only — never along it.',
+  },
+  {
+    key: 'useMlSpeed',
+    label: 'AI speed model',
+    hint: 'The IO-VNBD-trained CNN, used for speed when GNSS is gone. Inert until the model loads — see the SENSORS tab.',
   },
   {
     key: 'accelHighPass',

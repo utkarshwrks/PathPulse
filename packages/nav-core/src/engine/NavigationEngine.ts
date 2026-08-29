@@ -22,7 +22,21 @@ import {
   type RoadSnapConfig,
 } from '../constraints/roadsnap.js';
 import { RoadIndex } from '../mapmatch/RoadIndex.js';
+import {
+  NullSpeedPredictor,
+  SpeedSmoother,
+  SpeedWindowBuffer,
+  type SpeedPredictor,
+} from '../ml/speedModel.js';
 import type { RoadGraph, RoadPosition } from '../mapmatch/types.js';
+
+/**
+ * Where the speed the engine is reporting came from.
+ *
+ * Surfaced so the HUD can label it. A judge asking "is the AI actually doing
+ * anything?" deserves an answer on screen rather than an assurance.
+ */
+export type SpeedSource = 'GNSS' | 'ML' | 'INTEGRATED' | 'STOPPED' | 'NONE';
 
 /** Runtime feature switches. Every one of these is an ablation-table row. */
 export interface ConstraintFlags {
@@ -64,6 +78,14 @@ export interface ConstraintFlags {
   adaptiveTimeout: boolean;
   /** Pull the estimate across onto the nearest plausible road. */
   roadSnap: boolean;
+  /**
+   * Use the IO-VNBD-trained CNN for speed when GNSS Doppler is unavailable.
+   *
+   * Only has an effect once a predictor has been supplied AND reports ready —
+   * `setSpeedPredictor()`. With no model loaded this flag does nothing at all,
+   * which is what makes the app safe to ship before the weights exist.
+   */
+  useMlSpeed: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -87,6 +109,15 @@ export interface EngineConfig extends ConstraintFlags {
   /** Assumed residual bias with ZARU switched off, rad/s. */
   uncorrectedGyroBiasRadPerSec: number;
   /**
+   * How often to run ML inference, ms.
+   *
+   * The guide says 500 ms, for battery. It also happens to be the rate the
+   * model can meaningfully update at: windows advance by one 10 Hz half-window,
+   * which is 1 s, so inferring per 100 ms sample would spend ten times the
+   * energy recomputing an input that has barely changed.
+   */
+  mlInferenceIntervalMs: number;
+  /**
    * Time constant of the forward-acceleration high-pass, ms.
    *
    * Long enough that a genuine sustained acceleration — a motorway on-ramp of
@@ -108,6 +139,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   accelHighPass: true,
   adaptiveTimeout: true,
   roadSnap: true,
+  useMlSpeed: true,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
@@ -116,6 +148,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   residualGyroBiasRadPerSec: 0.001,
   uncorrectedGyroBiasRadPerSec: 0.01,
   accelHighPassTauMs: 40_000,
+  mlInferenceIntervalMs: 500,
   roadSnapConfig: DEFAULT_ROAD_SNAP_CONFIG,
 };
 
@@ -187,6 +220,20 @@ export class NavigationEngine {
   private hasAccelDc = false;
   private estimatedDriftM = 0;
   private lastState: NavigationState | null = null;
+  // ── ML speed (Phase 8) ────────────────────────────────────────────────────
+  private speedPredictor: SpeedPredictor = new NullSpeedPredictor();
+  private readonly mlBuffer = new SpeedWindowBuffer();
+  private readonly mlSmoother = new SpeedSmoother(5);
+  private mlScalerMean: readonly number[] = [0, 0, 0, 0, 0, 0];
+  private mlScalerStd: readonly number[] = [1, 1, 1, 1, 1, 1];
+  private lastMlInferenceT: number | null = null;
+  private lastMlSpeedMps = Number.NaN;
+  private mlInferenceCount = 0;
+  private mlLastLatencyMs = Number.NaN;
+  /** Set when the predictor throws. Stops us calling a broken model forever. */
+  private mlFailure: string | null = null;
+  /** Where the speed being shown actually came from, for the HUD tag. */
+  private speedSource: SpeedSource = 'NONE';
   /** When the current dead-reckoning stretch began. Drives confidence decay. */
   private drStartedAtMs: number | null = null;
 
@@ -272,6 +319,13 @@ export class NavigationEngine {
     matchedRoadName: string | null;
     matchedRoadDistanceM: number | null;
     hasRoadGraph: boolean;
+    mlReady: boolean;
+    mlSpeedMps: number;
+    mlInferences: number;
+    mlLatencyMs: number;
+    /** Why the model was disabled, if it was. Surfaced in the debug panel. */
+    mlError: string | null;
+    speedSource: SpeedSource;
   } {
     return {
       zuptTriggers: this.zupt.triggerCount,
@@ -289,7 +343,42 @@ export class NavigationEngine {
       matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
       matchedRoadDistanceM: this.lastMatch?.distanceM ?? null,
       hasRoadGraph: this.roadGraph !== null,
+      mlReady: this.speedPredictor.isReady() && this.mlFailure === null,
+      mlSpeedMps: this.lastMlSpeedMps,
+      mlInferences: this.mlInferenceCount,
+      mlLatencyMs: this.mlLastLatencyMs,
+      mlError: this.mlFailure,
+      speedSource: this.speedSource,
     };
+  }
+
+  /**
+   * Supply the speed model, plus the normalisation it was trained with.
+   *
+   * The scaler travels with the weights on purpose: normalisation is part of
+   * the model's contract, and feeding a network a distribution it never saw is
+   * a silent failure, not a loud one. nav-core does no I/O — loading the file
+   * is the caller's job, exactly as with the road graph.
+   */
+  setSpeedPredictor(
+    predictor: SpeedPredictor | null,
+    scaler?: { mean: readonly number[]; std: readonly number[] },
+  ): void {
+    this.speedPredictor = predictor ?? new NullSpeedPredictor();
+    if (scaler) {
+      this.mlScalerMean = scaler.mean;
+      this.mlScalerStd = scaler.std;
+    }
+    this.mlBuffer.reset();
+    this.mlSmoother.reset();
+    this.lastMlSpeedMps = Number.NaN;
+    this.lastMlInferenceT = null;
+    this.mlFailure = null;
+  }
+
+  /** Where the currently emitted speed came from. Drives the HUD's tag. */
+  get currentSpeedSource(): SpeedSource {
+    return this.speedSource;
   }
 
   /**
@@ -466,6 +555,13 @@ export class NavigationEngine {
       );
       this.dr.setGyroBias(this.zaru.gyroBias as [number, number, number]);
       this.dr.setAccelBias(this.zupt.accelBias as [number, number, number]);
+
+      // ★ Feed the speed model the RAW device-frame sample. ★
+      // IO-VNBD's training windows are raw accelerometer and gyroscope with
+      // gravity still in them, so the model must see the same thing. Handing it
+      // our gravity-removed, bias-corrected, horizontally-resolved values would
+      // be a different signal entirely — and one it has never been shown.
+      this.mlBuffer.push(sample.t, ax, ay, az, gx, gy, gz);
     }
 
     // Establish the ENU origin from the first fix we see.
@@ -570,13 +666,28 @@ export class NavigationEngine {
     // is what a runaway integration always saturates at — and 551 m of travel,
     // all while the badge still read ACQUIRING. Every one of those numbers was
     // invented before the system knew where it was.
+    const mlSpeed = this.runSpeedModel(sample.t);
+
     if (this.dr.isInitialised) {
       const gnssSpeed = trusted ? speedForFix : undefined;
       this.dr.propagate(forwardAccel, yawRate, dtMs, gnssSpeed, {
         lateralAccelMps2: lateralAccel,
         isStationary: stationaryForZupt,
+        mlSpeedMps: mlSpeed,
         roadMaxSpeedMps: this.roadMaxSpeedMps,
       });
+      // Record what actually supplied the speed, in the same priority order
+      // DeadReckoningEngine.propagate() applies it.
+      this.speedSource =
+        stationaryForZupt && this.config.zupt
+          ? 'STOPPED'
+          : gnssSpeed !== undefined && Number.isFinite(gnssSpeed)
+            ? 'GNSS'
+            : mlSpeed !== undefined
+              ? 'ML'
+              : 'INTEGRATED';
+    } else {
+      this.speedSource = 'NONE';
     }
 
     // 6. Step the state machine.
@@ -795,6 +906,66 @@ export class NavigationEngine {
   }
 
   /**
+   * Run the speed model, at most once per `mlInferenceIntervalMs`.
+   *
+   * Returns undefined whenever the model must not be trusted — flag off, no
+   * predictor, not enough history, or a non-finite answer — and the caller
+   * then falls through to integration exactly as it did before Phase 8.
+   */
+  private runSpeedModel(tMs: number): number | undefined {
+    if (this.mlFailure !== null) return undefined;
+    if (!this.config.useMlSpeed || !this.speedPredictor.isReady()) return undefined;
+    if (!this.mlBuffer.isFull) return undefined;
+
+    const due =
+      this.lastMlInferenceT === null ||
+      tMs - this.lastMlInferenceT >= this.config.mlInferenceIntervalMs;
+    if (due) {
+      const w = this.mlBuffer.buildWindow(this.mlScalerMean, this.mlScalerStd);
+      if (w) {
+        this.lastMlInferenceT = tMs;
+        // ★ THE MODEL IS THE ONE PART OF THIS ENGINE THAT IS DATA, NOT CODE. ★
+        //
+        // Everything else here is arithmetic we wrote. The predictor evaluates
+        // a file that was downloaded, and a file can be truncated, corrupted,
+        // or replaced. If it throws, an uncaught exception unwinds all the way
+        // out of update() — the sample is lost, the marker freezes, and on a
+        // phone the whole screen goes blank. That breaks Golden Rule #10B: the
+        // app must degrade, never crash.
+        //
+        // So: catch, record the reason, and stop asking. A predictor that
+        // throws once is broken rather than unlucky, and calling it again every
+        // 500 ms would only fill the log. Supplying a new one via
+        // setSpeedPredictor() clears the flag.
+        let raw: number;
+        try {
+          raw = this.speedPredictor.predict(w);
+        } catch (err) {
+          this.mlFailure = err instanceof Error ? err.message : String(err);
+          this.log.push({
+            t: tMs,
+            type: 'ML_ERROR',
+            message: `speed model disabled: ${this.mlFailure}`,
+          });
+          this.lastMlSpeedMps = Number.NaN;
+          this.mlSmoother.reset();
+          return undefined;
+        }
+        this.mlInferenceCount++;
+        this.mlLastLatencyMs = this.speedPredictor.lastLatencyMs ?? Number.NaN;
+        if (Number.isFinite(raw)) {
+          // Clamp before smoothing: one wild prediction should not pollute the
+          // next five samples through the moving average.
+          const clamped = Math.max(0, Math.min(this.config.maxSpeedMps, raw));
+          this.mlSmoother.push(clamped);
+          this.lastMlSpeedMps = this.mlSmoother.value;
+        }
+      }
+    }
+    return Number.isFinite(this.lastMlSpeedMps) ? this.lastMlSpeedMps : undefined;
+  }
+
+  /**
    * Confidence in the current estimate, 0..1.
    *
    * Extracted so road snapping and the emitted state cannot disagree: snap
@@ -933,6 +1104,14 @@ export class NavigationEngine {
     this.headingSigmaRad = 0;
     this.measuredRateHz = 0;
     this.forwardAccelDc = 0;
+    this.mlBuffer.reset();
+    this.mlSmoother.reset();
+    this.lastMlInferenceT = null;
+    this.lastMlSpeedMps = Number.NaN;
+    this.mlInferenceCount = 0;
+    this.mlLastLatencyMs = Number.NaN;
+    this.mlFailure = null;
+    this.speedSource = 'NONE';
     this.hasAccelDc = false;
     this.estimatedDriftM = 0;
     this.lastState = null;

@@ -11,6 +11,8 @@ export type NavEventType =
   | 'RECOVERY_COMPLETE'
   | 'POSITION_RESET'
   | 'ROAD_MATCH'
+  /** The speed model threw and was disabled. Never silent. */
+  | 'ML_ERROR'
   | 'WARNING';
 
 export interface NavEvent {

@@ -50,6 +50,11 @@ export interface PropagateOptions {
   lateralAccelMps2?: number;
   /** Stationarity verdict from the detector. Drives ZUPT. */
   isStationary?: boolean;
+  /**
+   * Speed from the ML model, m/s, when it is loaded and confident.
+   * Ranks below GNSS Doppler and above unaided integration — see propagate().
+   */
+  mlSpeedMps?: number;
   /** Matched road's speed limit, m/s, when road snapping has a match. */
   roadMaxSpeedMps?: number;
 }
@@ -290,14 +295,27 @@ export class DeadReckoningEngine {
       vN = gnssSpeedMps * fN;
       this.lastTrustedSpeed = gnssSpeedMps;
       this.state.unaidedMs = 0;
+    } else if (opts.mlSpeedMps !== undefined && Number.isFinite(opts.mlSpeedMps)) {
+      // 2. ★ THE ML SPEED MODEL (Phase 8). ★
+      //    An IO-VNBD-trained CNN reading two seconds of IMU. It ranks below
+      //    GNSS Doppler, which is measured rather than inferred, and above
+      //    integration, which has no speed reference at all and therefore no
+      //    bound on its error.
+      //
+      //    It anchors the velocity vector exactly as a Doppler fix does, but it
+      //    does NOT reset unaidedMs: the coasting decay exists because an
+      //    unaided estimate must not be asserted forever, and a model whose
+      //    held-out MAE is 2.9 m/s is not the truth that earns a reset.
+      vE = opts.mlSpeedMps * fE;
+      vN = opts.mlSpeedMps * fN;
+      this.state.unaidedMs += dtMs;
     } else {
-      // 2. Integrate acceleration onto the existing velocity vector.
-      //    (Phase 8 inserts the ML speed model above this fallback.)
+      // 3. Integrate acceleration onto the existing velocity vector.
       vE = this.state.velocityEnu.e + (accel * fE + lateral * rE) * dt;
       vN = this.state.velocityEnu.n + (accel * fN + lateral * rN) * dt;
       this.state.unaidedMs += dtMs;
 
-      // 3. Bleed off a speed that integration can no longer justify. See the
+      // 4. Bleed off a speed that integration can no longer justify. See the
       //    long note on coastingDecay — an accelerometer cannot tell a parked
       //    car from one cruising at a steady 50 km/h, so an unaided estimate
       //    must not be asserted indefinitely.
