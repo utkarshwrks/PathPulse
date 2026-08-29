@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { appendTrailPoint, type TrailPoint } from '@pathpulse/nav-core';
 import { FOLLOW_ZOOM, resolveMapStyle } from '@/config/map';
+import { resolveShownPosition, shouldJumpCamera } from '@/lib/shownPosition';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { useNavigationEngine } from '@/hooks/useNavigationEngine';
 import { useSensorSource, type RouteKey, type SourceKind } from '@/hooks/useSensorSource';
@@ -46,6 +47,11 @@ export default function Home() {
 
   const navState = nav.state;
 
+  // Which position to draw, and whether it is a navigation solution or a raw
+  // fix. See lib/shownPosition.ts — this was the "Live does not find me" bug.
+  const shownPosition = resolveShownPosition(navState, nav.lastGnss?.gnss);
+  const hasPosition = shownPosition !== null;
+
   useEffect(() => {
     if (!navState) return;
     // ★ NOTHING TO DRAW UNTIL THERE IS A REAL POSITION ★
@@ -69,21 +75,32 @@ export default function Home() {
   useEffect(() => {
     setTrail([]);
     nav.reset();
+    // ★ RE-ENGAGE THE CAMERA WHEN THE SOURCE CHANGES. ★
+    // Any pan, zoom or rotate sets `following` false and it stays false until
+    // the user finds the recentre button. Explore the map during a simulation —
+    // which is the natural thing to do — then switch to Live, and the camera
+    // stays put no matter how good the fix is. Choosing a source is an explicit
+    // "show me this" and has to override a stale manual pan.
+    setFollowing(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, routeKey]);
 
   useEffect(() => {
-    if (!navState || !following) return;
-    if (navState.mode === 'INITIALIZING') return;
-    if (navState.position.lat === 0 && navState.position.lon === 0) return;
+    if (!following || !shownPosition) return;
+    if (shownPosition.lat === 0 && shownPosition.lon === 0) return;
     const map = mapRef.current;
     if (!map) return;
+    // The first fix is a jump, not a glide: easing 800 km from the default
+    // centre would spend seconds flying over India. Once we are actually near
+    // the vehicle, ease so the marker does not appear to teleport.
+    const c = map.getCenter();
+    const jump = shouldJumpCamera({ lat: c.lat, lon: c.lng }, shownPosition);
     map.easeTo({
-      center: [navState.position.lon, navState.position.lat],
+      center: [shownPosition.lon, shownPosition.lat],
       zoom: Math.max(map.getZoom(), FOLLOW_ZOOM),
-      duration: 400,
+      duration: jump ? 0 : 400,
     });
-  }, [navState, following]);
+  }, [shownPosition, following]);
 
   const handleReady = useCallback((map: MapLibreMap) => {
     mapRef.current = map;
@@ -101,7 +118,6 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }, [nav]);
 
-  const hasPosition = navState !== null && navState.mode !== 'INITIALIZING';
 
   return (
     <main className="relative h-full w-full overflow-hidden">
@@ -109,11 +125,11 @@ export default function Home() {
         <TrailLayer trail={trail} />
         {hasPosition ? (
           <VehicleMarker
-            lat={navState!.position.lat}
-            lon={navState!.position.lon}
-            headingDeg={navState!.headingDeg}
-            mode={navState!.mode}
-            accuracyM={navState!.covariance.alongM}
+            lat={shownPosition!.lat}
+            lon={shownPosition!.lon}
+            headingDeg={navState?.headingDeg ?? 0}
+            mode={navState?.mode ?? 'INITIALIZING'}
+            accuracyM={shownPosition!.accuracyM}
           />
         ) : null}
       </MapView>
@@ -195,6 +211,7 @@ export default function Home() {
           source.reset();
           nav.reset();
           setTrail([]);
+          setFollowing(true);
         }}
         onSpeed={source.setSpeed}
         onOutage={() => source.triggerOutage(60_000)}
