@@ -199,6 +199,8 @@ export class NavigationEngine {
   private lastSampleT: number | null = null;
   private lastGnssT: number | null = null;
   private lastGnssEnu: EnuPoint | null = null;
+  /** Accuracy of the most recent fix of any quality. Explains ACQUIRING. */
+  private lastFixAccuracyM: number | null = null;
   /** Last time a trusted fix reported meaningful speed. Gates ZUPT. */
   private lastMovingGnssT: number | null = null;
   /** Previous trusted fix, used to derive speed and heading when absent. */
@@ -325,6 +327,8 @@ export class NavigationEngine {
     mlLatencyMs: number;
     /** Why the model was disabled, if it was. Surfaced in the debug panel. */
     mlError: string | null;
+    /** Why we are still ACQUIRING, or null once navigating. */
+    acquiringReason: string | null;
     speedSource: SpeedSource;
   } {
     return {
@@ -348,6 +352,7 @@ export class NavigationEngine {
       mlInferences: this.mlInferenceCount,
       mlLatencyMs: this.mlLastLatencyMs,
       mlError: this.mlFailure,
+      acquiringReason: this.stateMachine.acquiringReason(this.lastFixAccuracyM),
       speedSource: this.speedSource,
     };
   }
@@ -621,6 +626,10 @@ export class NavigationEngine {
         }
       }
       this.lastTrustedFixForDerivation = { t: sample.t, enu: gnssEnu };
+    }
+
+    if (sample.gnss && Number.isFinite(sample.gnss.accuracyM)) {
+      this.lastFixAccuracyM = sample.gnss.accuracyM;
     }
 
     if (sample.gnss && gnssEnu) {
@@ -1091,6 +1100,7 @@ export class NavigationEngine {
     this.lastSampleT = null;
     this.lastGnssT = null;
     this.lastGnssEnu = null;
+    this.lastFixAccuracyM = null;
     this.lastMovingGnssT = null;
     this.lastTrustedFixForDerivation = null;
     this.roadIndex = null;

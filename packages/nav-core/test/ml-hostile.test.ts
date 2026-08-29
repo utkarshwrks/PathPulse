@@ -459,3 +459,42 @@ describe('NavigationEngine survives a hostile predictor', () => {
     expect(e.diagnostics.mlInferences).toBeGreaterThan(0);
   });
 });
+
+// ── 6. The engine must say WHY it is still acquiring ────────────────────────
+
+describe('acquiringReason — the "nothing happens indoors" diagnosis', () => {
+  function poorFixes(accuracyM: number) {
+    const e = new NavigationEngine();
+    for (let t = 0; t < 12_000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) s.gnss = { lat: 23.16, lon: 79.93, accuracyM };
+      e.update(s);
+    }
+    return e;
+  }
+
+  it('explains an indoor fix that will never clear the gate', () => {
+    const e = poorFixes(47);
+    expect(e.diagnostics.acquiringReason).toMatch(/47 m/);
+    expect(e.diagnostics.acquiringReason).toMatch(/20 m or better/);
+  });
+
+  it('confirms the machine really is stuck — no DR without GNSS first', () => {
+    // This is the behaviour the field test hit: cutting GPS from INITIALIZING
+    // does nothing, because DEAD_RECKONING is only reachable through GNSS.
+    const e = poorFixes(47);
+    for (let t = 12_000; t < 30_000; t += 20) e.update(sample(t)); // GPS "off"
+    expect(e.diagnostics.acquiringReason).not.toBeNull();
+  });
+
+  it('says so before any fix has arrived at all', () => {
+    const e = new NavigationEngine();
+    for (let t = 0; t < 3000; t += 20) e.update(sample(t));
+    expect(e.diagnostics.acquiringReason).toMatch(/waiting for the first fix/);
+  });
+
+  it('goes quiet the moment the engine is actually navigating', () => {
+    const e = poorFixes(5);
+    expect(e.diagnostics.acquiringReason).toBeNull();
+  });
+})

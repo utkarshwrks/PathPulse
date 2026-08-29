@@ -56,6 +56,8 @@ export interface EngineDiagnostics {
   mlLatencyMs: number;
   /** Why the model was disabled, if it was. Never leave this off screen. */
   mlError: string | null;
+  /** Why we are still ACQUIRING, or null once navigating. */
+  acquiringReason: string | null;
   speedSource: SpeedSource;
 }
 
@@ -83,6 +85,7 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   mlInferences: 0,
   mlLatencyMs: NaN,
   mlError: null,
+  acquiringReason: null,
   speedSource: 'NONE',
 };
 

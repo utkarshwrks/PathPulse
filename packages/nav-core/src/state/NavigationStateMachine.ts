@@ -246,6 +246,30 @@ export class NavigationStateMachine {
     return this.mode;
   }
 
+  /**
+   * Why INITIALIZING has not been left yet, in plain words, or null once it has.
+   *
+   * ★ THE ENGINE KNEW AND WOULD NOT SAY. ★
+   * INITIALIZING has exactly one exit: two consecutive fixes at or under
+   * `goodAccuracyM`. Indoors, accuracy is 20-100 m, so the counter never
+   * reaches two and the badge sits on ACQUIRING indefinitely — and because
+   * DEAD_RECKONING is only reachable via GNSS, switching GPS off does nothing
+   * either. That is correct: dead reckoning seeded from a 60 m fix builds every
+   * later metre on the wrong starting point.
+   *
+   * But "correct and silent" cost a real field session to diagnose. The gate is
+   * a number the engine already has; refusing to show it is the only bug here.
+   */
+  acquiringReason(lastAccuracyM: number | null): string | null {
+    if (this.mode !== 'INITIALIZING') return null;
+    const need = this.config.fixesToInitialise;
+    if (lastAccuracyM === null) return 'waiting for the first fix';
+    if (lastAccuracyM > this.config.goodAccuracyM) {
+      return `accuracy ${lastAccuracyM.toFixed(0)} m, need ${this.config.goodAccuracyM} m or better (indoors this may never clear)`;
+    }
+    return `${this.consecutiveGoodFixes}/${need} consecutive good fixes`;
+  }
+
   private isGoodFix(fix: FixQuality): boolean {
     if (!fix.hasFix) return false;
     if (fix.accuracyM === undefined) return false;

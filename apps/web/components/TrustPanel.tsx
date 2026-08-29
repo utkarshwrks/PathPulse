@@ -195,6 +195,16 @@ function SensorsTab({
           k="SPEED"
           v={gnss?.speedMps != null ? `${gnss.speedMps.toFixed(1)} m/s` : 'not reported'}
         />
+        {/*
+          ★ SAY WHY WE ARE STILL ACQUIRING. ★
+          INITIALIZING has one exit: two consecutive fixes at 20 m or better.
+          Indoors that may never clear, and because DEAD_RECKONING is only
+          reachable through GNSS, switching GPS off then does nothing either.
+          The engine knew the reason all along and used to keep it to itself.
+        */}
+        {diagnostics.acquiringReason ? (
+          <Row k="ACQUIRING" v={diagnostics.acquiringReason} warn />
+        ) : null}
         <Row k="SATELLITES" v={gnss?.satCount != null ? String(gnss.satCount) : 'n/a'} />
         <Row k="MEAN C/N0" v={gnss?.meanCn0 != null ? `${gnss.meanCn0.toFixed(1)} dB-Hz` : 'n/a'} />
       </Group>

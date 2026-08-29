@@ -45,6 +45,7 @@ const DIAGNOSTICS: EngineDiagnostics = {
   mlInferences: 40,
   mlLatencyMs: 8.2,
   mlError: null,
+  acquiringReason: null,
   speedSource: 'ML' as const,
 };
 
