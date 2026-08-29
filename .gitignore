@@ -42,6 +42,9 @@ ml/data/raw/
 ml/checkpoints/
 *.pth
 *.onnx
+# ...but the Phase 8 speed model is 35 KB and is the interoperable artefact
+# ml/README.md points at, so it is worth having in the repository.
+!ml/export/*.onnx
 *.tflite
 
 # large map data (regenerate with scripts/build-road-graph.mjs)

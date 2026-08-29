@@ -1,0 +1,14 @@
+.venv/
+data/raw/
+data/processed/
+data/categories.json
+__pycache__/
+
+# Staging copies. The canonical ones live where they are consumed:
+#   speed_model.json / scaler.json -> apps/web/public/models/  (the app loads these)
+#   probes.json                    -> packages/nav-core/test/  (the test reads this)
+# Committing both halves would be 420 KB of the same bytes twice, and the day
+# they diverge nobody would know which one was real.
+export/speed_model.json
+export/scaler.json
+export/probes.json

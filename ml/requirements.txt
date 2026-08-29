@@ -1,0 +1,9 @@
+# PathPulse ML — IO-VNBD speed model (Phase 8)
+# Pinned to what was actually used for the committed results, on Python 3.14.
+torch==2.13.0
+numpy==2.5.2
+scikit-learn==1.9.0
+matplotlib==3.11.1
+onnx==1.22.0
+onnxruntime==1.29.0
+onnxscript==0.7.1

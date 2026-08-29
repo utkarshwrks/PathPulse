@@ -1,0 +1,17 @@
+{
+  "name": "full_ml",
+  "description": "Everything that ships, plus the IO-VNBD speed model. NOT in the published ablation — see ml/check_sim_transfer.py for why: the logs are simulated and the model does not transfer to synthetic IMU.",
+  "engine": {
+    "medianFilter": true,
+    "lowPass": true,
+    "nhc": true,
+    "zupt": true,
+    "zaru": true,
+    "speedClamp": true,
+    "forwardBias": false,
+    "accelHighPass": true,
+    "adaptiveTimeout": true,
+    "roadSnap": true,
+    "useMlSpeed": true
+  }
+}

@@ -1,7 +1,264 @@
-# ML — IO-VNBD speed model
+# ML — IO-VNBD speed model (Phase 8)
 
-Built in Phase 8. Trains a small 1D-CNN to regress vehicle speed from a
-2-second IMU window, and produces the **position plot** ISRO requires as a
-screening artefact for the proposal.
+A 1D-CNN that reads two seconds of a phone's accelerometer and gyroscope and
+answers with the vehicle's speed. It exists because dead reckoning's hardest
+problem is not direction, it is **speed**: an accelerometer cannot tell a parked
+car from one cruising at a steady 50 km/h, so integrating it during a GNSS
+outage has no reference and no bound on its error.
 
-Exports to ONNX/TFLite (<100 KB) for on-device inference. No cloud API.
+The problem statement requires this work as a screening artefact:
+
+> "Teams are required to include the preliminary AI models and the results of
+> the position plot inferenced from the subset of IO-VNBD dataset as part of
+> their proposals submitted for evaluation."
+
+**The artefact is [`results/position_plot.png`](results/position_plot.png).**
+
+## Reproduce
+
+```bash
+./ml/run_all.sh          # venv, download, preprocess, train, evaluate, export
+```
+
+Everything is seeded (`config.py: SEED = 1337`). Network is needed only for the
+download step. Total runtime is a few minutes on an M-series Mac; training is
+about 60 s on MPS.
+
+## The dataset
+
+[IO-VNBD](https://github.com/onyekpeu/IO-VNBD) — a UK/Nigeria/France ground
+vehicle dataset. Each sequence is a **matched, row-synchronised pair**:
+
+| file | what it is | our use |
+| --- | --- | --- |
+| `S-<seq>.csv` | the **smartphone**: accelerometer m/s², gyroscope rad/s, GPS | the **input** |
+| `V-<seq>.csv` | the **vehicle** CAN bus: wheel speed, yaw rate, steering, gears | the **label** |
+
+That pairing is why this dataset fits PathPulse exactly. The input is a phone's
+IMU — the sensor we actually deploy on — and the label is the car's own
+**wheel-speed sensor**, not GPS. Using GPS speed as the label would mean
+training against a teacher that goes silent in precisely the situation the model
+exists to serve. Wheel odometry does not.
+
+The files live in Git LFS, so `raw.githubusercontent` serves 132-byte pointers.
+`data/download.py` resolves them through the LFS batch API and fetches only the
+sequences asked for, rather than cloning 40 hours of driving.
+
+**27 sequences, 15.6 hours, 10 Hz.**
+
+## Deviations from the build guide, and why
+
+| guide says | we did | why |
+| --- | --- | --- |
+| resample to 50 Hz, 100-sample window | **10 Hz, 20-sample window** | IO-VNBD's phone log *is* 10 Hz. Upsampling would make 80 of every 100 samples interpolation — no information above 5 Hz exists to recover. The window is still 2 s, which is what matters, and the app decimates to match. |
+| Conv/pool stack unpadded | same layers, `padding='same'` | Two unpadded pools on 20 samples leave 2 timesteps before a kernel of 3. It would not run. |
+| 36 statistical features | **42** | The guide lists seven statistics across six axes. 7 × 6 = 42; the list won over the arithmetic. |
+| export ONNX **and** TFLite | **ONNX + a pure-TS runtime** | ONNX Runtime needs 14 MB of WASM to evaluate 26081 parameters — the APK would go from 5.4 MB to ~20 MB — and it fails Next's Terser pass. nav-core evaluates the network itself instead. ONNX is still exported and verified; it is the interoperable artefact and the reference the TypeScript is tested against. TensorFlow has no Python 3.14 wheel, so no TFLite. |
+
+## Pipeline
+
+```
+data/download.py      LFS-aware fetch of the subset
+data/preprocess.py    windows, augmentation, sequence-wise split, scaler
+models/speed_cnn.py   the CNN (26081 params) + a ridge baseline
+train.py              Huber + Adam + cosine, early stopping
+evaluate_position.py  ★ the position plot
+export.py             ONNX + int8, verified against PyTorch
+check_sim_transfer.py why there is no full_ml ablation row
+```
+
+### Splits are sequence-wise, never random
+
+Windows overlap by 50 %, so a random split puts near-duplicate windows in train
+and test and reports memorisation as generalisation. Test holds **Vw02** and
+**S1**, entire sequences never seen in training.
+
+What that proves: generalisation to a **new journey**. What it does *not* prove:
+generalisation to a new vehicle or a new phone — other sessions by the same two
+drivers are in the training set, and the dataset has only two drivers with
+enough data to build a disjoint split.
+
+### Two data problems, both found and handled
+
+- **`Vw01` is 34 minutes of a car idling.** Engine at 880 rpm, wheel speed
+  exactly zero for all 20475 rows. Not corrupt, just useless for regression —
+  and at 24 % of the original training set it taught the model to answer "zero".
+  There is now a **degenerate-sequence guard** in `preprocess.py` that refuses
+  any sequence whose label standard deviation is under 0.5 m/s, loudly.
+- **`Vtb01` has 5456 rows whose timestamp does not advance.** The logger
+  duplicated them. Left in, that is 17 % of the sequence teaching the model that
+  vehicles periodically freeze. Dropped, and counted in the preprocessing
+  output rather than silently.
+
+### Augmentation targets the domain gap
+
+IO-VNBD's phone sat in one position in one car; ours will be in a cradle, a
+holder or a pocket, in any car. So: **random mounting rotation** (accelerometer
+and gyroscope taking the *same* rotation, since they share a frame), extra
+Gaussian noise, constant bias injection, and engine vibration.
+
+The rotation is limited to **any yaw but ±30° of pitch and roll**, and that
+limit is load-bearing: with uniform random SO(3) rotation the model measured
+**6.01 m/s** test MAE, with realistic mounting **4.26 m/s** on an otherwise
+identical run. Gravity is the one absolute reference in a window, and a
+uniform rotation — which puts the phone upside-down as often as upright —
+destroys it while posing a harder problem than reality ever will.
+
+## Results
+
+Held out: `Vw02` and `S1`, 10443 windows, never trained on.
+
+| model | MAE | RMSE | R² |
+| --- | --- | --- | --- |
+| constant (training mean) | 7.24 m/s | 8.46 | −0.00 |
+| ridge, 42 statistics | 4.29 m/s | 5.28 | 0.61 |
+| **SpeedCNN (26081 params)** | **2.93 m/s** | **3.91** | **0.79** |
+
+The deep model earns its place — it beats the linear baseline by 32 % — and both
+comfortably beat answering with the mean.
+
+**2.93 m/s is 10.5 km/h, and the guide's bar is "under 2 m/s is good".** We do
+not meet it, and the reason is physical rather than a tuning failure: the signal
+that encodes absolute speed is tyre and road vibration, most of which lives
+above the 5 Hz Nyquist limit of a 10 Hz recording. An in-sequence upper bound —
+training and testing on the same routes, which leaks route identity and is
+therefore optimistic — reaches only 2.50 m/s. That is the ceiling this data
+supports, not the ceiling of the method.
+
+### The position plot
+
+![position plot](results/position_plot.png)
+
+Scored over **outage windows of realistic length**, not the whole drive. The
+first version of `evaluate_position.py` integrated an entire 88-minute sequence
+and reported 131 % drift for the CNN, for ridge, and for *perfect ground-truth
+speed* alike. That last figure is the tell: with zero speed error the trajectory
+was still 131 km out, because heading was integrating for 5280 s and a yaw-rate
+bias of 0.001 rad/s becomes 300° over that time. The plot was measuring heading
+divergence and labelling it a speed result.
+
+Dead reckoning is for tunnels and underpasses — 30 s to 5 minutes. So the script
+samples outage windows across the sequence, re-anchors at the start of each
+exactly as the engine does when GNSS drops, and reports the distribution:
+
+| outage | truth speed (DR floor) | **CNN** | ridge | constant |
+| --- | --- | --- | --- | --- |
+| 30 s | 2.2 % | **17.6 %** | 24.9 % | 45.5 % |
+| 60 s | 4.4 % | **17.6 %** | 28.5 % | 49.9 % |
+| 120 s | 7.7 % | **16.1 %** | 22.7 % | 41.6 % |
+| 300 s | 14.4 % | **17.9 %** | 22.9 % | 38.7 % |
+
+Mean drift over 83–87 windows per duration. Two things worth reading off it:
+
+1. The CNN beats both baselines at every duration.
+2. At 300 s the CNN (17.9 %) is close to the floor achievable with *perfect*
+   speed (14.4 %) — past a few minutes, heading error dominates and a better
+   speed model stops buying much. That is an argument for Phase 11's ESKF and
+   Phase 17's turn relocalisation, not for a bigger network.
+
+**Heading in that table comes from the car's yaw sensor, identically for the
+reference and for every estimate**, so the speed model is the only thing that
+differs between the curves. IO-VNBD's smartphone gyroscope tracks vehicle
+heading in `S1` and `S3c` and in essentially none of the other 23 sequences
+(|r| < 0.15 against GPS-derived heading rate), under no axis convention that
+explains the difference — and its `GRAVITY` columns are the constant
+`[0, 0, 9.81]` rather than a measurement, so the gravity projection nav-core
+uses cannot be reconstructed from it. The phone-gyro yaw path is real and is
+what runs on the handset; it is tested in
+`packages/nav-core/test/attitude.test.ts`, not here.
+
+## Export
+
+`export.py` writes ONNX, quantises to int8, and **verifies both against
+PyTorch** on 512 real windows.
+
+| | size | max deviation from PyTorch |
+| --- | --- | --- |
+| float32 | 103.2 KB | 7.6 × 10⁻⁶ m/s |
+| int8 | 35.2 KB | 0.588 m/s max, 0.088 mean |
+
+Against a model whose own error is 2.93 m/s, an 0.088 m/s quantisation cost is
+free.
+
+**But the app does not load either of them.** ONNX Runtime costs 14 MB of
+WebAssembly to evaluate a 26081-parameter model; that alone would take the APK
+from 5.4 MB to roughly 20 MB, and `onnxruntime-web` additionally breaks Next's
+Terser pass. Three convolutions and two dense layers do not need a
+general-purpose graph runtime.
+
+So `export.py` also writes **`speed_model.json`** — the same weights with
+BatchNorm folded into the preceding convolutions, base64 float32, **138 KB** —
+and `packages/nav-core/src/ml/cnn.ts` evaluates the network in about 150 lines
+of pure TypeScript. **That JSON plus `scaler.json` is 135.8 KB, which exceeds
+the guide's 100 KB budget** — 26081 float32 weights are 104 KB before any
+encoding, so the target is unreachable at this parameter count without
+quantising the shipped weights as well. `export.py` measures and reports the
+file the app actually opens rather than the 35 KB ONNX it does not. That keeps it inside nav-core, which means the Phase 16 edge
+engine and the eval harness get inference with no new dependency: the purity
+rule paying off again.
+
+`packages/nav-core/test/cnn.test.ts` runs the TypeScript against **probe vectors
+captured from PyTorch** and requires agreement to 1e-3 m/s, so the
+reimplementation cannot drift from the trained model unnoticed. `scaler.json`
+ships too — **normalisation travels with the weights**, because feeding a
+network a distribution it never saw fails silently rather than loudly.
+
+The ONNX files stay in `ml/export/` as the interoperable artefact. They are not
+copied into the APK: 36 KB of payload nothing opens is exactly the dead weight
+this project's rules say not to ship.
+
+Two export details that cost real time and are pinned in code:
+
+- The **legacy TorchScript exporter** is used deliberately (`dynamo=False`).
+  torch 2.13's dynamo path writes weights to a sibling `.onnx.data` and leaves a
+  27 KB graph that *looks* like the whole model — shipping just the `.onnx`
+  gives a model with no weights, and a size check that reports 27 KB against a
+  100 KB budget when the truth is 130 KB.
+- Every quantisation path over the dynamo graph fails with
+  `[ShapeInferenceError] ... (64) vs (32)`. The legacy graph quantises first try.
+
+## Why there is no `full_ml` row in `docs/benchmarks.md`
+
+`configs/full_ml.json` exists and the `useMlSpeed` flag is live and toggleable in
+the app. But the ablation harness replays `data/replay/sim_*.jsonl`, which our
+own physics model generated, and the model does not transfer to synthetic IMU:
+
+```
+$ python ml/check_sim_transfer.py
+  log                     n    truth  predicted      MAE    corr
+  sim_city_1337         178   34.2 km/h      6.1 km/h   8.02 m/s  +0.209
+  sim_highway_1337      132   81.3 km/h      6.8 km/h  20.69 m/s  +0.013
+```
+
+It answers roughly 6 km/h whether the simulated vehicle is doing 34 or 81,
+because the simulator's vibration is a single 20 Hz sine plus Gaussian noise and
+the model keys on a road and tyre spectrum that is not in there. A drift number
+from that would measure the simulator, not the model — so it is not published.
+The model's honest evaluation is the position plot above, on real held-out
+sequences. Re-run `check_sim_transfer.py` after any change to the simulator's
+IMU synthesis; if it ever comes good, the row can be added.
+
+## On device
+
+`apps/web/lib/ml/speedModel.ts` fetches `speed_model.json` and hands it to
+nav-core's `CnnSpeedPredictor`. It runs entirely on the handset — the weights are
+bundled into the APK, and nothing leaves the device.
+
+- Inference every **500 ms**, not every sample: windows advance by 1 s, so more
+  often would spend energy recomputing a nearly identical input.
+- Inference is **synchronous and takes microseconds** — a test pins it under
+  5 ms per call against the guide's 20 ms budget — so `predict()` really does
+  answer from the window it was handed. An ONNX session would have had to
+  return the previous result instead, because its web API is async.
+- Predictions are smoothed over five (`SpeedSmoother`). Measured: 3.65 m/s raw,
+  **3.32 m/s smoothed** on the held-out sequence.
+- The engine's speed priority is **GNSS Doppler → ML → integration**. The model
+  never displaces a real measurement, and it does not reset `unaidedMs` — a
+  2.9 m/s estimate is not the truth that earns the coasting decay a reset.
+- A failed load leaves the app running on integrated speed with the reason
+  printed in the debug panel. It is never fatal.
+
+The HUD tags the speed `[GNSS]`, `[ML]` or `[INTEGRATED]` so the source is
+visible rather than asserted, and the SENSORS tab shows the model's live
+prediction against GNSS actual — while satellites are up, the error is
+measurable on screen in real time.
