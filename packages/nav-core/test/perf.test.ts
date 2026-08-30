@@ -5,8 +5,10 @@ import {
   buildTrailSegments,
   DEFAULT_TRAIL_OPTIONS,
   findRoadMatch,
+  NavigationEngine,
   RoadIndex,
   type RoadGraph,
+  type SensorSample,
   type TrailPoint,
 } from '../src/index.js';
 
@@ -96,4 +98,88 @@ describe('the trail stays inside its budget at the larger cap', () => {
     // The UI budget is 100 ms per frame at 10 Hz. Measured around 0.3 ms.
     expect(perFrameMs).toBeLessThan(20);
   });
+});
+
+describe('the engine sustains its rate with every Phase 9 feature running', () => {
+  /**
+   * ★ NOBODY MEASURED WHAT PHASE 9 COST THE HOT PATH ★
+   * Phase 9 added three things that run on every single sample: the turn
+   * detector, the GNSS anomaly detector, and the covariance growth behind the
+   * confidence ellipse. Each is cheap on its own and none has a test that says
+   * so. The problem statement requires 10 Hz output from a 50 Hz input on a
+   * phone several times slower than this machine — so "cheap" needs a number.
+   *
+   * Bounds are loose, as elsewhere in this file: this catches an algorithmic
+   * regression, not machine-to-machine variation.
+   */
+  function drive(seconds: number, hz: number): SensorSample[] {
+    const dtMs = 1000 / hz;
+    const out: SensorSample[] = [];
+    let nextGnssMs = 0;
+    for (let t = 0; t <= seconds * 1000; t += dtMs) {
+      const phase = (t / 1000) * 2 * Math.PI * 20;
+      const turning = Math.floor(t / 20_000) % 2 === 1;
+      const s: SensorSample = {
+        t,
+        imu: {
+          ax: 0.8 * Math.sin(phase),
+          ay: 0.8 * Math.sin(phase * 1.31),
+          az: 9.80665 + 0.8 * Math.sin(phase * 0.77),
+          gx: 0,
+          gy: 0,
+          // Alternate straight stretches and turns so the turn detector is
+          // actually working rather than short-circuiting on a constant.
+          gz: turning ? -0.35 : 0,
+        },
+      };
+      if (t >= nextGnssMs) {
+        nextGnssMs += 1000;
+        s.gnss = {
+          lat: 23.1815 + (14 * (t / 1000)) / 111_320,
+          lon: 79.9864,
+          accuracyM: 4,
+          speedMps: 14,
+          headingDeg: 0,
+          satCount: 9,
+          meanCn0: 38,
+        };
+      }
+      out.push(s);
+    }
+    return out;
+  }
+
+  it('processes a 50 Hz stream far inside real time', () => {
+    const samples = drive(120, 50);
+    const engine = new NavigationEngine();
+    const t0 = performance.now();
+    for (const s of samples) engine.update(s);
+    const elapsedMs = performance.now() - t0;
+    const perSampleMs = elapsedMs / samples.length;
+
+    // 50 Hz means a 20 ms budget per sample. Measured well under 0.05 ms on a
+    // dev laptop; 2 ms still leaves a phone an order of magnitude of headroom.
+    expect(perSampleMs).toBeLessThan(2);
+    // And the whole two-minute drive must process in far less than two minutes.
+    expect(elapsedMs).toBeLessThan(10_000);
+  }, 60_000);
+
+  it('does not slow down as the session grows', () => {
+    // Anything accumulating per-sample — an unbounded buffer, a growing event
+    // log — shows up as the second half costing more than the first.
+    const samples = drive(200, 50);
+    const engine = new NavigationEngine();
+    const half = Math.floor(samples.length / 2);
+
+    const t0 = performance.now();
+    for (let i = 0; i < half; i++) engine.update(samples[i]!);
+    const firstMs = performance.now() - t0;
+
+    const t1 = performance.now();
+    for (let i = half; i < samples.length; i++) engine.update(samples[i]!);
+    const secondMs = performance.now() - t1;
+
+    // Generous: catches linear growth, not jitter.
+    expect(secondMs).toBeLessThan(firstMs * 3 + 50);
+  }, 60_000);
 });

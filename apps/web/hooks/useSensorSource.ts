@@ -7,6 +7,7 @@ import {
   HIGHWAY_VEHICLE,
   NativeSource,
   RecordingWrapper,
+  ReplaySource,
   SimulationSource,
   WebSource,
   type RouteGeoJson,
@@ -16,7 +17,16 @@ import cityRoute from '../../../data/routes/route_city.json';
 import highwayRoute from '../../../data/routes/route_highway.json';
 import type { GnssFix } from './useGeolocation';
 
-export type SourceKind = 'simulation' | 'live';
+/**
+ * `replay` is the demo-day backup.
+ *
+ * The simulator is deterministic, which makes it a fine demo and a poor
+ * backup: a backup has to survive the thing it is backing up. `demo.jsonl` is
+ * a flat file of recorded numbers with the outage already deleted from it, so
+ * none of the vehicle model, the route parser or the simulation pipeline has
+ * to work for it to play. Built by scripts/make-demo-log.mjs.
+ */
+export type SourceKind = 'simulation' | 'live' | 'replay';
 export type RouteKey = 'city' | 'highway';
 
 // JSON imports widen `type: "Feature"` to `string`, so the literal types no
@@ -174,6 +184,35 @@ export function useSensorSource(
         isRunning: false,
         progress: 0,
       }));
+    } else if (kind === 'replay') {
+      let cancelled = false;
+      setState((p) => ({
+        ...p,
+        fix: null,
+        mode: 'INITIALIZING',
+        sourceName: 'Replay — loading…',
+        isRunning: false,
+        progress: 0,
+      }));
+      fetch('replay/demo.jsonl')
+        .then((r) => (r.ok ? r.text() : Promise.reject(new Error('missing'))))
+        .then((text) => {
+          if (cancelled) return;
+          const src = ReplaySource.fromJsonl(text, 'Demo replay');
+          src.onSample(handleSample);
+          webRef.current = src;
+          setState((p) => ({ ...p, sourceName: src.capabilities.name }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // Say so rather than sitting on "loading" for ever: the backup
+          // failing is exactly when someone needs to know quickly.
+          setState((p) => ({ ...p, sourceName: 'Replay — demo.jsonl missing' }));
+        });
+      return () => {
+        cancelled = true;
+        webRef.current?.stop();
+      };
     } else {
       let cancelled = false;
       void NativeSource.isAvailable().then((native) => {

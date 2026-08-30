@@ -68,7 +68,16 @@ export default function SourcePanel(props: SourcePanelProps) {
       >
         <option value="simulation">Simulation</option>
         <option value="live">Live browser sensors</option>
+        <option value="replay">Replay — demo.jsonl (backup)</option>
       </select>
+
+      {props.kind === 'replay' ? (
+        <p className="mb-2 rounded bg-sky-500/10 px-2 py-1.5 text-[10px] leading-snug text-sky-300">
+          Recorded log with the outage already in it — press play and the whole
+          sequence runs with nothing else to trigger. Announce it as a replay:
+          it is one, and saying so first is what keeps the rest credible.
+        </p>
+      ) : null}
 
       {props.kind === 'simulation' ? (
         <>

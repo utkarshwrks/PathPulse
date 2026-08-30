@@ -17,7 +17,9 @@
     "cap:sync": "pnpm --filter @pathpulse/web cap:sync",
     "eval": "pnpm --filter @pathpulse/eval eval",
     "ablation": "pnpm --filter @pathpulse/eval ablation",
-    "eval:record": "pnpm --filter @pathpulse/eval record"
+    "eval:record": "pnpm --filter @pathpulse/eval record",
+    "demo:log": "node scripts/make-demo-log.mjs",
+    "demo:brief": "node scripts/make-offline-brief.mjs"
   },
   "packageManager": "pnpm@10.11.0",
   "engines": {

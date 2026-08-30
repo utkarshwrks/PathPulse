@@ -15,7 +15,7 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phases 0-9 complete.** The dot
+**Phases 0-10 complete.** The dot
 survives a GNSS outage under an uncertainty ellipse that shows how wrong it
 might be, and the six defects a real-phone field test exposed on 2026-08-27 are
 fixed.

@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PathPulse — SIH26168 — measured results</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0a0e14; color:#e5e7eb;
+         font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 60rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  h1 { font-size:1.6rem; margin:0 0 .25rem; }
+  h2 { font-size:1rem; margin:2rem 0 .5rem; color:#93c5fd; }
+  .sub { color:#9ca3af; margin:0 0 1.5rem; }
+  .headline { border:1px solid #1f2937; background:#0d1117; border-radius:.6rem; padding:1rem; }
+  .headline b { font-size:1.5rem; color:#34d399; }
+  table { width:100%; border-collapse:collapse; font:12px ui-monospace,SFMono-Regular,Menlo,monospace; }
+  th,td { padding:.3rem .5rem; border-bottom:1px solid #1f2937; text-align:left; }
+  th { color:#6b7280; font-weight:400; }
+  td.n, th.n { text-align:right; }
+  tr.shipped td { color:#34d399; }
+  .warn { border-left:3px solid #f59e0b; background:#f59e0b12; padding:.6rem .8rem;
+          color:#fcd34d; border-radius:0 .4rem .4rem 0; margin:1rem 0; }
+  .row { border:1px solid #1f2937; border-radius:.4rem; padding:.5rem .7rem; margin-bottom:.4rem; }
+  .head { display:flex; justify-content:space-between; gap:1rem; align-items:start; }
+  .head span { font-weight:600; font-size:.85rem; }
+  .head b { font-size:.65rem; padding:.1rem .4rem; border-radius:.25rem; white-space:nowrap; }
+  .s-DONE { background:#10b98133; color:#6ee7b7; }
+  .s-PARTIAL { background:#f59e0b33; color:#fcd34d; }
+  .s-PARTB { background:#0ea5e933; color:#7dd3fc; }
+  .row p { margin:.25rem 0 0; font-size:.78rem; color:#9ca3af; }
+  footer { margin-top:2.5rem; color:#4b5563; font-size:.72rem; }
+  code { background:#1f2937; padding:.05rem .3rem; border-radius:.2rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PathPulse</h1>
+  <p class="sub">AI-ML Intelligent Dead Reckoning for GNSS-denied navigation ·
+     SIH26168 · ISRO · Team Avinya</p>
+
+  <div class="headline">
+    <p style="margin:0 0 .4rem;color:#9ca3af;font-size:.8rem">Measured drift, shipped configuration</p>
+    <b>10.0% mean</b>
+    <span style="color:#9ca3af">· 6.4% median
+      · 22.6% p90 · 12 runs</span>
+  </div>
+
+  <div class="warn">
+    <b>Every log is simulated.</b> These numbers measure the estimator against a physics
+    model, not against a road — no real drive log exists yet. The mean sits on the
+    problem statement's &lt;10% target rather than under it, and the p90 does not:
+    quote the mean alone and the tail is the first thing anyone finds.
+  </div>
+
+  <h2>Ablation — one component at a time</h2>
+  <table>
+    <thead><tr><th>configuration</th><th class="n">mean %</th><th class="n">median %</th>
+      <th class="n">p90 %</th><th class="n">RMSE m</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>naive</td>
+        <td class="n">61.2</td>
+        <td class="n">57.7</td>
+        <td class="n">81.0</td>
+        <td class="n">358</td>
+      </tr>
+      <tr>
+        <td>filtered</td>
+        <td class="n">60.8</td>
+        <td class="n">57.8</td>
+        <td class="n">81.0</td>
+        <td class="n">356</td>
+      </tr>
+      <tr>
+        <td>zaru</td>
+        <td class="n">59.2</td>
+        <td class="n">53.9</td>
+        <td class="n">81.3</td>
+        <td class="n">355</td>
+      </tr>
+      <tr>
+        <td>zupt</td>
+        <td class="n">59.2</td>
+        <td class="n">54.3</td>
+        <td class="n">77.3</td>
+        <td class="n">352</td>
+      </tr>
+      <tr>
+        <td>nhc</td>
+        <td class="n">29.3</td>
+        <td class="n">24.3</td>
+        <td class="n">54.7</td>
+        <td class="n">139</td>
+      </tr>
+      <tr>
+        <td>speedclamp</td>
+        <td class="n">27.0</td>
+        <td class="n">24.3</td>
+        <td class="n">54.7</td>
+        <td class="n">125</td>
+      </tr>
+      <tr>
+        <td>highpass</td>
+        <td class="n">13.6</td>
+        <td class="n">16.5</td>
+        <td class="n">22.8</td>
+        <td class="n">84</td>
+      </tr>
+      <tr class="shipped">
+        <td>full</td>
+        <td class="n">10.0</td>
+        <td class="n">6.4</td>
+        <td class="n">22.6</td>
+        <td class="n">72</td>
+      </tr>
+      <tr>
+        <td>full_forwardbias</td>
+        <td class="n">12.8</td>
+        <td class="n">11.8</td>
+        <td class="n">21.3</td>
+        <td class="n">80</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="color:#6b7280;font-size:.75rem;margin-top:.5rem">
+    Each row differs from the one above by exactly one component. Ground truth is each
+    log's own recorded GNSS, withheld from the estimator across the outage window.
+    The <code>full_forwardbias</code> row is a negative result: it made drift worse,
+    so it ships disabled and is reported anyway.
+  </p>
+
+  <h2>Against the problem statement</h2>
+      <div class="row">
+        <div class="head"><span>Seamless GNSS deficit handler (ms switchover)</span><b class="s-DONE">DONE</b></div>
+        <p>Dead reckoning runs continuously in shadow mode, so the switch costs 0 ms.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>Drift under 10% of distance</span><b class="s-PARTIAL">PARTIAL</b></div>
+        <p>10.0% mean, 6.4% median over 12 runs — on the line, not under it. p90 is 22.6%. Simulated logs only.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>10 Hz update rate on a smartphone</span><b class="s-DONE">DONE</b></div>
+        <p>Measured from real frames and shown on the HUD, which turns amber below 10 Hz.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>Advanced map matching &amp; kinematic constraints</span><b class="s-PARTIAL">PARTIAL</b></div>
+        <p>NHC, ZUPT, ZARU and road snapping on a real OSM graph. HMM is Part B.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>GNSS + INS fusion engine</span><b class="s-PARTIAL">PARTIAL</b></div>
+        <p>Complementary fusion with bounded-rate recovery. ESKF is Part B.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>AI speed model trained on IO-VNBD</span><b class="s-DONE">DONE</b></div>
+        <p>1D-CNN, INT8 ONNX, on-device. No cloud call anywhere in the app.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>IO-VNBD position plot (screening)</span><b class="s-DONE">DONE</b></div>
+        <p>ml/results/position_plot.png — predicted trajectory against ground truth.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>On-device inference, no cloud</span><b class="s-DONE">DONE</b></div>
+        <p>ONNX Runtime Web inside the APK.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>Real-time navigation interface</span><b class="s-DONE">DONE</b></div>
+        <p>Map, HUD, confidence ellipse, event log, live constraint toggles.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>Mobile application</span><b class="s-DONE">DONE</b></div>
+        <p>Android APK via Capacitor, tested on a physical phone.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>Offline map database</span><b class="s-PARTIAL">PARTIAL</b></div>
+        <p>Road graphs ship in the APK and tiles cache on request. Packaged PMTiles not built.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>In-vehicle alignment &amp; calibration</span><b class="s-PARTIAL">PARTIAL</b></div>
+        <p>Attitude resolved against measured gravity, so any mounting angle works. Auto mount-yaw is Part B.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>Pothole / vibration rejection</span><b class="s-PARTIAL">PARTIAL</b></div>
+        <p>Median despike and low-pass filters. Learned classifier is Part B.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>200 Hz edge engine, external IMU</span><b class="s-PARTB">PART B</b></div>
+        <p>Not built. nav-core is pure and runtime-free so this needs porting, not rewriting.</p>
+      </div>
+      <div class="row">
+        <div class="head"><span>Phone misalignment handling</span><b class="s-PARTB">PART B</b></div>
+        <p>Not built. Attitude handles tilt; automatic mount-yaw estimation is the missing piece.</p>
+      </div>
+
+  <h2>How to check any of this</h2>
+  <p style="color:#9ca3af;font-size:.85rem">
+    <code>pnpm ablation</code> regenerates the table above from the logs in
+    <code>data/replay/</code>. <code>pnpm eval -- --log sim_city_1337.jsonl --config full</code>
+    scores a single run. <code>pnpm -r test</code> runs the full suite.
+    Every number on this page is generated by those commands, not typed.
+  </p>
+
+  <footer>
+    Generated 2026-08-30 from docs/benchmarks.json by
+    scripts/make-offline-brief.mjs · github.com/utkarshwrks/PathPulse
+  </footer>
+</main>
+</body>
+</html>

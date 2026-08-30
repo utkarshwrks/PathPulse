@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 10 — demo hardening. 10A + 10B + 10D done, deep-tested
+**CURRENT PHASE:** Phase 10 — demo hardening ✅ COMPLETE (10A-10F)
 **LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Phase 10 remaining — 10C perf profile, 10E backup, 10F final audit
+**NEXT PHASE:** Rehearsal, and the two measurements only a phone can make
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -1443,6 +1443,54 @@ every phase renders; the deck's compliance rows all carry a defensible
 sentence; error boundaries contain a crash without unmounting their siblings.
 
 **Tests:** 1039 passing (nav-core 461, web 352, eval 140, sensor-sources 86).
+
+### Phase 10C / 10E / 10F ✅ — Phase 10 complete
+
+**10C — performance.** Phase 9 put three things on the hot path (turn
+detector, anomaly detector, covariance growth) and nothing measured what they
+cost. Now: a 50 Hz stream for two minutes with everything running, asserted far
+inside real time, plus a check that the second half of a long session costs no
+more than the first — which is how an unbounded buffer announces itself. The
+trail's larger cap has its own budget test: append plus a full segment rebuild
+is ~0.3 ms against a 100 ms frame. **Battery drop over 30 minutes is not
+measured** — that needs a phone and a stopwatch, not a test runner.
+
+**10E — backup.**
+- `scripts/make-demo-log.mjs` builds `demo.jsonl`: the recorded city drive with
+  the outage **already deleted from it**, so the whole sequence plays with
+  nothing to trigger. The simulator is deterministic, which makes it a good
+  demo and a poor backup — a backup has to survive the thing it backs up, and
+  this is a flat file of numbers that needs none of the vehicle model, the
+  route parser or the simulation pipeline to work.
+- A `replay` source in the app plays it from the dropdown, with an on-screen
+  line telling you to announce it as a replay.
+- `scripts/make-offline-brief.mjs` builds `docs/offline-brief.html`: one
+  self-contained file, no scripts, no remote fonts, nothing to fetch, with the
+  measured table, the compliance position and the caveats. For the morning the
+  APK will not install and the laptop will not project. Generated from
+  `docs/benchmarks.json`, so it cannot disagree with the rest of the project;
+  a test keeps its duplicated compliance list in step with the app's.
+- **Not done: the screen recording.** That needs a screen and a person.
+
+**10F — final audit, and it earned its place.**
+
+**★ Adding the backup log broke the headline number.** `demo.jsonl` was written
+into `data/replay/` — which is the *evaluation corpus*. `listLogs()` enumerates
+every `.jsonl` there and the ablation punches its own outage into each one, so
+a log with a 60 s hole already in it got a second hole punched on top. The
+table went from **10.0% mean / 22.6% p90 to 19.0% / 53.7%** and nothing failed:
+still numbers, same table, same place, no warning. It was caught by the audit
+step that compares the generated table against the figure in this file — one
+step later and it would have been on a slide.
+
+The log now lives only where the app fetches it, and
+`packages/eval/test/corpus.test.ts` asserts that every log in the corpus has
+continuous GNSS, so a pre-punched file can never quietly rejoin it. Verified by
+putting it back and watching two tests fail.
+
+The rest of the audit: nav-core pure at 48 files, four packages typechecking,
+**1059 tests passing**, ablation identical to the pre-Phase-9 baseline, every
+generated artefact present.
 
 ## NEXT PHASE
 
