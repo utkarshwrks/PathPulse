@@ -194,6 +194,7 @@ export default function Home() {
         controls={nav.controls}
         onControlsChange={nav.setControls}
         onExportEvents={handleExportEvents}
+        simulated={kind === 'simulation'}
         imuHz={source.imuHz}
         gnssHz={source.gnssHz}
         updateHz={nav.updateHz}

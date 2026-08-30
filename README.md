@@ -15,7 +15,7 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phases 0-8 complete, Phase 9A-9D in.** The dot
+**Phases 0-8 complete, Phase 9A-9E in.** The dot
 survives a GNSS outage under an uncertainty ellipse that shows how wrong it
 might be, and the six defects a real-phone field test exposed on 2026-08-27 are
 fixed.
@@ -327,6 +327,7 @@ scripted animation can display any numbers it likes. These can.
 | **Session stats** | Debug → STATS | Duration, distance, outage count and durations, best/worst/mean drift. The drift figures here are **measured against a real fix on recovery**, not the engine's own uncertainty model. |
 | **Walking Mode** | Debug → CONSTRAINTS | Clamps speed to 3 m/s so you can walk the corridor with the phone and watch the dot move. Live physics, no vehicle needed. |
 
+| **NavIC breakdown** | Debug → SENSORS | Tracked satellites per constellation with **NavIC first**. What makes it worth showing is the `DATA SOURCE` line above it: `MEASURED`, `SIMULATED`, `TOTAL-ONLY` or `UNAVAILABLE`. On a phone today it reads UNAVAILABLE, because the Capacitor WebView exposes no per-constellation data — that needs Phase 15's native `GnssStatus`. A missing breakdown never renders as zeroes, which would claim a measurement nobody made. |
 | **GNSS anomaly detection** | HUD badge, Debug → EVENTS | Flags a receiver that has been jammed, spoofed, or has simply stopped making sense: a fix implying an impossible speed, a receiver insisting it is stationary while the IMU disagrees, or satellites vanishing while carrier-to-noise stays healthy. **It warns and never acts** — the badge says so, because a red banner a judge reads as "the app is lost" would cost more than the feature is worth. Jamming is in the problem statement's background but not its ask; ISRO sponsors the statement. |
 | **Offline map** | top-right → Offline | ★ The aeroplane-mode moment. Open it, hit **Download this area** — it states the tile count and size first — then put the phone in aeroplane mode. The map keeps drawing from storage and the vehicle keeps navigating from its own sensors, with every radio off. The button itself turns green and reads `OFFLINE ✈`, and the panel reports how many tiles are stored. |
 | **Turn detection** | HUD, and Debug → EVENTS | Every turn is detected, classified and logged with its angle and duration — `RIGHT 87° over 4.0s (0° → 87°)`. It is computed from yaw about the *true vertical*, not device Z, so it is correct with the phone at any angle in the cradle. Hand the judge the phone and turn a corner: the label appears with a real number behind it. It refuses to count rotation while stopped, a motorway bend, or a lane change. |

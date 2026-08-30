@@ -79,6 +79,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
   const onExportEvents = vi.fn();
   const utils = render(
     <TrustPanel
+      simulated={false}
       modelInfo={{ loaded: true, error: null, sizeBytes: 36076, latencyMs: 8.2, inferences: 40 }}
       sample={SAMPLE}
       lastGnss={{ gnss: { lat: 23.16, lon: 79.93, accuracyM: 6 }, t: 10_000, ageMs: 2340 }}
@@ -342,5 +343,55 @@ describe('TrustPanel — STATS', () => {
     fireEvent.click(screen.getByRole('button', { name: 'STATS' }));
     expect(screen.getByText('2m 16s')).toBeTruthy();
     expect(screen.getByText('1m 30s')).toBeTruthy();
+  });
+});
+
+describe('TrustPanel — constellation breakdown (9E)', () => {
+  const withSats = (
+    gnss: Partial<NonNullable<SensorSample['gnss']>>,
+    simulated = false,
+  ) =>
+    openPanel({
+      simulated,
+      lastGnss: {
+        gnss: { lat: 23.16, lon: 79.93, accuracyM: 6, ...gnss },
+        t: 10_000,
+        ageMs: 2340,
+      },
+    });
+
+  it('lists NavIC first and highlights it', () => {
+    withSats({ constellations: { GPS: 7, NAVIC: 4, GALILEO: 3 } });
+    expect(screen.getByText(/NAVIC \(IRNSS\)/i)).toBeDefined();
+  });
+
+  it('★ labels a simulated sky as simulated', () => {
+    // The simulator is the only source that can produce a breakdown today.
+    // Showing its numbers unlabelled would present an invented sky as a
+    // measurement.
+    withSats({ constellations: { GPS: 7, NAVIC: 4 } }, true);
+    expect(screen.getByText('SIMULATED')).toBeDefined();
+    expect(screen.getByText(/not a measurement/i)).toBeDefined();
+  });
+
+  it('★ says the breakdown is unavailable on hardware that reports only a total', () => {
+    withSats({ satCount: 9 });
+    expect(screen.getByText('TOTAL-ONLY')).toBeDefined();
+    expect(screen.getByText(/no per-constellation data/i)).toBeDefined();
+    expect(screen.getByText(/native GnssStatus API \(Phase 15\)/)).toBeDefined();
+  });
+
+  it('★ says unavailable rather than showing zeroes when nothing is reported', () => {
+    // Zeroes would read as "no satellites in view" — a measurement we have not
+    // made, on a platform that cannot make it.
+    withSats({});
+    expect(screen.getByText('UNAVAILABLE')).toBeDefined();
+    expect(screen.queryByText(/NAVIC \(IRNSS\)/i)).toBeNull();
+  });
+
+  it('always shows a provenance line, whatever the state', () => {
+    withSats({ constellations: { GPS: 7, NAVIC: 4 } });
+    expect(screen.getByText('DATA SOURCE')).toBeDefined();
+    expect(screen.getByText('MEASURED')).toBeDefined();
   });
 });

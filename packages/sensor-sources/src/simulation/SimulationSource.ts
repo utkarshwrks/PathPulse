@@ -204,8 +204,16 @@ export class SimulationSource implements SensorSource {
           accuracyM: this.gnssAccuracyM,
           speedMps: Math.max(0, state.speedMps + 0.15 * this.gaussian()),
           headingDeg: state.headingDeg,
-          satCount: 9,
+          satCount: 17,
           meanCn0: 34.2,
+          // A plausible sky over the Indian subcontinent: NavIC's regional
+          // constellation is only visible here, which is the point of showing
+          // it. These numbers are INVENTED — the simulator is the only source
+          // that can produce them at all, because the Capacitor WebView
+          // exposes no per-constellation data (Phase 15's native GnssStatus
+          // does). Anything rendering them must label them simulated; see
+          // nav-core/src/gnss/constellations.ts.
+          constellations: { GPS: 7, NAVIC: 4, GALILEO: 3, GLONASS: 2, BEIDOU: 1 },
         };
       }
     }

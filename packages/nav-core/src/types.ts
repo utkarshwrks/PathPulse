@@ -34,6 +34,15 @@ export interface SensorSample {
     satCount?: number;
     /** Mean carrier-to-noise density, dB-Hz. Low values imply multipath. */
     meanCn0?: number;
+    /**
+     * Tracked satellites per constellation, when the platform reports them.
+     *
+     * The Capacitor WebView reports none of this — it needs Android's
+     * GnssStatus, which is Phase 15's native sensor loop. Absent here means
+     * "not measurable from this source", never "none in view", and the UI is
+     * required to say which. See gnss/constellations.ts.
+     */
+    constellations?: Partial<Record<string, number>>;
   };
   imu?: {
     /** Specific force, m/s^2, device frame. Includes gravity. */

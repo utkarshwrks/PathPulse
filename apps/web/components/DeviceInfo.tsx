@@ -91,8 +91,11 @@ export default function DeviceInfo({ imuHz, gnssHz, sourceName, onClose }: Devic
           <p className="text-[11px] leading-relaxed text-neutral-500">
             IMU here comes from the WebView&apos;s DeviceMotion, so the rate is whatever the
             WebView allows rather than SENSOR_DELAY_FASTEST, and it is throttled when the
-            screen is off. Satellite count and constellation are not exposed either. Both
-            need a native Kotlin sensor loop and the GnssStatus API — that is Phase 15.
+            screen is off. Satellite count and the per-constellation breakdown are not
+            exposed either, so the NavIC figures in Debug → SENSORS are labelled
+            SIMULATED whenever they come from the simulator and UNAVAILABLE on this
+            hardware. All of it needs a native Kotlin sensor loop and the GnssStatus
+            API — that is Phase 15.
           </p>
         </Section>
       </div>
