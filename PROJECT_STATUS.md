@@ -1,10 +1,10 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B ✅ COMPLETE, deep-tested
+**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B + 9C ✅ COMPLETE
 **LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Phase 9C offline map, then 9D/9E/9F
+**NEXT PHASE:** Phase 9D spoofing detection, 9E NavIC, 9F GPX export
 
-> Phases 0-8 are complete, and Phase 9A and 9B are in. The ISRO screening artefact — a position plot
+> Phases 0-8 are complete, and Phase 9A, 9B and 9C are in. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
 
 > ### Drift: **10.0% mean, 6.4% median, 22.6% p90** over 12 runs
@@ -964,13 +964,75 @@ changing would be a washed-out trail that still looks broadly right.
 24 new hostile tests. Ablation output still byte-identical: none of these fixes
 touches the estimate.
 
+### Phase 9C — offline basemap ✅
+
+Aeroplane mode now keeps the map, not just the estimate.
+
+**What shipped**
+- `apps/web/public/sw.js` — a service worker that caches map tiles cache-first
+  from an allowlist of tile hosts. Bounded at 2000 tiles (~40 MB), oldest-first
+  eviction. It touches nothing but tiles, so it can never serve a stale build.
+- `apps/web/lib/tileCache.ts` — slippy-tile arithmetic: which tiles cover a
+  bounding box across a zoom range, how many that is, and roughly how many
+  bytes. Pure, 23 tests.
+- `apps/web/lib/offline.ts` + `hooks/useOfflineStatus.ts` — registration, cache
+  queries, pre-cache driver, live online/offline state.
+- `components/OfflinePanel.tsx` — the status screen and the **Download this
+  area** button. The top-right button turns green and reads `OFFLINE ✈` when
+  the radio is down, because in this demo being offline is the success case.
+
+**★ PMTiles was deliberately not taken.** The guide offers PMTiles first and
+service-worker caching as the "cheap route". PMTiles needs a basemap extract
+for the demo area — a large binary this repo would have to carry, and one that
+cannot be produced or verified here. Shipping the *support* without the file
+would be a switch that does nothing: Golden Rule #10.
+
+The service-worker route is also the better demo. The guide's version of it —
+"browse the area once beforehand and the tiles will be cached" — fails silently
+and on stage: you cannot tell which tiles you happened to pan over. Enumerating
+the viewport and fetching it deliberately means the panel can state **"1,240
+tiles, roughly 25 MB"** before you commit and **"tiles stored: 1,240"**
+afterwards. That is a checkable number where the guide's version is a hope.
+
+**Two real defects, found by the tests that were written for them:**
+
+1. **`countTilesForBounds` ran the tab out of memory.** It enumerated the whole
+   list and took its length, and the panel calls it on every viewport change —
+   so zooming out far enough asked it to materialise billions of objects. The
+   tab died *before* it could render the warning that the area was too big.
+   It is a product of two ranges and never needed the list. The regression test
+   crashes the whole vitest worker if this comes back, which is the correct
+   volume for it.
+2. **A bounds touching the pole yielded no tiles at all.** At exactly the
+   Mercator limit the projection lands a hair below zero, `floor()` turns that
+   into -1, and the row loop never runs. Only the top end was being clamped,
+   because the top is the end that reads as obviously wrong.
+
+**Honest limits**
+- Cache-first means a tile is only there offline if it was fetched. That is
+  what the Download button is for; browsing alone is not a guarantee.
+- Service workers need a secure context. Over plain http on a LAN — the
+  documented no-APK phone workflow — there is no worker, and the panel says so
+  with the reason rather than showing an unexplained "unavailable".
+- `navigator.onLine` reports the interface, not reachability. It is labelled
+  **radio** in the UI for that reason, and aeroplane mode is exactly the case
+  it gets right.
+- The 20 kB/tile size estimate is an average, not a measurement.
+
+**Tests:** 868 passing (nav-core 374, web 283, eval 125, sensor-sources 86) —
+56 new. Purity clean at 42 files. Nothing here touches nav-core or the
+estimator.
+
+**APK:** `PathPulse_Phase9C.apk`.
+
 ## NEXT PHASE
 
 **Phase 9 — Wow features** (confidence ellipse, turn detection, offline map)
 - ~~9A confidence ellipse~~ ✅ done, see above
 - ~~9B turn detection + `turnDetector.ts`~~ ✅ done, see above. Junction
   matching (the optional half of 9B) is deliberately NOT done — see its note.
-- 9C PMTiles offline basemap, or service-worker tile caching as the cheap route
+- ~~9C offline basemap~~ ✅ done via the service-worker route, see above.
+  PMTiles was deliberately not taken — see its note.
 - 9D spoofing detection, 9E NavIC breakdown, 9F GPX export
 
 ### Superseded — Phase 6D (done)

@@ -18,6 +18,9 @@ import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
 import ConfidenceEllipse from '@/components/ConfidenceEllipse';
+import OfflinePanel from '@/components/OfflinePanel';
+import { useOfflineStatus } from '@/hooks/useOfflineStatus';
+import type { LatLonBounds } from '@/lib/tileCache';
 
 const MapView = dynamic(() => import('@/components/MapView'), {
   ssr: false,
@@ -33,6 +36,8 @@ export default function Home() {
   const [routeKey, setRouteKey] = useState<RouteKey>('city');
   const [showDeviceInfo, setShowDeviceInfo] = useState(false);
   const [showBenchmarks, setShowBenchmarks] = useState(false);
+  const [showOffline, setShowOffline] = useState(false);
+  const [mapBounds, setMapBounds] = useState<LatLonBounds | null>(null);
 
   // ★ The navigation engine is now the single source of truth for what the
   // map draws. Raw GNSS is only an input to it, never drawn directly — that is
@@ -40,6 +45,7 @@ export default function Home() {
   const nav = useNavigationEngine();
   const source = useSensorSource(kind, routeKey, nav.feed);
   const live = useGeolocation(false);
+  const offline = useOfflineStatus();
 
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [following, setFollowing] = useState(true);
@@ -103,9 +109,26 @@ export default function Home() {
     });
   }, [shownPosition, following]);
 
-  const handleReady = useCallback((map: MapLibreMap) => {
-    mapRef.current = map;
+  const readBounds = useCallback((map: MapLibreMap) => {
+    const b = map.getBounds();
+    setMapBounds({
+      north: b.getNorth(),
+      south: b.getSouth(),
+      east: b.getEast(),
+      west: b.getWest(),
+    });
   }, []);
+
+  const handleReady = useCallback(
+    (map: MapLibreMap) => {
+      mapRef.current = map;
+      readBounds(map);
+      // The download button offers whatever is on screen, so the viewport has
+      // to be current when the panel opens — not whatever it was at startup.
+      map.on('moveend', () => readBounds(map));
+    },
+    [readBounds],
+  );
 
   // Golden Rule #8: if the run can be exported it can be checked afterwards,
   // which is worth more to a judge than any claim made during the demo.
@@ -179,6 +202,17 @@ export default function Home() {
       <div className="absolute right-3 top-3 z-10 flex gap-1.5">
         <button
           type="button"
+          onClick={() => setShowOffline(true)}
+          className={`rounded-lg border px-3 py-2 text-xs font-medium backdrop-blur transition ${
+            offline.online
+              ? 'border-white/15 bg-black/70 text-neutral-200 hover:bg-black/85'
+              : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
+          }`}
+        >
+          {offline.online ? 'Offline' : 'OFFLINE ✈'}
+        </button>
+        <button
+          type="button"
           onClick={() => setShowBenchmarks(true)}
           className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
         >
@@ -194,6 +228,15 @@ export default function Home() {
       </div>
 
       {showBenchmarks ? <Benchmarks onClose={() => setShowBenchmarks(false)} /> : null}
+
+      {showOffline ? (
+        <OfflinePanel
+          status={offline}
+          bounds={mapBounds}
+          mapSourceLabel={styleInfo.label}
+          onClose={() => setShowOffline(false)}
+        />
+      ) : null}
 
       {showDeviceInfo ? (
         <DeviceInfo
