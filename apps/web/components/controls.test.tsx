@@ -204,3 +204,68 @@ describe('DeviceInfo — "it works on my phone" is not evidence', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SourcePanel — the replay backup is usable (deep test pass 10)', () => {
+  /**
+   * ★ THE FEATURE EXISTED AND COULD NOT BE USED ★
+   * Play, Pause and Reset lived inside the `simulation` branch and the
+   * fallback text described the live sensors, so selecting Replay produced a
+   * loaded backup log, an explanation of DeviceMotion, and no way to start it.
+   */
+  function renderReplay(over: Partial<React.ComponentProps<typeof SourcePanel>> = {}) {
+    const onPlay = vi.fn();
+    const onReset = vi.fn();
+    render(
+      <SourcePanel
+        kind="replay"
+        routeKey="city"
+        isRunning={false}
+        inOutage={false}
+        progress={0.4}
+        imuHz={50}
+        gnssHz={1}
+        recordedCount={0}
+        onKindChange={vi.fn()}
+        onRouteChange={vi.fn()}
+        onPlay={onPlay}
+        onPause={vi.fn()}
+        onReset={onReset}
+        onSpeed={vi.fn()}
+        onOutage={vi.fn()}
+        onDownload={vi.fn()}
+        {...over}
+      />,
+    );
+    return { onPlay, onReset };
+  }
+
+  it('★ offers Play, so the backup can actually be started', () => {
+    const { onPlay } = renderReplay();
+    fireEvent.click(screen.getByRole('button', { name: /^play$/i }));
+    expect(onPlay).toHaveBeenCalled();
+  });
+
+  it('★ offers Restart, so it can be run more than once', () => {
+    const { onReset } = renderReplay();
+    fireEvent.click(screen.getByRole('button', { name: /restart/i }));
+    expect(onReset).toHaveBeenCalled();
+  });
+
+  it('does not describe the live sensors when replaying a file', () => {
+    renderReplay();
+    expect(screen.queryByText(/DeviceMotion and Geolocation/i)).toBeNull();
+  });
+
+  it('says it is a replay, and to announce it as one', () => {
+    renderReplay();
+    expect(screen.getByText(/Announce it as a replay/i)).toBeDefined();
+  });
+
+  it('hides the simulator-only controls that cannot work here', () => {
+    renderReplay();
+    // The outage is baked into the log; a button that silently did nothing
+    // would be worse than its absence.
+    expect(screen.queryByRole('button', { name: /gnss loss/i })).toBeNull();
+    expect(screen.queryByText(/Speed \d/)).toBeNull();
+  });
+});

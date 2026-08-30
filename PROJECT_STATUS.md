@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 10 — demo hardening ✅ COMPLETE (10A-10F)
+**CURRENT PHASE:** Phase 10 — demo hardening ✅ COMPLETE (10A-10F), deep-tested
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Rehearsal, and the two measurements only a phone can make
 
@@ -1491,6 +1491,41 @@ putting it back and watching two tests fail.
 The rest of the audit: nav-core pure at 48 files, four packages typechecking,
 **1059 tests passing**, ablation identical to the pre-Phase-9 baseline, every
 generated artefact present.
+
+### Deep test pass 10 — the replay backup, assumed broken ✅
+
+Three defects, all in the same feature, and together they meant **the backup
+did not work at all**. Which is the worst possible place for them: a backup is
+only ever reached on the run where something else has already gone wrong.
+
+**1. ★ There was no Play button.** Play, Pause and Reset lived inside the
+`kind === 'simulation'` branch of `SourcePanel`, and the fallback text
+described the live sensors. Selecting Replay gave you a correctly loaded backup
+log, an explanation of DeviceMotion, and **no way to start it**. The feature
+existed and could not be used.
+
+**2. Reset did nothing.** `useSensorSource.reset()` reads `simRef`, and returns
+early when it is null. The replay source lives in `webRef` — and it *does* have
+a rewind. So the backup could be played once and then never again without
+reloading the app.
+
+**3. Progress sat at zero.** `progress` read `sim ? sim.progressFraction : 0`,
+so the bar never moved through an entire replay: a stalled backup and a running
+one looked identical.
+
+The common cause is worth naming: the transport controls were written when the
+simulator was the only scriptable source, so they reach for `simRef` and give
+up. Adding a third source kind silently landed in every one of those gaps, and
+none of them fails loudly — the buttons just stop working.
+
+All three confirmed by restoring the old code and watching the tests fail.
+
+**Also added:** the offline brief is now *parsed* with a real `DOMParser`, not
+just string-matched — it is opened from a USB stick on a stranger's laptop, and
+a subtly malformed table would fail there with nobody able to fix it. Every
+compliance row is asserted to render with a badge and a sentence.
+
+**Tests:** 1075 passing (nav-core 463, web 380, eval 146, sensor-sources 86).
 
 ## NEXT PHASE
 

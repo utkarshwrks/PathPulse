@@ -74,6 +74,13 @@ export interface SensorSourceState {
  * this sits alongside it and will be the single input to NavigationEngine in
  * Phase 4.
  */
+/** Progress from a source that exposes it (the replay log), else 0. */
+function replayProgress(source: SensorSource | null): number {
+  if (!source) return 0;
+  const p = (source as { progressFraction?: unknown }).progressFraction;
+  return typeof p === 'number' && Number.isFinite(p) ? p : 0;
+}
+
 export function useSensorSource(
   kind: SourceKind,
   routeKey: RouteKey,
@@ -149,7 +156,12 @@ export function useSensorSource(
       imuHz: rate(imuTimes.current),
       gnssHz: rate(gnssTimes.current),
       inOutage,
-      progress: sim ? sim.progressFraction : 0,
+      // Whichever source is driving. Reading only the simulator left the
+      // progress bar at zero for an entire replay, so a stalled backup and a
+      // running one looked identical.
+      progress: sim
+        ? sim.progressFraction
+        : replayProgress(webRef.current),
       isRunning: sim ? sim.isRunning : prev.isRunning,
       recordedCount: recRef.current?.sampleCount ?? 0,
     }));
@@ -249,7 +261,31 @@ export function useSensorSource(
 
   const reset = useCallback(() => {
     const sim = simRef.current;
-    if (!sim) return;
+    if (!sim) {
+      // ★ THE BACKUP HAS TO BE RESTARTABLE ★
+      // These controls were written when the simulator was the only
+      // scriptable source, so they reach for simRef and give up. The replay
+      // source lives in webRef, and it does have a rewind — so Reset did
+      // nothing at all in replay: you could play the backup once and then had
+      // no way to run it again short of reloading the app, on the one run
+      // where everything else had already gone wrong.
+      const replay = webRef.current;
+      if (replay && 'reset' in replay && typeof replay.reset === 'function') {
+        (replay as { reset: () => void }).reset();
+        lastFixRef.current = null;
+        imuTimes.current = [];
+        gnssTimes.current = [];
+        setState((p) => ({
+          ...p,
+          fix: null,
+          mode: 'INITIALIZING',
+          isRunning: false,
+          inOutage: false,
+          progress: 0,
+        }));
+      }
+      return;
+    }
     sim.stop();
     const fresh = new SimulationSource({
       route: ROUTES[routeKey].route,

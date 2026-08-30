@@ -129,12 +129,39 @@ export default function SourcePanel(props: SourcePanelProps) {
             />
           </div>
         </>
-      ) : (
+      ) : null}
+
+      {/*
+        ★ THE BACKUP NEEDS TRANSPORT CONTROLS OF ITS OWN ★
+        Play, Pause and Reset used to live inside the `simulation` branch, and
+        the fallback text described the live sensors. So selecting Replay gave
+        you a loaded backup log, an explanation of DeviceMotion, and no way to
+        start it — the feature existed and could not be used, on the run where
+        everything else has already gone wrong.
+      */}
+      {props.kind === 'replay' ? (
+        <>
+          <div className="mb-2 flex gap-1.5">
+            <Btn onClick={props.isRunning ? props.onPause : props.onPlay} primary>
+              {props.isRunning ? 'Pause' : 'Play'}
+            </Btn>
+            <Btn onClick={props.onReset}>Restart</Btn>
+          </div>
+          <div className="mb-2 h-1 w-full overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full bg-sky-400 transition-[width] duration-300"
+              style={{ width: `${Math.min(100, props.progress * 100)}%` }}
+            />
+          </div>
+        </>
+      ) : null}
+
+      {props.kind === 'live' ? (
         <p className="mb-2 text-[11px] leading-relaxed text-neutral-500">
           Uses DeviceMotion and Geolocation. Both need a secure context; press Play from a
           tap so iOS grants motion access.
         </p>
-      )}
+      ) : null}
 
       {props.kind === 'live' ? (
         <Btn onClick={props.isRunning ? props.onPause : props.onPlay} primary>

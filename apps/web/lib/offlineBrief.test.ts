@@ -62,3 +62,47 @@ describe('the offline brief mirrors the in-app deck', () => {
     expect(html).toMatch(/22\.6% p90|22\.6/);
   });
 });
+
+describe('the offline brief actually renders', () => {
+  /**
+   * It is opened from a USB stick on a stranger's laptop. String assertions
+   * cannot catch a document that is subtly malformed — an unclosed table, a
+   * stray angle bracket from an unescaped value — and the failure would happen
+   * there, with nobody able to fix it.
+   */
+  const html = readFileSync(BRIEF, 'utf8');
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  it('★ parses, with a title and a body', () => {
+    expect(doc.querySelector('title')?.textContent).toMatch(/PathPulse/);
+    expect(doc.body.textContent?.length ?? 0).toBeGreaterThan(500);
+  });
+
+  it('★ renders the full ablation table, not a truncated one', () => {
+    const bodyRows = doc.querySelectorAll('tbody tr');
+    expect(bodyRows.length).toBeGreaterThanOrEqual(8);
+    for (const row of Array.from(bodyRows)) {
+      expect(row.querySelectorAll('td').length).toBe(5);
+    }
+  });
+
+  it('marks the shipped configuration so the eye lands on it', () => {
+    expect(doc.querySelector('tr.shipped')).not.toBeNull();
+  });
+
+  it('renders every compliance row with a status badge', () => {
+    const rows = doc.querySelectorAll('.row');
+    expect(rows.length).toBe(COMPLIANCE.length);
+    for (const row of Array.from(rows)) {
+      expect(row.querySelector('b')?.textContent?.trim()).toMatch(/DONE|PARTIAL|PART B/);
+      expect((row.querySelector('p')?.textContent ?? '').length).toBeGreaterThan(25);
+    }
+  });
+
+  it('★ leaves no unescaped markup from a generated value', () => {
+    // Everything interpolated goes through esc(). A stray tag here would mean
+    // a value escaped the escaper.
+    expect(doc.querySelectorAll('script')).toHaveLength(0);
+    expect(html).not.toMatch(/<b class="s-">/);
+  });
+});
