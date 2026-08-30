@@ -47,7 +47,8 @@ export default function SourcePanel(props: SourcePanelProps) {
   }
 
   return (
-    <div className="absolute bottom-4 left-3 z-20 w-[min(92vw,20rem)] rounded-xl border border-white/10 bg-black/80 p-3 backdrop-blur">
+    <div data-tour="source"
+      className="absolute bottom-4 left-3 z-20 w-[min(92vw,20rem)] rounded-xl border border-white/10 bg-black/80 p-3 backdrop-blur">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-500">
           Sensor source

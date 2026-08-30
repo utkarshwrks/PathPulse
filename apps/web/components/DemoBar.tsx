@@ -44,6 +44,7 @@ export default function DemoBar({
     return (
       <button
         type="button"
+        data-tour="demo"
         onClick={onStart}
         className="rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 backdrop-blur transition hover:bg-emerald-500/25"
       >

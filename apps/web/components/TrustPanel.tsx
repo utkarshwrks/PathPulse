@@ -82,7 +82,7 @@ export default function TrustPanel({
   const [tab, setTab] = useState<Tab>('sensors');
 
   return (
-    <div className="absolute right-3 top-14 z-10 w-[min(92vw,21rem)]">
+    <div className="absolute right-3 top-14 z-10 w-[min(92vw,21rem)]" data-tour="debug">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

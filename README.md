@@ -312,6 +312,11 @@ recording, then use **Download recording (.jsonl)** and drop the file into
 real logs identically — that is the point of having a format. Until real logs
 exist, every file is `sim_*` and `docs/benchmarks.md` says so at the top.
 
+## Testing
+
+[`docs/TESTING.md`](./docs/TESTING.md) is a fifteen-minute step-by-step check of
+the whole app on a phone, with tick boxes and the failure modes worth probing.
+
 ## Demo features — and how to use them
 
 Phase 5 exists for one reason: a judge's default assumption is that the demo is

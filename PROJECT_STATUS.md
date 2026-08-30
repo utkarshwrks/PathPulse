@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 10 — demo hardening ✅ COMPLETE (10A-10F), deep-tested
+**CURRENT PHASE:** Onboarding — welcome screen + guided tour ✅
 **LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Rehearsal, and the two measurements only a phone can make
+**NEXT PHASE:** Rehearsal. See [docs/TESTING.md](./docs/TESTING.md) for the step-by-step check
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -1526,6 +1526,54 @@ a subtly malformed table would fail there with nobody able to fix it. Every
 compliance row is asserted to render with a badge and a sentence.
 
 **Tests:** 1075 passing (nav-core 463, web 380, eval 146, sensor-sources 86).
+
+### Onboarding — welcome screen and guided tour ✅
+
+**The first fifteen seconds were the weakest part of the project.** Opening the
+app gave you a dark map, a wall of numbers and no idea what any of it was for.
+A judge with a phone in their hand and thirty other stands to visit does not
+read a HUD to work out what a project does.
+
+**Welcome screen** — one sentence on the problem, one on the answer, and the
+headline figure *with its caveat attached*: 10.0% mean, and that it sits on the
+target rather than under it, and that every log is simulated. Shown once. Two
+buttons: take the tour, or go straight to the map.
+
+**Guided tour** — ten steps, `Next`/`Back`, progress dots, and **Skip on every
+single step** (asserted for all ten: a tour you cannot leave is worse than no
+tour). A dimmed backdrop with a ring cut around whatever the step describes;
+the card moves to the top when the highlight is in the lower half of the
+screen, because on a phone there are only two places for it to be. Arrow keys
+and Escape work too. A **?** button replays it any time.
+
+Steps are data in `lib/tour.ts`, and anchors are `data-tour` attributes on real
+elements. **`lib/tourAnchors.test.ts` greps the source for every anchor a step
+names**, so a renamed element fails a test rather than leaving the tour
+describing a button that is not there — a failure otherwise visible only to
+whoever is holding the phone, only while a stranger is watching.
+
+A missing anchor degrades to a centred card rather than a ring over nothing:
+panels appear and disappear with state (the demo bar replaces the source
+panel), and a tour that breaks when the UI changes underneath it is worse than
+one that just says its piece.
+
+**Found while testing this:** jsdom in this project had **no `localStorage` at
+all** — it defaults to `about:blank`, an opaque origin, so the property reads
+back `undefined`. Every preference-storing path was untestable and silently so,
+because the code's own `try`/`catch` swallowed it and the test just saw
+"nothing was remembered". The config now gives jsdom a real origin, and the
+tour's storage is asserted against an injected shim so the wrapper's three
+behaviours — remember, forget, degrade quietly — are actually covered.
+
+**New: [docs/TESTING.md](./docs/TESTING.md)** — a fifteen-minute step-by-step
+check of the whole app on a phone, in order, with tick boxes. It calls out the
+paths that were broken and fixed (starting the demo from Live; the replay
+backup's Play, Restart and progress) so they get checked properly rather than
+assumed, and ends with the two measurements no test can make: the 30-minute
+battery drop and the backup screen recording.
+
+**Tests:** 1112 passing (nav-core 463, web 417, eval 146, sensor-sources 86) —
+37 new.
 
 ## NEXT PHASE
 

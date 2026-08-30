@@ -27,6 +27,9 @@ import ConfidenceEllipse from '@/components/ConfidenceEllipse';
 import OfflinePanel from '@/components/OfflinePanel';
 import DemoBar from '@/components/DemoBar';
 import PitchScreen from '@/components/PitchScreen';
+import Welcome from '@/components/Welcome';
+import TourOverlay from '@/components/TourOverlay';
+import { useTour } from '@/hooks/useTour';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { useDemoMode } from '@/hooks/useDemoMode';
 import { DEMO_CONTROLS, DEMO_OUTAGE_MS } from '@/lib/demoScript';
@@ -81,6 +84,7 @@ export default function Home() {
   const source = useSensorSource(kind, routeKey, nav.feed);
   const live = useGeolocation(false);
   const offline = useOfflineStatus();
+  const tour = useTour();
 
   // ★ 10A: one press sets the whole stage. See lib/demoScript.ts for why the
   // configuration is the shipping one rather than literally "everything on".
@@ -251,6 +255,8 @@ export default function Home() {
 
   return (
     <main className="relative h-full w-full overflow-hidden">
+      <div data-tour="map" className="pointer-events-none absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2" />
+
       <MapView onReady={handleReady} onUserInteract={() => setFollowing(false)}>
         {/* Mount order is z-order: layers are added to the map in the order
             their effects run, so the ellipse goes down first and the trail
@@ -331,6 +337,7 @@ export default function Home() {
         ) : null}
         <button
           type="button"
+          data-tour="offline"
           onClick={() => setShowOffline(true)}
           className={`rounded-lg border px-3 py-2 text-xs font-medium backdrop-blur transition ${
             offline.online
@@ -342,6 +349,7 @@ export default function Home() {
         </button>
         <button
           type="button"
+          data-tour="pitch"
           onClick={() => setShowPitch(true)}
           className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
         >
@@ -349,6 +357,15 @@ export default function Home() {
         </button>
         <button
           type="button"
+          onClick={tour.restart}
+          title="Replay the guided tour"
+          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
+        >
+          ?
+        </button>
+        <button
+          type="button"
+          data-tour="benchmarks"
           onClick={() => setShowBenchmarks(true)}
           className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
         >
@@ -448,6 +465,27 @@ export default function Home() {
 
       {kind === 'live' ? (
         <PermissionGate status={live.status} error={live.error} onRetry={live.start} />
+      ) : null}
+
+      {tour.phase === 'welcome' ? (
+        <ErrorBoundary area="Welcome" fallback={null}>
+          <Welcome
+            onTour={tour.begin}
+            onSkip={tour.skip}
+            buildId={process.env.NEXT_PUBLIC_BUILD_ID ?? 'dev'}
+          />
+        </ErrorBoundary>
+      ) : null}
+
+      {tour.phase === 'tour' ? (
+        <ErrorBoundary area="Tour" fallback={null}>
+          <TourOverlay
+            index={tour.index}
+            onNext={tour.next}
+            onBack={tour.back}
+            onSkip={tour.skip}
+          />
+        </ErrorBoundary>
       ) : null}
     </main>
   );

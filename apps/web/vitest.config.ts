@@ -12,6 +12,16 @@ export default defineConfig({
   test: {
     // The hooks under test drive navigator.geolocation, so they need a DOM.
     environment: 'jsdom',
+    /**
+     * jsdom defaults to `about:blank`, which is an opaque origin — and an
+     * opaque origin has no `localStorage` at all, so `window.localStorage` is
+     * undefined rather than empty. Anything storing a preference was therefore
+     * untestable, and silently so: the code's own try/catch swallowed the
+     * failure and the test just saw "nothing was remembered". Giving jsdom a
+     * real origin makes storage behave the way it does in the APK, which
+     * serves from https://localhost.
+     */
+    environmentOptions: { jsdom: { url: 'http://localhost:3000' } },
     globals: false,
     include: ['**/*.test.ts', '**/*.test.tsx'],
     exclude: ['node_modules/**', '.next/**', 'out/**', 'android/**'],
