@@ -28,6 +28,14 @@ import { EMPTY_MODEL_INFO, WebSpeedPredictor, type ModelInfo } from '@/lib/ml/sp
  * (12.3 Hz) instead, which clears the requirement at any sensor rate.
  */
 const EMIT_INTERVAL_MS = 100;
+/**
+ * Cap on the GNSS reference trail kept for the trip export.
+ *
+ * At the 0.05-0.20 Hz this project measured in the field that is several
+ * hours; at a 1 Hz receiver, about ninety minutes. Long enough for any demo
+ * and bounded so a session left running cannot exhaust memory on a phone.
+ */
+const MAX_GNSS_TRAIL = 5000;
 
 /** Everything the Phase 5 debug panel shows, sampled at the UI rate. */
 export interface EngineDiagnostics {
@@ -135,6 +143,8 @@ export interface NavEngineOutput {
   lastSample: SensorSample | null;
   /** The most recent fix and how old it is — fixes are far rarer than samples. */
   lastGnss: LastGnss | null;
+  /** Raw fixes for the trip export's reference track. Copied on read. */
+  gnssTrail: () => Array<{ lat: number; lon: number; t: number }>;
   /** Which road graph is loaded, if any. Null means snapping cannot engage. */
   roadGraphEntry: RoadGraphEntry | null;
   diagnostics: EngineDiagnostics;
@@ -195,6 +205,15 @@ export function useNavigationEngine(): NavEngineOutput {
   const emitTimesRef = useRef<number[]>([]);
   const lastSampleTRef = useRef<number | null>(null);
   const lastGnssRef = useRef<{ gnss: NonNullable<SensorSample['gnss']>; t: number } | null>(null);
+  /**
+   * Raw fixes kept for the trip export's reference track.
+   *
+   * A ref, not state: appending at the fix rate would re-render the whole tree
+   * for data nothing on screen reads. The export copies it on demand.
+   * Bounded for the same reason the event log is — a long session must not
+   * grow without limit on a phone.
+   */
+  const gnssTrailRef = useRef<Array<{ lat: number; lon: number; t: number }>>([]);
 
   const feed = useCallback((sample: SensorSample) => {
     const engine = engineRef.current!;
@@ -217,7 +236,14 @@ export function useNavigationEngine(): NavEngineOutput {
     // Remember the last fix so the debug panel can show it between fixes. At
     // 0.09 Hz the odds of the displayed sample being the one carrying GNSS are
     // about one in four hundred, which is why every GNSS row read "—".
-    if (sample.gnss) lastGnssRef.current = { gnss: sample.gnss, t: sample.t };
+    if (sample.gnss) {
+      lastGnssRef.current = { gnss: sample.gnss, t: sample.t };
+      if (Number.isFinite(sample.gnss.lat) && Number.isFinite(sample.gnss.lon)) {
+        const trail = gnssTrailRef.current;
+        trail.push({ lat: sample.gnss.lat, lon: sample.gnss.lon, t: sample.t });
+        if (trail.length > MAX_GNSS_TRAIL) trail.splice(0, trail.length - MAX_GNSS_TRAIL);
+      }
+    }
 
     const prevT = lastSampleTRef.current;
     const sampleDtMs = prevT === null ? 20 : Math.max(0, sample.t - prevT);
@@ -291,6 +317,7 @@ export function useNavigationEngine(): NavEngineOutput {
     setUpdateHz(0);
     setLastSample(null);
     setLastGnss(null);
+    gnssTrailRef.current = [];
     setRoadGraphEntry(null);
     graphRequestedRef.current = false;
     lastGnssRef.current = null;
@@ -300,6 +327,10 @@ export function useNavigationEngine(): NavEngineOutput {
   }, []);
 
   const exportEventsJson = useCallback(() => engineRef.current?.events.toJSON() ?? '[]', []);
+
+  // Returns a copy: handing out the live ref would let a caller mutate the
+  // buffer the feed loop is appending to.
+  const gnssTrail = useCallback(() => [...gnssTrailRef.current], []);
 
   useEffect(() => () => engineRef.current?.reset(), []);
 
@@ -319,6 +350,7 @@ export function useNavigationEngine(): NavEngineOutput {
       feed,
       reset,
       exportEventsJson,
+      gnssTrail,
     }),
     [
       state,
@@ -335,6 +367,7 @@ export function useNavigationEngine(): NavEngineOutput {
       feed,
       reset,
       exportEventsJson,
+      gnssTrail,
     ],
   );
 }

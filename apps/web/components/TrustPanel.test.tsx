@@ -77,6 +77,7 @@ const EVENTS: NavEvent[] = [
 function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>> = {}) {
   const onControlsChange = vi.fn();
   const onExportEvents = vi.fn();
+  const onExportTrip = vi.fn();
   const utils = render(
     <TrustPanel
       simulated={false}
@@ -96,13 +97,15 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
       controls={DEFAULT_CONTROLS}
       onControlsChange={onControlsChange}
       onExportEvents={onExportEvents}
+      onExportTrip={onExportTrip}
+      tripPointCount={42}
       imuHz={37}
       gnssHz={0.09}
       updateHz={11.5}
       {...overrides}
     />,
   );
-  return { ...utils, onControlsChange, onExportEvents };
+  return { ...utils, onControlsChange, onExportEvents, onExportTrip };
 }
 
 function openPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>> = {}) {
@@ -439,5 +442,35 @@ describe('TrustPanel — provenance survives a source switch (deep test pass 8)'
     // 13 tracked, 11 named: the two unnamed are stated rather than dropped.
     expect(screen.getByText('UNNAMED')).toBeDefined();
     expect(screen.getByText('2')).toBeDefined();
+  });
+});
+
+describe('TrustPanel — trip export (9F)', () => {
+  it('offers GPX and GeoJSON alongside the event log', () => {
+    const { onExportTrip } = openPanel();
+    fireEvent.click(screen.getByRole('button', { name: /^events$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^gpx$/i }));
+    expect(onExportTrip).toHaveBeenCalledWith('gpx');
+    fireEvent.click(screen.getByRole('button', { name: /^geojson$/i }));
+    expect(onExportTrip).toHaveBeenCalledWith('geojson');
+  });
+
+  it('★ refuses to export a trip with nothing in it', () => {
+    // A GPX with no track opens to an empty map, which reads as the app having
+    // lost the run rather than the run not having started.
+    openPanel({ tripPointCount: 1 });
+    fireEvent.click(screen.getByRole('button', { name: /^events$/i }));
+    expect((screen.getByRole('button', { name: /^gpx$/i }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(
+      (screen.getByRole('button', { name: /^geojson$/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('says what the two tracks are, so the file is not a mystery', () => {
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: /^events$/i }));
+    expect(screen.getByText(/two tracks/i)).toBeDefined();
   });
 });

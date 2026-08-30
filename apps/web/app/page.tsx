@@ -3,7 +3,13 @@
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { appendTrailPoint, type TrailPoint } from '@pathpulse/nav-core';
+import {
+  appendTrailPoint,
+  buildGpx,
+  buildTripGeoJson,
+  tripFileName,
+  type TrailPoint,
+} from '@pathpulse/nav-core';
 import { FOLLOW_ZOOM, resolveMapStyle } from '@/config/map';
 import { resolveShownPosition, shouldJumpCamera } from '@/lib/shownPosition';
 import { useGeolocation } from '@/hooks/useGeolocation';
@@ -38,6 +44,14 @@ export default function Home() {
   const [showBenchmarks, setShowBenchmarks] = useState(false);
   const [showOffline, setShowOffline] = useState(false);
   const [mapBounds, setMapBounds] = useState<LatLonBounds | null>(null);
+  /**
+   * Wall-clock epoch of this session's t=0.
+   *
+   * Sample timestamps are milliseconds since the source started, so without
+   * this the export has no way to write a real <time>. Captured where the
+   * trail is cleared, which is exactly when a session begins.
+   */
+  const sessionStartRef = useRef<number>(Date.now());
 
   // ★ The navigation engine is now the single source of truth for what the
   // map draws. Raw GNSS is only an input to it, never drawn directly — that is
@@ -81,6 +95,7 @@ export default function Home() {
 
   useEffect(() => {
     setTrail([]);
+    sessionStartRef.current = Date.now();
     nav.reset();
     // ★ RE-ENGAGE THE CAMERA WHEN THE SOURCE CHANGES. ★
     // Any pan, zoom or rotate sets `following` false and it stays false until
@@ -128,6 +143,44 @@ export default function Home() {
       map.on('moveend', () => readBounds(map));
     },
     [readBounds],
+  );
+
+  const downloadText = useCallback((text: string, filename: string, mime: string) => {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  /**
+   * Golden Rule #8 again, in its strongest form: a file the judge opens later,
+   * on their own machine, showing our estimate and the raw GNSS reference as
+   * two tracks over the same drive. Where they diverge IS the drift, drawn to
+   * scale by software we did not write.
+   */
+  const handleExportTrip = useCallback(
+    (format: 'gpx' | 'geojson') => {
+      const startedAtEpochMs = sessionStartRef.current;
+      const reference = nav.gnssTrail();
+      const stem = tripFileName(startedAtEpochMs);
+      if (format === 'gpx') {
+        downloadText(
+          buildGpx({ estimated: trail, reference, startedAtEpochMs }),
+          `${stem}.gpx`,
+          'application/gpx+xml',
+        );
+      } else {
+        downloadText(
+          JSON.stringify(buildTripGeoJson({ estimated: trail, reference, startedAtEpochMs }), null, 2),
+          `${stem}.geojson`,
+          'application/geo+json',
+        );
+      }
+    },
+    [downloadText, nav, trail],
   );
 
   // Golden Rule #8: if the run can be exported it can be checked afterwards,
@@ -194,6 +247,8 @@ export default function Home() {
         controls={nav.controls}
         onControlsChange={nav.setControls}
         onExportEvents={handleExportEvents}
+        onExportTrip={handleExportTrip}
+        tripPointCount={trail.length}
         simulated={kind === 'simulation'}
         imuHz={source.imuHz}
         gnssHz={source.gnssHz}

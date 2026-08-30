@@ -1,10 +1,10 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. 9A-9E ✅ COMPLETE, deep-tested
+**CURRENT PHASE:** Phase 9 — Wow features. ✅ COMPLETE (9A-9F), all deep-tested
 **LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Phase 9F GPX export, then Phase 10 (demo hardening)
+**NEXT PHASE:** Phase 10 — demo hardening, slides, rehearsal
 
-> Phases 0-8 are complete, and Phase 9A-9E are in. The ISRO screening artefact — a position plot
+> Phases 0-9 are complete. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
 
 > ### Drift: **10.0% mean, 6.4% median, 22.6% p90** over 12 runs
@@ -1216,6 +1216,60 @@ bug and watching the tests fail (four failures and one respectively).
 **Tests:** 930 passing (nav-core 426, web 293, eval 125, sensor-sources 86) —
 12 new. Purity clean at 46 files. Ablation byte-identical.
 
+### Phase 9F — trip export (GPX + GeoJSON) ✅ — Phase 9 complete
+
+`nav-core/src/trip/export.ts`, with GPX and GeoJSON buttons in Debug → EVENTS.
+
+**Why this one is a credibility feature, not a convenience.** Everything else
+in the demo is a claim made while the judge is watching. A file they open
+afterwards in QGIS, BaseCamp or geojson.io is a claim they can check when we
+are not in the room — and it carries the comparison that matters: our estimate
+and the raw GNSS reference as two tracks over the same drive. Where they
+diverge *is* the drift, drawn to scale, by software we did not write.
+
+The estimate is split per mode with the mode **in the track name** — "PathPulse
+estimate — DEAD RECKONING (2)" lists itself in the viewer's sidebar. The
+stretches we inferred are visibly labelled as inferred.
+
+**Two design decisions I got wrong first, and the tests caught:**
+
+1. **The boundary vertex.** I deliberately did *not* overlap runs, reasoning
+   that a file is not a picture and a repeated fix would overstate distance for
+   anyone summing the tracks. That reasoning is simply wrong — the shared point
+   ends one run and starts the next, so the segment between is counted once
+   either way and the total is identical. What the overlap buys is a
+   **continuous line**: without it every mode change leaves a gap of one sample
+   interval (up to 14 m at motorway speed), and a broken trajectory in QGIS
+   reads as missing data. Now matches `buildTrailSegments`.
+
+2. **★ The two tracks covered different drives.** The on-screen trail is a ring
+   buffer of 500 points; the GNSS reference buffer holds 5000 fixes. On a long
+   session the estimate holds the last few minutes while the reference holds
+   the whole hour — so the file opened with a long GNSS track beside a short
+   estimate, and the obvious reading is *the estimator gave up*. The reference
+   is now confined to the window the estimate covers, which is the only span
+   over which the comparison means anything.
+
+**Also pinned:** GPX keeps a trailing one-sample run as a lone `trkpt` (valid
+in GPX 1.1) while GeoJSON drops it (a one-coordinate LineString is not a line).
+The formats disagree, they disagree correctly, and neither loses the position
+because the previous run closes on it.
+
+**The strongest test is in the web package**, where jsdom provides a real
+`DOMParser`: the generated GPX is *parsed as XML*, including one whose
+description contains `</gpx><script>alert(1)</script>`. String assertions
+cannot catch a document that is subtly not well-formed; this can.
+
+**Times are omitted rather than invented** when the session epoch is unknown.
+Sample timestamps are ms since the source started, so a GPX full of times
+computed from a made-up origin is worse than one with none — a reader cannot
+tell which they have.
+
+**Tests:** 973 passing (nav-core 460, web 302, eval 125, sensor-sources 86) —
+43 new. Purity clean at 48 files. Ablation byte-identical.
+
+**APK:** `PathPulse_Phase9F.apk`.
+
 ## NEXT PHASE
 
 **Phase 9 — Wow features** (confidence ellipse, turn detection, offline map)
@@ -1226,7 +1280,7 @@ bug and watching the tests fail (four failures and one respectively).
   PMTiles was deliberately not taken — see its note.
 - ~~9D spoofing detection~~ ✅ done, see above
 - ~~9E NavIC breakdown~~ ✅ done, see above
-- 9F GPX export
+- ~~9F GPX export~~ ✅ done, see above. **Phase 9 is complete.**
 
 ### Superseded — Phase 6D (done)
 **Phase 6D — road graph + road snapping** (the rest of Phase 6)

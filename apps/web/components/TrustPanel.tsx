@@ -17,6 +17,10 @@ interface TrustPanelProps {
   controls: EngineControls;
   onControlsChange: (patch: Partial<EngineControls>) => void;
   onExportEvents: () => void;
+  /** Phase 9F — the whole trip, as a file a judge can open later. */
+  onExportTrip: (format: 'gpx' | 'geojson') => void;
+  /** Points in the estimated track, so the buttons can refuse an empty trip. */
+  tripPointCount: number;
   imuHz: number;
   gnssHz: number;
   updateHz: number;
@@ -66,6 +70,8 @@ export default function TrustPanel({
   controls,
   onControlsChange,
   onExportEvents,
+  onExportTrip,
+  tripPointCount,
   imuHz,
   gnssHz,
   updateHz,
@@ -135,7 +141,12 @@ export default function TrustPanel({
               <ConstraintsTab controls={controls} onChange={onControlsChange} />
             ) : null}
             {tab === 'events' ? (
-              <EventsTab events={events} onExport={onExportEvents} />
+              <EventsTab
+                events={events}
+                onExport={onExportEvents}
+                onExportTrip={onExportTrip}
+                tripPointCount={tripPointCount}
+              />
             ) : null}
             {tab === 'stats' ? <StatsTab stats={stats} diagnostics={diagnostics} /> : null}
           </div>
@@ -509,7 +520,17 @@ const EVENT_COLORS: Record<string, string> = {
   WARNING: 'text-red-400',
 };
 
-function EventsTab({ events, onExport }: { events: NavEvent[]; onExport: () => void }) {
+function EventsTab({
+  events,
+  onExport,
+  onExportTrip,
+  tripPointCount,
+}: {
+  events: NavEvent[];
+  onExport: () => void;
+  onExportTrip: (format: 'gpx' | 'geojson') => void;
+  tripPointCount: number;
+}) {
   // Newest first: during a demo the interesting line is the one that just
   // happened, and scrolling to find it wastes the moment.
   const recent = [...events].reverse().slice(0, 120);
@@ -518,14 +539,40 @@ function EventsTab({ events, onExport }: { events: NavEvent[]; onExport: () => v
     <div>
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[9.5px] text-neutral-500">{events.length} events</span>
-        <button
-          type="button"
-          onClick={onExport}
-          className="rounded border border-white/15 px-2 py-1 text-[10px] text-neutral-300 transition hover:bg-white/10"
-        >
-          Export JSON
-        </button>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={onExport}
+            className="rounded border border-white/15 px-2 py-1 text-[10px] text-neutral-300 transition hover:bg-white/10"
+          >
+            Export JSON
+          </button>
+          <button
+            type="button"
+            onClick={() => onExportTrip('gpx')}
+            disabled={tripPointCount < 2}
+            className="rounded border border-white/15 px-2 py-1 text-[10px] text-neutral-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Estimate and GNSS reference as two tracks, openable in QGIS or BaseCamp"
+          >
+            GPX
+          </button>
+          <button
+            type="button"
+            onClick={() => onExportTrip('geojson')}
+            disabled={tripPointCount < 2}
+            className="rounded border border-white/15 px-2 py-1 text-[10px] text-neutral-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Same two tracks as GeoJSON, for geojson.io"
+          >
+            GeoJSON
+          </button>
+        </div>
       </div>
+
+      <p className="mb-1.5 text-[9.5px] leading-snug text-neutral-500">
+        GPX and GeoJSON carry two tracks — our estimate, split and named per
+        mode, and the raw GNSS fixes. Open both and the gap between them is the
+        drift, drawn by software we did not write.
+      </p>
 
       {recent.length === 0 ? (
         <p className="py-3 text-center text-[10px] text-neutral-600">no events yet</p>

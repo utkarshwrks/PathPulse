@@ -15,7 +15,7 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phases 0-8 complete, Phase 9A-9E in.** The dot
+**Phases 0-9 complete.** The dot
 survives a GNSS outage under an uncertainty ellipse that shows how wrong it
 might be, and the six defects a real-phone field test exposed on 2026-08-27 are
 fixed.
@@ -327,6 +327,7 @@ scripted animation can display any numbers it likes. These can.
 | **Session stats** | Debug → STATS | Duration, distance, outage count and durations, best/worst/mean drift. The drift figures here are **measured against a real fix on recovery**, not the engine's own uncertainty model. |
 | **Walking Mode** | Debug → CONSTRAINTS | Clamps speed to 3 m/s so you can walk the corridor with the phone and watch the dot move. Live physics, no vehicle needed. |
 
+| **Trip export** | Debug → EVENTS → GPX / GeoJSON | ★ The one a judge can check *after* the demo. Two tracks over the same drive: our estimate, split and named per mode, and the raw GNSS fixes. Open both in QGIS or geojson.io and the gap between them is the drift, drawn to scale by software we did not write. Times are real ISO timestamps, or omitted entirely rather than invented. |
 | **NavIC breakdown** | Debug → SENSORS | Tracked satellites per constellation with **NavIC first**. What makes it worth showing is the `DATA SOURCE` line above it: `MEASURED`, `SIMULATED`, `TOTAL-ONLY` or `UNAVAILABLE`. On a phone today it reads UNAVAILABLE, because the Capacitor WebView exposes no per-constellation data — that needs Phase 15's native `GnssStatus`. A missing breakdown never renders as zeroes, which would claim a measurement nobody made. |
 | **GNSS anomaly detection** | HUD badge, Debug → EVENTS | Flags a receiver that has been jammed, spoofed, or has simply stopped making sense: a fix implying an impossible speed, a receiver insisting it is stationary while the IMU disagrees, or satellites vanishing while carrier-to-noise stays healthy. **It warns and never acts** — the badge says so, because a red banner a judge reads as "the app is lost" would cost more than the feature is worth. Jamming is in the problem statement's background but not its ask; ISRO sponsors the statement. |
 | **Offline map** | top-right → Offline | ★ The aeroplane-mode moment. Open it, hit **Download this area** — it states the tile count and size first — then put the phone in aeroplane mode. The map keeps drawing from storage and the vehicle keeps navigating from its own sensors, with every radio off. The button itself turns green and reads `OFFLINE ✈`, and the panel reports how many tiles are stored. |
