@@ -8,6 +8,7 @@ import {
   formatDemoClock,
   shouldTriggerOutage,
 } from './demoScript';
+import { ROUTES } from '@/hooks/useSensorSource';
 
 /**
  * The scripted demo.
@@ -113,5 +114,30 @@ describe('formatDemoClock', () => {
   it('does not print a negative or NaN clock', () => {
     expect(formatDemoClock(-5)).toBe('0:00');
     expect(formatDemoClock(NaN)).toBe('0:00');
+  });
+});
+
+describe('the demo route must outlast the script', () => {
+  it('★ the city route is long enough for the whole 80 s sequence', () => {
+    // The simulator does not loop. If the route ever became short enough to
+    // finish before 1:20, the demo would stop mid-sentence — and nothing else
+    // in the suite would notice, because the script and the route are defined
+    // in different places.
+    const coords = ROUTES.city.route.geometry.coordinates;
+    let metres = 0;
+    for (let i = 1; i < coords.length; i++) {
+      const [lon1, lat1] = coords[i - 1]!;
+      const [lon2, lat2] = coords[i]!;
+      const R = 6_371_000;
+      const p1 = (lat1! * Math.PI) / 180;
+      const p2 = (lat2! * Math.PI) / 180;
+      const dp = p2 - p1;
+      const dl = ((lon2! - lon1!) * Math.PI) / 180;
+      const a =
+        Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+      metres += 2 * R * Math.asin(Math.sqrt(a));
+    }
+    // Even at a brisk 15 m/s the route must outlast the script, with margin.
+    expect(metres / 15).toBeGreaterThan((DEMO_TOTAL_MS / 1000) * 1.2);
   });
 });

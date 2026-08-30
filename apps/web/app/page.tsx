@@ -49,6 +49,21 @@ export default function Home() {
   const [showBenchmarks, setShowBenchmarks] = useState(false);
   const [showOffline, setShowOffline] = useState(false);
   const [showPitch, setShowPitch] = useState(false);
+  /**
+   * Bumped by Demo Mode to request a staged start.
+   *
+   * ★ WHY NOT JUST CALL source.play() ★
+   * `useSensorSource` rebuilds its source inside an effect keyed on
+   * [kind, routeKey], and effects run after the render that changed them. So
+   * pressing Demo while the Live source was selected called `play()` on a
+   * simulator that did not exist yet: `simRef` was still null, the web source
+   * was started instead, and the fresh simulator arrived a moment later
+   * un-started. The result was a demo banner counting down over a dead map —
+   * the failure you would only find by pressing the button in front of a
+   * judge. Bumping a counter and playing from an effect puts the start after
+   * the source it is starting.
+   */
+  const [demoEpoch, setDemoEpoch] = useState(0);
   const [mapBounds, setMapBounds] = useState<LatLonBounds | null>(null);
   /**
    * Wall-clock epoch of this session's t=0.
@@ -79,14 +94,25 @@ export default function Home() {
       setShowDeviceInfo(false);
       setFollowing(true);
       nav.setControls(DEMO_CONTROLS);
-      source.reset();
-      nav.reset();
-      setTrail([]);
-      sessionStartRef.current = Date.now();
-      source.play();
+      // The actual start happens in the effect below, once the source for the
+      // configuration above actually exists.
+      setDemoEpoch((e) => e + 1);
     },
     triggerOutage: () => source.triggerOutage(DEMO_OUTAGE_MS),
   });
+
+  useEffect(() => {
+    if (demoEpoch === 0) return;
+    source.reset();
+    nav.reset();
+    setTrail([]);
+    sessionStartRef.current = Date.now();
+    setFollowing(true);
+    source.play();
+    // Keyed on the epoch alone: it changes on every start, including a restart
+    // where kind and route are already correct and no other dependency moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoEpoch]);
 
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [following, setFollowing] = useState(true);

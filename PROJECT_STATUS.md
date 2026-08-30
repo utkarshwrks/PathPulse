@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 10 — demo hardening. 10A + 10B + 10D done
+**CURRENT PHASE:** Phase 10 — demo hardening. 10A + 10B + 10D done, deep-tested
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Phase 10 remaining — 10C perf profile, 10E backup, 10F final audit
 
@@ -1404,6 +1404,45 @@ rather than inventing figures.
 
 **Tests:** 1035 passing (nav-core 461, web 348, eval 140, sensor-sources 86) —
 46 new.
+
+### Deep test pass 9 — Phase 10, assumed broken ✅
+
+One defect, and it was the worst-placed one in the project.
+
+**★ Pressing Demo produced a banner counting down over a dead map.**
+`useSensorSource` rebuilds its source inside an effect keyed on
+`[kind, routeKey]`, and effects run *after* the render that changed them.
+`prepare()` set the source configuration and then called `play()` in the same
+breath — against a simulator that did not exist yet. `simRef` was still null,
+so `play()` started the *web* source instead, `reset()` returned early, and the
+fresh simulator arrived a moment later **un-started**.
+
+The reproduction is worse than first thought: it broke on **any kind or route
+change**, not only when starting from Live. Only "already simulation, already
+city" worked — which is exactly the state a developer is in while building it,
+and exactly not the state a phone is in when someone presses the button in
+front of a judge.
+
+Fixed by bumping an epoch counter in `prepare()` and starting from an effect
+keyed on it, which puts the start after the source it is starting. Confirmed by
+restoring the synchronous call and watching all three cases fail.
+
+**page.tsx cannot be rendered in a test** — it dynamically imports a WebGL map
+— so `hooks/demoStart.test.tsx` reproduces its hook composition instead: the
+same source hook, the same epoch-keyed start effect, in the same order. That is
+the honest way to cover an ordering bug in a file the suite cannot mount.
+
+**Also pinned:** the city route must outlast the script. The simulator does not
+loop, so a route shortened below 1:20 of driving would end the demo
+mid-sentence — and nothing else would notice, because the script and the route
+are defined in different files. It is 1995 m, over two minutes at city speed.
+
+**Checked and clean:** the outage fires exactly once across a full run; the
+script clamps NaN and negative clocks rather than throwing mid-presentation;
+every phase renders; the deck's compliance rows all carry a defensible
+sentence; error boundaries contain a crash without unmounting their siblings.
+
+**Tests:** 1039 passing (nav-core 461, web 352, eval 140, sensor-sources 86).
 
 ## NEXT PHASE
 
