@@ -72,6 +72,12 @@ export interface EngineDiagnostics {
   mlSuppressed: boolean;
   /** Age of the GNSS speed currently aiding the estimate, ms. */
   gnssSpeedAgeMs: number;
+  /** Steps per second, 0 when not walking. Corroborates the ON FOOT verdict. */
+  cadenceHz: number;
+  stepCount: number;
+  /** Metres per step, learned from GNSS while GNSS was up. */
+  strideM: number;
+  strideObservations: number;
   /** Why we are still ACQUIRING, or null once navigating. */
   acquiringReason: string | null;
   modeReason: string | null;
@@ -106,6 +112,10 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   motionReason: 'no samples yet',
   mlSuppressed: false,
   gnssSpeedAgeMs: Number.POSITIVE_INFINITY,
+  cadenceHz: 0,
+  stepCount: 0,
+  strideM: 0.72,
+  strideObservations: 0,
   acquiringReason: null,
   modeReason: null,
   speedSource: 'NONE',

@@ -29,6 +29,7 @@ import {
   MotionContextDetector,
   type MotionContext,
 } from '../motion/context.js';
+import { StepDetector, StrideModel } from '../motion/steps.js';
 import {
   NullSpeedPredictor,
   SpeedSmoother,
@@ -43,7 +44,7 @@ import type { RoadGraph, RoadPosition } from '../mapmatch/types.js';
  * Surfaced so the HUD can label it. A judge asking "is the AI actually doing
  * anything?" deserves an answer on screen rather than an assurance.
  */
-export type SpeedSource = 'GNSS' | 'ML' | 'INTEGRATED' | 'STOPPED' | 'NONE';
+export type SpeedSource = 'GNSS' | 'ML' | 'STEPS' | 'INTEGRATED' | 'STOPPED' | 'NONE';
 
 /** Runtime feature switches. Every one of these is an ablation-table row. */
 export interface ConstraintFlags {
@@ -175,10 +176,25 @@ export interface EngineConfig extends ConstraintFlags {
   /** Never hold a GNSS speed longer than this however slow the receiver, ms. */
   gnssSpeedHoldMaxMs: number;
   /**
-   * How long the course baseline may grow without clearing the noise bar
-   * before we conclude the carrier is simply not moving, s.
+   * The window a speed and course are measured over, s.
+   *
+   * ★ IT ENDS ON TIME, NEVER ON DISTANCE ★ A window that closes as soon as the
+   * displacement is large enough is closed preferentially by favourable noise,
+   * and every speed it reports is biased upward — a walk measured 11 km/h.
+   * Long enough that walking pace clears the receiver's noise; short enough
+   * that the readout still moves. Overridden only when the signal dwarfs the
+   * noise outright, where there is nothing left to select.
    */
-  gnssCourseStaleS: number;
+  gnssCourseMinBaselineS: number;
+  /**
+   * How much of the gap to a new fix the estimate adopts, 0..1.
+   *
+   * 1 is the old behaviour: teleport onto every reading, and record the
+   * receiver's noise into the trail at full amplitude. Below 1 the estimate
+   * takes a fraction and lets dead reckoning carry the rest, which averages
+   * the noise out over a few fixes without letting a real error stand.
+   */
+  gnssPositionGain: number;
   /**
    * Below this the step is fix noise or hand tremor rather than travel, m/s,
    * and is not added to the distance total.
@@ -212,7 +228,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlInferenceIntervalMs: 500,
   gnssSpeedHoldMs: 3_000,
   gnssSpeedHoldMaxMs: 12_000,
-  gnssCourseStaleS: 20,
+  gnssCourseMinBaselineS: 10,
+  gnssPositionGain: 0.25,
   distanceFloorMps: 0.3,
   roadSnapConfig: DEFAULT_ROAD_SNAP_CONFIG,
 };
@@ -296,6 +313,11 @@ export class NavigationEngine {
    */
   private hasGnssSpeedEvidence = false;
   private readonly motion = new MotionContextDetector();
+  private readonly steps = new StepDetector();
+  private readonly stride = new StrideModel();
+  private lastCadenceHz = 0;
+  /** Last few derived course speeds, for the median that steadies the readout. */
+  private readonly courseSpeeds: number[] = [];
   /** Logged once per suppression episode, not once per sample. */
   private mlSuppressed = false;
   private lastStationarity: StationarityResult = {
@@ -435,6 +457,14 @@ export class NavigationEngine {
     mlSuppressed: boolean;
     /** Age of the GNSS speed currently aiding the estimate, ms. */
     gnssSpeedAgeMs: number;
+    /** Steps per second, 0 when not walking. */
+    cadenceHz: number;
+    /** Steps counted this session. */
+    stepCount: number;
+    /** Metres per step, learned from GNSS. */
+    strideM: number;
+    /** How many times GNSS has taught us that stride. 0 means it is still the default. */
+    strideObservations: number;
     /** Why we are still ACQUIRING, or null once navigating. */
     acquiringReason: string | null;
     /** Why the engine is dead reckoning or degraded, for the HUD. */
@@ -458,6 +488,10 @@ export class NavigationEngine {
         this.lastGnssSpeed === null || this.lastSampleT === null
           ? Number.POSITIVE_INFINITY
           : Math.max(0, this.lastSampleT - this.lastGnssSpeed.t),
+      cadenceHz: this.lastCadenceHz,
+      stepCount: this.steps.steps,
+      strideM: this.stride.strideM,
+      strideObservations: this.stride.observationCount,
       forwardBiasMps2: this.forwardBias.estimateMps2,
       forwardBiasObservations: this.forwardBias.observationCount,
       roadSnapAppliedFraction: this.roadSnapAppliedFraction,
@@ -590,6 +624,13 @@ export class NavigationEngine {
       if (this.config.lowPass) a = this.accelLowPass.push(a[0], a[1], a[2]);
 
       this.lastStationarity = this.stationarity.push(ax, ay, az, gx, gy, gz);
+
+      // ★ THE STEP SIGNAL IS THE RAW MAGNITUDE ★ Not the filtered value: the
+      // low-pass exists to remove road vibration before integration and it
+      // attenuates the very peaks a footstep is made of. Magnitude rather than
+      // an axis, so it works with the handset in a hand, a pocket or a bag.
+      this.steps.push(sample.t, Math.hypot(ax, ay, az), dtMs);
+      this.lastCadenceHz = this.steps.cadenceHz(sample.t);
 
       // ★ INTERLOCK ★ A ZUPT asserted while the vehicle is moving is far more
       // damaging than a ZUPT missed at a red light: it zeroes a real velocity
@@ -751,11 +792,34 @@ export class NavigationEngine {
           // classifier read the low ones as a stop and had ZUPT arrest a
           // person mid-stride.
           //
-          // A displacement measured over a baseline that is *allowed to grow*
-          // until it clears the noise gives a real answer a few seconds later
-          // instead of a bad answer immediately. At walking pace the bar falls
-          // in about nine seconds; at 14 m/s it falls on the very next fix, so
-          // vehicles see no change at all.
+          // ★ AND CLEARING ON DISTANCE BIASES THE ANSWER UPWARD ★
+          //
+          // The third version let the baseline grow until the displacement
+          // cleared a noise bar, then reported that displacement over the
+          // elapsed time. It answered, and it answered too fast: a walk
+          // measured a steady 11 km/h.
+          //
+          // The reason is selection. Among the fixes at which the baseline
+          // *could* clear, it clears at the earliest one — which is
+          // preferentially the interval where fix noise happened to push the
+          // displacement outward. Every measurement is then taken from a
+          // sample chosen for having noise in one direction, and a stopping
+          // rule that depends on the quantity being measured is a biased
+          // estimator however carefully the arithmetic is done.
+          //
+          // Two corrections, and they are separate problems:
+          //
+          //   1. Stop on TIME, not on distance. A window whose end does not
+          //      depend on the displacement cannot be selected by it. The one
+          //      exception is where the signal dwarfs the noise — a vehicle
+          //      covering 28 m against a 4 m radius — where there is nothing
+          //      left to select and waiting only makes the estimate stale.
+          //
+          //   2. Remove the inflation that remains. Two fixes each uncertain
+          //      by sigma sit further apart, on average, than the points they
+          //      estimate: E[d_obs^2] = d^2 + 2*sigma^2. Subtracting it is a
+          //      line of arithmetic and it matters most exactly where the
+          //      displacement is smallest, which is walking pace.
           const bar = Math.max(8, 3 * acc);
           const base = this.gnssCourseBaseline;
           if (base === null) {
@@ -765,46 +829,47 @@ export class NavigationEngine {
             const bdn = gnssEnu.n - base.enu.n;
             const bDist = Math.hypot(bde, bdn);
             const bDtS = (sample.t - base.t) / 1000;
-            if (bDist > bar && bDtS > 0) {
+            const corrected = Math.sqrt(Math.max(0, bDist * bDist - 2 * acc * acc));
+            const signalDwarfsNoise = corrected > 5 * acc;
+            const longEnough = bDtS >= this.config.gnssCourseMinBaselineS;
+
+            if (bDtS > 0 && (signalDwarfsNoise || longEnough)) {
+              // A bearing still needs a displacement clearly larger than the
+              // noise — a course taken from jitter would spin the estimate on
+              // the spot. Speed does not: over a fixed window, zero is a
+              // perfectly good answer and the one a stopped carrier deserves.
+              const headingDeg =
+                bDist > bar
+                  ? normaliseDeg((Math.atan2(bde, bdn) * 180) / Math.PI)
+                  : (this.gnssCourse?.headingDeg ?? this.dr.current.headingDeg);
+
+              // A median of the last three, so one bad fix moves the number on
+              // screen by nothing rather than by half.
+              this.courseSpeeds.push(corrected / bDtS);
+              if (this.courseSpeeds.length > 3) this.courseSpeeds.shift();
+              const sorted = [...this.courseSpeeds].sort((a, b) => a - b);
+
               this.gnssCourse = {
-                speedMps: bDist / bDtS,
-                headingDeg: normaliseDeg((Math.atan2(bde, bdn) * 180) / Math.PI),
+                speedMps: sorted[Math.floor(sorted.length / 2)]!,
+                headingDeg,
               };
               this.gnssCourseBaseline = { t: sample.t, enu: gnssEnu };
             } else if (bDtS > 0) {
               // ★ A DISPLACEMENT TOO SMALL TO MEASURE IS STILL AN UPPER BOUND ★
               //
-              // The baseline has not cleared the noise bar, so we cannot say
-              // what the speed is. We can say what it is not: the carrier has
-              // demonstrably not covered more than the observed displacement
-              // plus a radius of fix noise in the time elapsed. Without this
-              // bound the fix carried no speed at all, `resetTo` fell back to
-              // whatever the engine already held, and an agitated handset
-              // integrated its way to 11 m/s and banked 575 m of travel in the
-              // fifty seconds before the stale timer below could rescue it.
-              //
-              // The bound tightens on its own: as the baseline ages without
-              // moving, the same displacement over a longer interval means a
-              // lower ceiling, until the stale branch calls it a stop outright.
+              // The window is not up yet, so we cannot say what the speed is.
+              // We can say what it is not: the carrier has demonstrably not
+              // covered more than the observed displacement plus a radius of
+              // noise in the time elapsed. Without this bound the fix carried
+              // no speed at all, `resetTo` fell back to whatever the engine
+              // already held, and an agitated handset integrated its way to
+              // 11 m/s and banked 575 m in the first fifty seconds.
               const ceiling = (bDist + acc) / Math.max(1, bDtS);
               const held = this.gnssCourse?.speedMps;
               this.gnssCourse = {
                 speedMps: held === undefined ? ceiling : Math.min(held, ceiling),
                 headingDeg: this.gnssCourse?.headingDeg ?? this.dr.current.headingDeg,
               };
-            }
-            if (bDist <= bar && bDtS > this.config.gnssCourseStaleS) {
-              // Long enough to be sure. Whatever this is, it is not travel:
-              // the receiver has been watching for twenty seconds and cannot
-              // find eight metres of it. Reporting a stop is the answer, and
-              // reporting it is what lets ZUPT fire on a handset being carried
-              // — the IMU alone can never call this, because a hand is never
-              // still enough to clear the stationarity thresholds.
-              this.gnssCourse = {
-                speedMps: 0,
-                headingDeg: this.gnssCourse?.headingDeg ?? this.dr.current.headingDeg,
-              };
-              this.gnssCourseBaseline = { t: sample.t, enu: gnssEnu };
             }
           }
 
@@ -839,6 +904,12 @@ export class NavigationEngine {
       if (trusted && speedForFix !== undefined && Number.isFinite(speedForFix)) {
         this.hasGnssSpeedEvidence = true;
         this.forwardBias.pushGnssSpeed(sample.t, speedForFix);
+        // ★ EVERY SECOND OF GOOD GNSS IS A FREE MEASUREMENT OF THE STRIDE ★
+        // Speed over cadence is the stride length of the person carrying this
+        // handset. Learning it while GNSS is up is what makes the step model
+        // worth anything once GNSS is gone — the same trick ZUPT plays with
+        // accelerometer bias, applied to the carrier instead of the sensor.
+        if (this.lastCadenceHz > 0) this.stride.observe(speedForFix, this.lastCadenceHz);
         // Held, not consumed. See `gnssSpeedHoldMs`.
         this.lastGnssSpeed = { t: sample.t, mps: speedForFix };
       }
@@ -882,6 +953,7 @@ export class NavigationEngine {
       t: sample.t,
       accelVariance: this.lastStationarity.accelVariance,
       isStationary: this.lastStationarity.isStationary,
+      cadenceHz: this.lastCadenceHz,
       ...(this.lastGnssSpeed
         ? { gnssSpeedMps: this.lastGnssSpeed.mps, gnssSpeedT: this.lastGnssSpeed.t }
         : {}),
@@ -956,6 +1028,17 @@ export class NavigationEngine {
       });
     }
     if (mlAllowed) this.mlSuppressed = false;
+
+    // ★ THE ANSWER FOR THE CASE THE MODEL DECLINES ★
+    // Holding the vehicle model back on foot left a walker with no speed
+    // source at all, and the HUD read DEAD RECKONING · ON FOOT · 0 km/h with
+    // the marker sitting still. Cadence times stride is measured fresh every
+    // step, so unlike an integrated velocity it does not decay: a two-minute
+    // outage on foot is no worse than a ten-second one.
+    const stepSpeed =
+      this.motion.current === 'PEDESTRIAN' && this.lastCadenceHz > 0
+        ? this.stride.speedMps(this.lastCadenceHz)
+        : undefined;
 
     if (this.dr.isInitialised) {
       // ★ HOLD THE DOPPLER SPEED BETWEEN FIXES ★ See `gnssSpeedHoldMs`. Two
@@ -1040,6 +1123,7 @@ export class NavigationEngine {
         lateralAccelMps2: lateralAccel,
         isStationary: stationaryForZupt,
         mlSpeedMps: mlSpeed,
+        stepSpeedMps: stepSpeed,
         roadMaxSpeedMps: this.roadMaxSpeedMps,
         gnssSpeedWeight,
       });
@@ -1050,9 +1134,11 @@ export class NavigationEngine {
           ? 'STOPPED'
           : gnssSpeed !== undefined && Number.isFinite(gnssSpeed)
             ? 'GNSS'
-            : mlSpeed !== undefined
-              ? 'ML'
-              : 'INTEGRATED';
+            : stepSpeed !== undefined
+              ? 'STEPS'
+              : mlSpeed !== undefined
+                ? 'ML'
+                : 'INTEGRATED';
     } else {
       this.speedSource = 'NONE';
     }
@@ -1093,14 +1179,38 @@ export class NavigationEngine {
 
     if (mode === 'GNSS' || mode === 'GNSS_DEGRADED' || mode === 'INITIALIZING') {
       if (trusted && gnssEnu) {
+        // ★ DO NOT TELEPORT ONTO EVERY FIX ★
+        //
+        // This used to adopt each fix outright. Between fixes the estimate
+        // propagates smoothly; on a fix it jumped the whole distance to the
+        // new reading, and with a 2-4 m receiver reporting every five seconds
+        // that is a 2-4 m step, five seconds apart, recorded into the trail
+        // forever. Walking a straight road drew a saw-tooth — and every tooth
+        // was the receiver's noise, drawn at full amplitude and then kept.
+        //
+        // Dead reckoning has already carried the estimate most of the way, so
+        // the difference on arrival is mostly that noise. Taking a fraction of
+        // it corrects a real error within a few fixes while averaging the
+        // noise away, which is the whole reason to run an estimator next to a
+        // receiver instead of just drawing the receiver.
+        const gain = this.dr.isInitialised
+          ? Math.max(0, Math.min(1, this.config.gnssPositionGain))
+          : 1;
+        const adopted: EnuPoint =
+          gain >= 1
+            ? gnssEnu
+            : {
+                e: this.dr.current.enu.e + gain * (gnssEnu.e - this.dr.current.enu.e),
+                n: this.dr.current.enu.n + gain * (gnssEnu.n - this.dr.current.enu.n),
+              };
         this.dr.resetTo({
           t: sample.t,
-          enu: gnssEnu,
+          enu: adopted,
           speedMps: speedForFix ?? this.dr.current.speedMps,
           headingDeg: headingForFix ?? this.dr.current.headingDeg,
           accuracyM: sample.gnss!.accuracyM,
         });
-        shownEnu = gnssEnu;
+        shownEnu = adopted;
         this.covarianceAlongM = sample.gnss!.accuracyM;
         this.covarianceCrossM = sample.gnss!.accuracyM;
       } else if (this.lastGnssEnu) {
@@ -1539,6 +1649,10 @@ export class NavigationEngine {
     this.lastGnssSpeed = null;
     this.gnssCourseBaseline = null;
     this.gnssCourse = null;
+    this.courseSpeeds.length = 0;
+    this.steps.reset();
+    this.stride.reset();
+    this.lastCadenceHz = 0;
     this.hasGnssSpeedEvidence = false;
     this.motion.reset();
     this.mlSuppressed = false;

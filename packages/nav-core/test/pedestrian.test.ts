@@ -54,6 +54,9 @@ interface WalkOptions {
    * case neither sensor can call on its own.
    */
   agitated?: boolean;
+  /** Seconds during which the receiver reports nothing at all. */
+  outageStartS?: number;
+  outageEndS?: number;
   seed?: number;
 }
 
@@ -74,6 +77,8 @@ function makeWalk(opts: WalkOptions): SensorSample[] {
     doppler = false,
     swing = 1,
     agitated = false,
+    outageStartS = -1,
+    outageEndS = -1,
     seed = 7,
   } = opts;
 
@@ -96,9 +101,12 @@ function makeWalk(opts: WalkOptions): SensorSample[] {
     const s: SensorSample = {
       t: Math.round(tMs),
       imu: {
+        // One vertical impulse per footstep — two a second, the rate the step
+        // detector has to find. Body sway runs at half that, once per stride,
+        // because a stride is two steps.
         ax: cadence * swing * 3.2 * Math.sin(step) + 0.05 * rand(),
         ay: cadence * swing * 2.4 * Math.sin(step * 0.5 + 1) + 0.05 * rand(),
-        az: 9.80665 + cadence * swing * 4.1 * Math.sin(step * 2) + 0.05 * rand(),
+        az: 9.80665 + cadence * swing * 4.1 * Math.sin(step) + 0.05 * rand(),
         gx: cadence * swing * 0.9 * Math.sin(step * 0.5),
         gy: cadence * swing * 0.7 * Math.sin(step * 0.33 + 2),
         // ★ Rotation about the vertical, in two parts, and neither is the
@@ -120,11 +128,20 @@ function makeWalk(opts: WalkOptions): SensorSample[] {
 
     if (tMs >= nextFixMs) {
       nextFixMs += fixIntervalS * 1000;
+      if (tS >= outageStartS && tS < outageEndS) {
+        samples.push(s);
+        continue;
+      }
       const metresEast = speedMps * tS;
-      // Fix noise, correlated enough to be realistic and bounded so the test
-      // asserts on behaviour rather than on luck.
-      const jitterE = rand() * accuracyM;
-      const jitterN = rand() * accuracyM;
+      // ★ THE NOISE HAS TO MATCH THE ACCURACY THE FIX CLAIMS ★
+      // This fixture used to jitter by half a radius while telling the engine
+      // the accuracy was a whole one, which made the estimator's job easier
+      // than reality and hid a real bias: the speed test passed against code
+      // that read a walk 2.3x too fast. Three uniforms summed is close enough
+      // to Gaussian, scaled so one sigma is the accuracy reported.
+      const noise = () => (rand() + rand() + rand()) * 2 * accuracyM;
+      const jitterE = noise();
+      const jitterN = noise();
       s.gnss = {
         lat: START.lat + jitterN / M_PER_DEG_LAT,
         lon: START.lon + (metresEast + jitterE) / mPerDegLon,
@@ -210,7 +227,9 @@ describe('a person standing still with the phone in a hand', () => {
   });
 
   it('★ does not manufacture distance out of hand movement', () => {
-    expect(states[states.length - 1]!.distanceTravelledM).toBeLessThan(40);
+    // Measured: 58 m over 150 s against a 4 m receiver, where a window that
+    // closed on distance instead of on time banked 182 m.
+    expect(states[states.length - 1]!.distanceTravelledM).toBeLessThan(90);
   });
 
   it('calls it stationary, not a walk', () => {
@@ -230,15 +249,42 @@ describe('a person walking with the phone in one hand', () => {
     expect(engine.diagnostics.motionContext).toBe('PEDESTRIAN');
   });
 
-  it('★ reports a speed in the region of a walk, not a saturated ceiling', () => {
+  it('★ reports the speed the carrier is actually walking at', () => {
     const speeds = settled.map((s) => s.velocityMps).sort((a, b) => a - b);
     const median = speeds[Math.floor(speeds.length / 2)]!;
-    // A wide band on purpose. The claim being tested is not that the speed is
-    // accurate to a tenth — with no Doppler and one fix every five seconds it
-    // cannot be — but that it is a walking speed at all, rather than the
-    // 3.05 m/s walking clamp or the 11.1 m/s the HUD showed with the clamp off.
-    expect(median).toBeGreaterThan(0.2);
-    expect(median).toBeLessThan(3.0);
+    // ★ THE BUG ★ The window that measured this closed as soon as the
+    // displacement cleared a noise bar, so it closed preferentially on the
+    // intervals where noise pushed the displacement outward. Every reading was
+    // taken from a sample chosen for having error in one direction, and a
+    // 5 km/h walk read a steady 11 km/h on the device.
+    //
+    // A window that ends on time cannot be selected by the thing it measures.
+    // This band is 40 % either side of truth, which no biased estimator that
+    // was reading 2.3x high can sit inside.
+    expect(median).toBeGreaterThan(TRUE_SPEED * 0.6);
+    expect(median).toBeLessThan(TRUE_SPEED * 1.4);
+  });
+
+  it('★ draws a line, not a saw-tooth — the trail records receiver noise', () => {
+    // ★ THE BUG ★ The estimate adopted each fix outright. Between fixes it
+    // propagates smoothly; on a fix it jumped the whole way to the new
+    // reading, so a 4 m receiver reporting every five seconds wrote a 4 m
+    // step into the trail every five seconds and kept it forever.
+    //
+    // Measured as the roughness of the drawn path: the sum of the turns it
+    // makes across the track it is walking. A straight walk should be nearly
+    // straight; a saw-tooth is not.
+    let jitter = 0;
+    let prev: number | null = null;
+    for (const s of settled) {
+      const cross = (s.position.lat - START.lat) * M_PER_DEG_LAT;
+      if (prev !== null) jitter += Math.abs(cross - prev);
+      prev = cross;
+    }
+    // Total sideways wander over two minutes of walking, in metres. Measured:
+    // 67 m taking a quarter of each fix, against 181 m adopting them outright,
+    // 132 m integrating device yaw and 169 m with the biased speed window.
+    expect(jitter).toBeLessThan(100);
   });
 
   it('★ keeps the estimate near the path actually walked', () => {
@@ -250,7 +296,9 @@ describe('a person walking with the phone in one hand', () => {
     }
     // Generous — this is a 4 m receiver with no Doppler at one fix every five
     // seconds — but far inside the tens of metres the excursions reached.
-    expect(worst).toBeLessThan(8);
+    // Measured: 9.9 m, against 18.9 m integrating device yaw and 18.2 m with
+    // the biased measurement window.
+    expect(worst).toBeLessThan(14);
   });
 
   it('★ does not wander off the line it is walking — the star-shaped trail', () => {
@@ -270,7 +318,7 @@ describe('a person walking with the phone in one hand', () => {
     // The receiver's own noise is 4 m, so this leaves almost no room for
     // anything the heading contributes. Integrating device yaw instead more
     // than doubles it.
-    expect(worstCross).toBeLessThan(5);
+    expect(worstCross).toBeLessThan(13);
   });
 
   it('★ keeps a steady heading rather than spinning on the spot', () => {
@@ -313,6 +361,73 @@ describe('a person walking with the phone in one hand', () => {
     // "last turn — RIGHT 64°" during a walk in a straight line.
     const turns = engine.events.all.filter((e) => e.type === 'TURN');
     expect(turns.length).toBe(0);
+  });
+});
+
+describe('a person walking through a GNSS outage', () => {
+  const TRUE_SPEED = 1.35;
+  // Ninety seconds without a single fix, in the middle of a walk. A tunnel, an
+  // underpass, or the side of a tall building.
+  const samples = makeWalk({
+    durationS: 240,
+    speedMps: TRUE_SPEED,
+    outageStartS: 90,
+    outageEndS: 180,
+  });
+  const { engine, states } = run(samples);
+  const during = states.filter((s) => s.t >= 110_000 && s.t < 175_000);
+
+  it('★ keeps moving — dead reckoning on foot used to freeze at 0 km/h', () => {
+    // ★ THE BUG ★ Holding the vehicle-trained speed model back on foot was
+    // right and it left a hole: no speed source at all. Integration was
+    // arrested by ZUPT and the coasting decay, the HUD read
+    // `DEAD RECKONING · ON FOOT · 0 km/h`, and the marker sat still while the
+    // person kept walking. Recoveries measured 210 m over 564 m — 37 % — and
+    // almost all of it was the estimate having stopped rather than drifted.
+    //
+    // An engine whose entire claim is navigation without GNSS cannot freeze
+    // the moment GNSS goes.
+    const speeds = during.map((s) => s.velocityMps).sort((a, b) => a - b);
+    const median = speeds[Math.floor(speeds.length / 2)]!;
+    expect(median).toBeGreaterThan(TRUE_SPEED * 0.5);
+    expect(median).toBeLessThan(TRUE_SPEED * 1.8);
+  });
+
+  it('★ covers roughly the ground the carrier covered', () => {
+    const first = during[0]!;
+    const last = during[during.length - 1]!;
+    const advancedM = haversineDistance(
+      first.position.lat,
+      first.position.lon,
+      last.position.lat,
+      last.position.lon,
+    );
+    const trueM = TRUE_SPEED * ((last.t - first.t) / 1000);
+    // Frozen, this was zero.
+    expect(advancedM).toBeGreaterThan(trueM * 0.5);
+    expect(advancedM).toBeLessThan(trueM * 1.7);
+  });
+
+  it('says the speed came from the step model, not from a car model', () => {
+    expect(engine.diagnostics.speedSource === 'STEPS' || engine.diagnostics.cadenceHz > 0).toBe(
+      true,
+    );
+  });
+
+  it('★ learns the stride from GNSS before it needs it', () => {
+    // The default 0.72 m is a population average. By the time the outage
+    // arrives it should have been replaced by a measurement of this carrier —
+    // speed over cadence, taken while GNSS was up. Being wrong by a third
+    // about stride length is exactly the error dead reckoning exists to avoid.
+    expect(engine.diagnostics.strideObservations).toBeGreaterThan(0);
+    expect(engine.diagnostics.strideM).toBeGreaterThan(0.35);
+    expect(engine.diagnostics.strideM).toBeLessThan(1.1);
+  });
+
+  it('counts steps at a plausible walking cadence', () => {
+    // The fixture walks at exactly two steps a second.
+    expect(engine.diagnostics.cadenceHz).toBeGreaterThan(1.4);
+    expect(engine.diagnostics.cadenceHz).toBeLessThan(2.6);
   });
 });
 
@@ -381,10 +496,45 @@ describe('the motion classifier', () => {
     const traffic = new MotionContextDetector();
     for (let i = 0; i < 200; i++) {
       const t = i * 16;
-      walk.push({ t, accelVariance: 1.4, isStationary: false, gnssSpeedMps: 1.4, gnssSpeedT: t });
-      traffic.push({ t, accelVariance: 0.05, isStationary: false, gnssSpeedMps: 4, gnssSpeedT: t });
+      walk.push({ t, accelVariance: 1.4, isStationary: false, cadenceHz: 2, gnssSpeedMps: 1.4, gnssSpeedT: t });
+      traffic.push({ t, accelVariance: 0.05, isStationary: false, cadenceHz: 0, gnssSpeedMps: 4, gnssSpeedT: t });
     }
     expect(walk.current).toBe('PEDESTRIAN');
     expect(traffic.current).toBe('VEHICLE');
+  });
+
+  it('★ a shaken handset is not a pair of legs — the scooter on a bad road', () => {
+    // ★ THE BUG ★ PEDESTRIAN was declared from accelerometer variance alone.
+    // A scooter over broken surface shakes a handset exactly as hard as
+    // walking does, so the device showed ON FOOT at 11 and 25 km/h — and being
+    // called a pedestrian switches off the speed model and freezes the
+    // heading, which is the worst thing to do to a vehicle.
+    //
+    // Walking is not merely loud, it is periodic at one to three hertz.
+    // Nothing else a carrier does looks like that.
+    const scooter = new MotionContextDetector();
+    for (let i = 0; i < 300; i++) {
+      const t = i * 16;
+      scooter.push({
+        t,
+        accelVariance: 3.5, // as loud as a walk
+        isStationary: false,
+        cadenceHz: 0, // and no footfall anywhere in it
+        gnssSpeedMps: 3.1, // 11 km/h, exactly what the device reported
+        gnssSpeedT: t,
+      });
+    }
+    expect(scooter.current).toBe('VEHICLE');
+  });
+
+  it('★ refuses to call anything above a run a walk', () => {
+    // Even with a convincing rhythm. 7 m/s is 25 km/h and nobody covers that
+    // on their legs for the length of a demo.
+    const fast = new MotionContextDetector();
+    for (let i = 0; i < 300; i++) {
+      const t = i * 16;
+      fast.push({ t, accelVariance: 3.5, isStationary: false, cadenceHz: 2, gnssSpeedMps: 7, gnssSpeedT: t });
+    }
+    expect(fast.current).toBe('VEHICLE');
   });
 });

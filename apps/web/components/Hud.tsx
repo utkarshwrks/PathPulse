@@ -145,7 +145,7 @@ export default function Hud({
                   <span
                     data-testid="speed-source"
                     className={`ml-0.5 rounded px-1 py-px font-mono text-[10px] font-semibold ${
-                      speedSource === 'ML'
+                      speedSource === 'ML' || speedSource === 'STEPS'
                         ? 'bg-violet-500/20 text-violet-300'
                         : speedSource === 'GNSS'
                           ? 'bg-emerald-500/15 text-emerald-300'

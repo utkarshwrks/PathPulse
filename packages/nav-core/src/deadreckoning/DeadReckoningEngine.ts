@@ -74,6 +74,15 @@ export interface PropagateOptions {
    * Ranks below GNSS Doppler and above unaided integration — see propagate().
    */
   mlSpeedMps?: number;
+  /**
+   * Speed from the pedestrian step model, m/s, when the carrier is walking.
+   *
+   * Ranks alongside the ML model — both are inferred rather than measured —
+   * and the engine supplies whichever matches the motion. Unlike an integrated
+   * velocity this does not decay with time: cadence is measured fresh every
+   * step, so a two-minute outage on foot is no worse than a ten-second one.
+   */
+  stepSpeedMps?: number;
   /** Matched road's speed limit, m/s, when road snapping has a match. */
   roadMaxSpeedMps?: number;
   /**
@@ -339,6 +348,14 @@ export class DeadReckoningEngine {
       this.lastTrustedSpeed = gnssSpeedMps;
       if (gnssWeight >= 1) this.state.unaidedMs = 0;
       else this.state.unaidedMs += dtMs;
+    } else if (opts.stepSpeedMps !== undefined && Number.isFinite(opts.stepSpeedMps)) {
+      // 2a. ★ THE PEDESTRIAN STEP MODEL. ★
+      //     Cadence times stride. Anchors the velocity vector exactly as a
+      //     Doppler fix does and, like the ML model below, does not reset
+      //     unaidedMs — it is inferred, not measured.
+      vE = opts.stepSpeedMps * fE;
+      vN = opts.stepSpeedMps * fN;
+      this.state.unaidedMs += dtMs;
     } else if (opts.mlSpeedMps !== undefined && Number.isFinite(opts.mlSpeedMps)) {
       // 2. ★ THE ML SPEED MODEL (Phase 8). ★
       //    An IO-VNBD-trained CNN reading two seconds of IMU. It ranks below

@@ -143,6 +143,13 @@ describe('Hud — the numbers a judge reads', () => {
     expect(screen.getByText('still')).toBeTruthy();
   });
 
+  it('★ labels a speed that came from counting footsteps', () => {
+    // A judge asking whether the AI is doing anything deserves an answer on
+    // screen, and so does one asking what replaced it when it stood down.
+    renderHud({ speedSource: 'STEPS', motionContext: 'PEDESTRIAN' });
+    expect(screen.getByTestId('speed-source').textContent).toBe('[STEPS]');
+  });
+
   it('stays out of the way in a vehicle', () => {
     renderHud({ motionContext: 'VEHICLE' });
     expect(screen.queryByText('on foot')).toBeNull();

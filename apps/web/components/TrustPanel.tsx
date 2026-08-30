@@ -324,6 +324,25 @@ function SensorsTab({
         {diagnostics.mlSuppressed ? (
           <Row k="AI SPEED" v="held — out of domain" accent />
         ) : null}
+        {/*
+          The cadence is the corroboration the variance cannot give. A scooter
+          on a bad road shakes the handset as hard as a walk does; only a walk
+          does it rhythmically at one to three hertz. The stride beside it is
+          the number GNSS taught us about this carrier, and it is what the
+          estimate runs on once GNSS is gone.
+        */}
+        {diagnostics.cadenceHz > 0 || diagnostics.stepCount > 0 ? (
+          <Row
+            k="CADENCE"
+            v={`${diagnostics.cadenceHz.toFixed(1)}/s · ${diagnostics.stepCount} steps`}
+          />
+        ) : null}
+        {diagnostics.strideObservations > 0 ? (
+          <Row
+            k="STRIDE"
+            v={`${diagnostics.strideM.toFixed(2)} m (${diagnostics.strideObservations})`}
+          />
+        ) : null}
         <Row
           k="STATIONARY"
           v={diagnostics.isStationary ? 'YES' : 'NO'}

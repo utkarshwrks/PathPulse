@@ -54,6 +54,16 @@ export interface MotionContextConfig {
   varianceWindow: number;
   /** A speed no pedestrian reaches, m/s. 8 m/s is 28.8 km/h. */
   vehicleSpeedMps: number;
+  /**
+   * The fastest a person travels on their own legs, m/s. 4 m/s is 14.4 km/h —
+   * a run, not a walk, and comfortably above anything sustained.
+   *
+   * ★ VIBRATION IS NOT EVIDENCE OF LEGS ★ A scooter or a bicycle over broken
+   * surface shakes a handset as hard as walking does, and the field device
+   * duly showed ON FOOT at 11 and 25 km/h. Variance says "something is
+   * shaking"; it never said "somebody is walking".
+   */
+  pedestrianMaxSpeedMps: number;
   /** A speed that is not travel at all, m/s. */
   stationarySpeedMps: number;
   /** How long a GNSS speed stays admissible as evidence, ms. */
@@ -72,6 +82,7 @@ export const DEFAULT_MOTION_CONTEXT_CONFIG: MotionContextConfig = {
   pedestrianVarianceThreshold: 0.35,
   varianceWindow: 120,
   vehicleSpeedMps: 8,
+  pedestrianMaxSpeedMps: 4,
   stationarySpeedMps: 0.6,
   gnssEvidenceMs: 12_000,
   holdSamples: 30,
@@ -83,6 +94,17 @@ export interface MotionContextInput {
   accelVariance: number;
   /** The stationarity detector's own verdict. */
   isStationary: boolean;
+  /**
+   * Steps per second from the step detector, 0 when no plausible step rhythm
+   * is present.
+   *
+   * ★ THE CORROBORATION THAT VARIANCE CANNOT GIVE ★ Walking is not merely
+   * loud, it is *periodic* at one to three hertz, and nothing else a carrier
+   * does looks like that. Requiring a real cadence before declaring PEDESTRIAN
+   * is what separates a person from a bicycle on a bad road — the two have
+   * indistinguishable variance and completely different footfall.
+   */
+  cadenceHz?: number;
   /** Most recent trusted GNSS speed, m/s, or undefined if there is none. */
   gnssSpeedMps?: number;
   /** When that speed was measured, ms. */
@@ -194,6 +216,8 @@ export class MotionContextDetector {
     const v = this.medianVariance();
     const hasV = Number.isFinite(v);
     const onFoot = hasV && v > this.config.pedestrianVarianceThreshold;
+    const cadence = input.cadenceHz ?? 0;
+    const walking = Number.isFinite(cadence) && cadence > 0;
 
     if (this.isRecentGnss(input)) {
       const s = input.gnssSpeedMps!;
@@ -212,11 +236,17 @@ export class MotionContextDetector {
       }
 
       // 3. Between the two, speed alone cannot separate a walk from a car in
-      //    traffic. This is the one place the variance gets to decide, and it
-      //    decides on a two-second median rather than on a single sample.
-      if (onFoot) {
+      //    traffic. Three things must agree before we call it a walk: the
+      //    handset is being shaken (median variance, not a single sample), it
+      //    is being shaken *rhythmically* at a human step rate, and the speed
+      //    is one a person can produce with their legs. Variance alone put
+      //    ON FOOT on the screen at 25 km/h.
+      if (onFoot && walking && s <= this.config.pedestrianMaxSpeedMps) {
         this.gnssBacked = 'PEDESTRIAN';
-        return { context: 'PEDESTRIAN', reason: `var ${v.toFixed(2)} at ${s.toFixed(1)} m/s` };
+        return {
+          context: 'PEDESTRIAN',
+          reason: `${cadence.toFixed(1)} steps/s at ${s.toFixed(1)} m/s`,
+        };
       }
       this.gnssBacked = 'VEHICLE';
       return {
@@ -243,7 +273,9 @@ export class MotionContextDetector {
       return { context: this.gnssBacked, reason: 'held — no gnss speed to re-check' };
     }
 
-    if (onFoot) return { context: 'PEDESTRIAN', reason: `var ${v.toFixed(2)}, no gnss speed` };
+    if (onFoot && walking) {
+      return { context: 'PEDESTRIAN', reason: `${cadence.toFixed(1)} steps/s, no gnss speed` };
+    }
     if (input.isStationary) return { context: 'STATIONARY', reason: 'imu still, no gnss speed' };
     if (!hasV) return { context: 'UNKNOWN', reason: 'variance window not full' };
     return { context: 'VEHICLE', reason: `var ${v.toFixed(2)}, no gnss speed` };
