@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B + 9C + 9D ✅ COMPLETE
+**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B + 9C + 9D ✅ COMPLETE, deep-tested
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Phase 9E NavIC breakdown, 9F GPX export, then Phase 10
 
@@ -1080,6 +1080,45 @@ lost. `GNSS_ANOMALY` events are red in the event log.
 27 new. Purity clean at 44 files.
 
 **APK:** `PathPulse_Phase9D.apk`.
+
+### Deep test pass 7 — Phase 9D, assumed broken ✅
+
+Two real defects, both invisible to every test written alongside the feature —
+because those tests all check a single event, and the state that breaks is the
+one a *persistent* fault produces. A jammer does not jam for one sample.
+
+**1. ★ A sustained anomaly flooded the event log.** One minute of jamming at a
+1 Hz fix rate emitted **35 identical `GNSS_ANOMALY` lines**. The log is bounded
+at 200 entries and is one of the anti-fake features — the artefact a judge is
+invited to export and read — so a few minutes of a genuine fault evicts the
+mode changes, the drift measurements and the outage it was meant to document,
+leaving nothing but the same sentence repeated. Each *kind* now reports at most
+once per hold window; a **different** kind is always let through, because
+suppressing that would hide the second half of an attack.
+
+**2. Side effects behind a short-circuit.** The three checks were chained with
+`??`, so the first to fire stopped the others running — and each check
+maintains state it needs across samples. The constellation check owns the
+satellite baseline, so a run of jumps left that baseline frozen: satellites
+genuinely settling at 5 were still being judged against a 12 from twelve fixes
+earlier, and reported as a collapse that had already been and gone. All three
+now run every sample and the result is chosen afterwards.
+
+**A test of mine passed for the wrong reason.** The first version of the
+baseline test ended on a teleported fix, so `IMPLAUSIBLE_JUMP` was returned and
+the `not.toBe('CONSTELLATION')` assertion succeeded without ever exercising the
+baseline. Rewritten to settle 10 m from the previous fix first, so the jump
+check is silent and cannot mask the answer. Both defects were then confirmed by
+re-introducing them and watching the tests fail — 35 events and a
+false CONSTELLATION respectively.
+
+**Also checked and clean:** walking mode. It exists so the engine can be
+demonstrated on foot indoors, where GNSS is poor and often reports zero speed
+while the IMU is moving — exactly the static-hold shape. The 4 m/s floor keeps
+it silent through a full minute of walking.
+
+**Tests:** 902 passing (nav-core 405, web 286, eval 125, sensor-sources 86) —
+7 new. Ablation still byte-identical: the detector remains advisory.
 
 ## NEXT PHASE
 
