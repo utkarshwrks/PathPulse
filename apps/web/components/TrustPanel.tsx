@@ -21,6 +21,8 @@ interface TrustPanelProps {
   onExportTrip: (format: 'gpx' | 'geojson') => void;
   /** Points in the estimated track, so the buttons can refuse an empty trip. */
   tripPointCount: number;
+  /** Dismiss the panel. It is opened from the menu. */
+  onClose: () => void;
   imuHz: number;
   gnssHz: number;
   updateHz: number;
@@ -72,17 +74,20 @@ export default function TrustPanel({
   onExportEvents,
   onExportTrip,
   tripPointCount,
+  onClose,
   imuHz,
   gnssHz,
   updateHz,
   modelInfo,
   simulated,
 }: TrustPanelProps) {
-  const [open, setOpen] = useState(false);
+  // Opened from the menu now, not from a button competing with the HUD for
+  // the top of the screen. The internal toggle stays as the collapse.
+  const [open, setOpen] = useState(true);
   const [tab, setTab] = useState<Tab>('sensors');
 
   return (
-    <div className="absolute right-3 top-14 z-10 w-[min(92vw,21rem)]" data-tour="debug">
+    <div className="absolute right-2 top-2 z-40 w-[min(96vw,21rem)]" data-tour="debug">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -95,6 +100,14 @@ export default function TrustPanel({
         />
         Debug
         <span className="text-neutral-500">{open ? '▾' : '▸'}</span>
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close panel"
+        className="absolute right-0 top-0 -translate-y-9 rounded-lg border border-white/15 bg-black/75 px-2.5 py-2 text-xs text-neutral-300 backdrop-blur transition hover:bg-black/90"
+      >
+        ✕
       </button>
 
       {open ? (

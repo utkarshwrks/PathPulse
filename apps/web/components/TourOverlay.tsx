@@ -75,7 +75,7 @@ export default function TourOverlay({ index, onNext, onBack, onSkip }: TourOverl
     <div className="absolute inset-0 z-50" data-testid="tour-overlay">
       {/* Backdrop. Pointer events are captured so a stray tap during the tour
           cannot fire a control the tour is currently describing. */}
-      <div className="absolute inset-0 bg-black/70" onClick={onNext} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-[3px]" onClick={onNext} />
 
       {box ? (
         <div
@@ -110,12 +110,6 @@ export default function TourOverlay({ index, onNext, onBack, onSkip }: TourOverl
 
         <h2 className="mt-1.5 text-base font-semibold text-neutral-50">{step.title}</h2>
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-neutral-300">{step.body}</p>
-        {step.action ? (
-          <p className="mt-2 rounded bg-sky-500/10 px-2 py-1.5 text-[11px] text-sky-300">
-            {step.action}
-          </p>
-        ) : null}
-
         <div className="mt-3 flex items-center gap-2">
           <div className="flex gap-1">
             {TOUR_STEPS.map((s, i) => (

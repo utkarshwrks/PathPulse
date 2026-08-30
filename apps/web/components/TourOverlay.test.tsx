@@ -81,25 +81,29 @@ describe('TourOverlay', () => {
 });
 
 describe('Welcome', () => {
-  it('leads with the problem, not the interface', () => {
+  it('says what the problem is in one line', () => {
     render(<Welcome onTour={vi.fn()} onSkip={vi.fn()} buildId="abc123" />);
-    expect(screen.getByText(/tunnel, a basement/i)).toBeDefined();
+    expect(screen.getByText(/tunnels and basements/i)).toBeDefined();
   });
 
-  it('★ states the honest headline, caveat included', () => {
-    render(<Welcome onTour={vi.fn()} onSkip={vi.fn()} buildId="abc123" />);
-    expect(screen.getByText(/10.0% mean drift/)).toBeDefined();
-    expect(screen.getByText(/on the .{0,4}10% target rather than under it/i)).toBeDefined();
-    expect(screen.getByText(/every log so far is\s+simulated/i)).toBeDefined();
+  it('★ stays short — the numbers live where they can be checked', () => {
+    // REVISED. This screen used to carry three paragraphs and the drift
+    // figure with its caveats, before anyone had seen the app do anything.
+    // That is a wall, not a welcome. The honest numbers are one tap away on
+    // the results screen and the pitch deck, which state them in full.
+    const { container } = render(
+      <Welcome onTour={vi.fn()} onSkip={vi.fn()} buildId="abc123" />,
+    );
+    expect((container.textContent ?? '').length).toBeLessThan(220);
   });
 
   it('offers both the tour and a way past it', () => {
     const onTour = vi.fn();
     const onSkip = vi.fn();
     render(<Welcome onTour={onTour} onSkip={onSkip} buildId="abc123" />);
-    fireEvent.click(screen.getByRole('button', { name: /show me around/i }));
+    fireEvent.click(screen.getByRole('button', { name: /quick tour/i }));
     expect(onTour).toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
     expect(onSkip).toHaveBeenCalled();
   });
 

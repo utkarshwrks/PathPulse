@@ -28,6 +28,7 @@ import OfflinePanel from '@/components/OfflinePanel';
 import DemoBar from '@/components/DemoBar';
 import PitchScreen from '@/components/PitchScreen';
 import Welcome from '@/components/Welcome';
+import AppMenu from '@/components/AppMenu';
 import TourOverlay from '@/components/TourOverlay';
 import { useTour } from '@/hooks/useTour';
 import ErrorBoundary from '@/components/ErrorBoundary';
@@ -52,6 +53,9 @@ export default function Home() {
   const [showBenchmarks, setShowBenchmarks] = useState(false);
   const [showOffline, setShowOffline] = useState(false);
   const [showPitch, setShowPitch] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
+  const [showSources, setShowSources] = useState(false);
   /**
    * Bumped by Demo Mode to request a staged start.
    *
@@ -94,6 +98,9 @@ export default function Home() {
       setRouteKey('city');
       setShowOffline(false);
       setShowPitch(false);
+      setShowMenu(false);
+      setShowDebug(false);
+      setShowSources(false);
       setShowBenchmarks(false);
       setShowDeviceInfo(false);
       setFollowing(true);
@@ -301,8 +308,10 @@ export default function Home() {
       />
       </ErrorBoundary>
 
+      {showDebug ? (
       <ErrorBoundary area="Debug panel">
       <TrustPanel
+        onClose={() => setShowDebug(false)}
         modelInfo={nav.modelInfo}
         sample={nav.lastSample}
         lastGnss={nav.lastGnss}
@@ -321,9 +330,32 @@ export default function Home() {
         updateHz={nav.updateHz}
       />
       </ErrorBoundary>
+      ) : null}
 
-      <div className="absolute right-3 top-3 z-10 flex gap-1.5">
-        {!demo.running ? (
+      {/* ★ ONE BUTTON, NOT FIVE ★
+          The controls had grown to five buttons pinned top-right, on the same
+          line as a HUD up to 359 px wide. On a 390 px phone they physically
+          could not coexist and they overlapped — each feature had been added
+          by appending one more button to a row that was already full. */}
+      <div className="absolute right-3 top-3 z-30 flex gap-1.5">
+        <button
+          type="button"
+          data-tour="menu"
+          aria-label="Open menu"
+          onClick={() => setShowMenu(true)}
+          className={`rounded-lg border px-3 py-2 text-sm backdrop-blur transition ${
+            offline.online
+              ? 'border-white/15 bg-black/70 text-neutral-200 hover:bg-black/85'
+              : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+          }`}
+        >
+          {offline.online ? '☰' : '✈'}
+        </button>
+      </div>
+
+      {/* The single primary action, where a thumb reaches it. */}
+      {!demo.running ? (
+        <div className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
           <ErrorBoundary area="Demo" fallback={null}>
             <DemoBar
               running={false}
@@ -334,51 +366,75 @@ export default function Home() {
               onStop={demo.stop}
             />
           </ErrorBoundary>
-        ) : null}
-        <button
-          type="button"
-          data-tour="offline"
-          onClick={() => setShowOffline(true)}
-          className={`rounded-lg border px-3 py-2 text-xs font-medium backdrop-blur transition ${
-            offline.online
-              ? 'border-white/15 bg-black/70 text-neutral-200 hover:bg-black/85'
-              : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
-          }`}
-        >
-          {offline.online ? 'Offline' : 'OFFLINE ✈'}
-        </button>
-        <button
-          type="button"
-          data-tour="pitch"
-          onClick={() => setShowPitch(true)}
-          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
-        >
-          Pitch
-        </button>
-        <button
-          type="button"
-          onClick={tour.restart}
-          title="Replay the guided tour"
-          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
-        >
-          ?
-        </button>
-        <button
-          type="button"
-          data-tour="benchmarks"
-          onClick={() => setShowBenchmarks(true)}
-          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
-        >
-          Benchmarks
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowDeviceInfo(true)}
-          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
-        >
-          Device
-        </button>
-      </div>
+        </div>
+      ) : null}
+
+      {showMenu ? (
+        <ErrorBoundary area="Menu" fallback={null}>
+          <AppMenu
+            onClose={() => setShowMenu(false)}
+            items={[
+              {
+                id: 'demo',
+                icon: '▶',
+                label: 'Run the demo',
+                hint: 'Plays the whole GPS-loss story on its own, about 80 seconds.',
+                onSelect: demo.start,
+                primary: true,
+              },
+              {
+                id: 'sources',
+                icon: '📡',
+                label: 'Choose a source',
+                hint: 'Simulation, your phone\u2019s real sensors, or the recorded backup.',
+                onSelect: () => setShowSources(true),
+              },
+              {
+                id: 'debug',
+                icon: '🔧',
+                label: 'Live sensors & proof',
+                hint: 'Raw readings, the event log, and switches that break the physics on purpose.',
+                onSelect: () => setShowDebug(true),
+              },
+              {
+                id: 'offline',
+                icon: '⛰',
+                label: offline.online ? 'Offline maps' : 'Offline — radio is off',
+                hint: 'Store the map area, then try it in aeroplane mode.',
+                onSelect: () => setShowOffline(true),
+              },
+              {
+                id: 'benchmarks',
+                icon: '📊',
+                label: 'Measured results',
+                hint: 'The ablation table: one component switched off per row.',
+                onSelect: () => setShowBenchmarks(true),
+              },
+              {
+                id: 'pitch',
+                icon: '📈',
+                label: 'The pitch',
+                hint: 'Five slides: problem, approach, results, model, compliance.',
+                onSelect: () => setShowPitch(true),
+              },
+              {
+                id: 'device',
+                icon: '📱',
+                label: 'Device & build',
+                hint: 'What this phone exposes, and which build you are running.',
+                onSelect: () => setShowDeviceInfo(true),
+              },
+              {
+                id: 'tour',
+                icon: '?',
+                label: 'Replay the tour',
+                hint: 'The six-step walkthrough, again.',
+                onSelect: tour.restart,
+              },
+            ]}
+          />
+        </ErrorBoundary>
+      ) : null}
 
       {showBenchmarks ? <Benchmarks onClose={() => setShowBenchmarks(false)} /> : null}
 
@@ -424,7 +480,7 @@ export default function Home() {
       {/* Manual source controls step aside during a scripted run: the script
           drives them, and leaving them within reach only invites someone to
           fight it mid-demo. */}
-      {!demo.running ? (
+      {showSources && !demo.running ? (
       <SourcePanel
         kind={kind}
         routeKey={routeKey}
@@ -465,6 +521,15 @@ export default function Home() {
 
       {kind === 'live' ? (
         <PermissionGate status={live.status} error={live.error} onRetry={live.start} />
+      ) : null}
+
+      {tour.phase === 'loading' ? (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#080b10]">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/10 border-t-sky-400" />
+          <p className="mt-4 text-[11px] uppercase tracking-widest text-neutral-500">
+            PathPulse
+          </p>
+        </div>
       ) : null}
 
       {tour.phase === 'welcome' ? (

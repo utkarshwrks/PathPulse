@@ -19,23 +19,25 @@ Build under test: `~/Desktop/PathPulse_Phase10.apk`
 
 ## 1 · First run (2 min)
 
-☐ A **welcome screen** appears: PathPulse, the problem, the 10.0% figure with
-its caveat, and two buttons.
-☐ Tap **Show me around** → the tour starts at step 1 of 10.
-☐ **Next** advances; **Back** works; the dots track position.
-☐ Highlight ring lands on the thing each step is describing.
+☐ A brief **loading spinner**, then a **welcome screen**: logo, two lines, two
+buttons. Nothing else.
+☐ Tap **Quick tour · 20 sec** → step 1 of 4, screen **blurred**, a ring around
+the **Demo** button.
+☐ Each step highlights **one control** and says in one line what it does:
+Demo → HUD → the ellipse → the ☰ menu.
 ☐ **Skip tour** works from *any* step.
 ☐ Force-close and reopen → **welcome does not reappear**.
-☐ Tap **?** (top right) → the tour replays from step 1.
+☐ ☰ → **Replay the tour** → it runs again.
 
 ---
 
 ## 2 · The scripted demo (3 min) ★ the main event
 
-☐ Open the source panel (bottom left) and set it to **Live browser sensors**.
-☐ Now tap **▶ Demo**.
-  *This is the path that was broken until recently — starting the demo from
-  Live. It must switch to the simulation and start moving immediately.*
+☐ ☰ → **Choose a source** → **Live browser sensors** → **Start**.
+  *The marker must find you. This was broken: Start fired before the source
+  existed, so nothing happened while the button said "Stop".*
+☐ Close that, then tap **▶ Demo** (bottom centre).
+  *Also previously broken — starting the demo while on Live opened a dead map.*
 
 Then watch the banner:
 
@@ -53,6 +55,13 @@ Then watch the banner:
 
 ---
 
+## 2b · Layout (30 sec)
+
+☐ Only **two** things sit over the map: the HUD (top left) and ☰ (top right).
+They must **not overlap**, on any screen size.
+☐ ☰ opens a sheet with eight named entries, each with a one-line hint.
+☐ Every panel opened from it has a way to close it.
+
 ## 3 · The HUD (1 min)
 
 ☐ Mode badge colour matches the trail colour.
@@ -66,7 +75,7 @@ the outage, and the ellipse on the map should match that shape.
 
 ## 4 · Prove it is not a recording (3 min) ★ strongest section
 
-Open **Debug** (top right).
+☰ → **Live sensors & proof**.
 
 ☐ **SENSORS** — raw accel/gyro twitching every frame. Put the phone flat: it
 still twitches by 0.01–0.05. Rotate it: gyro jumps.
@@ -82,7 +91,7 @@ estimate should visibly wander. Switch it back: it recovers.
 
 ## 5 · Offline (2 min) ★ the aeroplane-mode moment
 
-☐ Top right → **Offline**.
+☐ ☰ → **Offline maps**.
 ☐ It states: radio, map source, tile cache **active**, tiles stored.
 ☐ Tap **Download this area** → tile count and size are quoted *first*, then a
 progress bar runs.
@@ -98,7 +107,7 @@ progress bar runs.
 
 ## 6 · The backup (1 min)
 
-☐ Source panel → **Replay — demo.jsonl (backup)**.
+☐ ☰ → **Choose a source** → **Replay — demo.jsonl (backup)**.
 ☐ It loads and names itself (`Demo replay (N samples)`).
 ☐ **Play** → the full outage-and-recovery sequence runs with nothing to trigger.
 ☐ Progress bar **moves**.
@@ -109,7 +118,7 @@ progress bar runs.
 
 ## 7 · Export (1 min)
 
-☐ Debug → **EVENTS** → **GPX**. A file downloads.
+☐ ☰ → Live sensors & proof → **EVENTS** → **GPX**. A file downloads.
 ☐ Also **GeoJSON**.
 ☐ Open the GeoJSON at <https://geojson.io> (needs network): you should see
 **two tracks** — the estimate split by mode, and the GNSS reference — and the
@@ -120,7 +129,7 @@ gap between them is the drift.
 
 ## 8 · The pitch (1 min)
 
-☐ Top right → **Pitch**. Five slides, arrow keys or the buttons.
+☐ ☰ → **The pitch**. Five slides, arrow keys or the buttons.
 ☐ Slide 3 shows the **real ablation table** including the p90, and says
 "every log is simulated".
 ☐ Slide 5 marks the drift row **PARTIAL**, not DONE.

@@ -99,6 +99,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
       onExportEvents={onExportEvents}
       onExportTrip={onExportTrip}
       tripPointCount={42}
+      onClose={vi.fn()}
       imuHz={37}
       gnssHz={0.09}
       updateHz={11.5}
@@ -109,24 +110,45 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
 }
 
 function openPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>> = {}) {
+  // The panel is opened from the app menu now and renders expanded, so there
+  // is nothing to click here. Kept as a named helper so the tests still read
+  // as "open the panel, then assert".
   const utils = renderPanel(overrides);
-  fireEvent.click(screen.getByRole('button', { name: /debug/i }));
   return utils;
 }
 
 describe('TrustPanel — opening and tabs', () => {
-  it('starts closed so it never covers the map by default', () => {
+  it('★ opens expanded, because the menu is what decides it is wanted', () => {
+    // REVISED. It used to start collapsed behind its own "Debug" button, which
+    // sat top-right on the same line as a HUD up to 359 px wide and overlapped
+    // it on a phone. The panel is now reached from the app menu, so by the
+    // time it renders the user has already asked for it.
     renderPanel();
+    expect(screen.getByText(/SENSORS/)).toBeDefined();
+  });
+
+  it('can be dismissed', () => {
+    const onClose = vi.fn();
+    renderPanel({ onClose });
+    fireEvent.click(screen.getByRole('button', { name: /close panel/i }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('still collapses in place, for a quick look at the map underneath', () => {
+    renderPanel();
+    // Starts expanded now; one press of its own header collapses it.
+    expect(screen.getByRole('button', { name: 'SENSORS' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /debug/i }));
     expect(screen.queryByRole('button', { name: 'SENSORS' })).toBeNull();
   });
 
-  it('opens and closes on the Debug button', () => {
+  it('collapses and expands on its own header button', () => {
     renderPanel();
     const toggle = screen.getByRole('button', { name: /debug/i });
     fireEvent.click(toggle);
-    expect(screen.getByRole('button', { name: 'SENSORS' })).toBeTruthy();
-    fireEvent.click(toggle);
     expect(screen.queryByRole('button', { name: 'SENSORS' })).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'SENSORS' })).toBeTruthy();
   });
 
   it('shows all four tabs', () => {

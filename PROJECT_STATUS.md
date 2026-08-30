@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Onboarding — welcome screen + guided tour ✅
+**CURRENT PHASE:** UI rework — one menu, four-step tour, live-location fix ✅
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Rehearsal. See [docs/TESTING.md](./docs/TESTING.md) for the step-by-step check
 
@@ -1574,6 +1574,49 @@ battery drop and the backup screen recording.
 
 **Tests:** 1112 passing (nav-core 463, web 417, eval 146, sensor-sources 86) —
 37 new.
+
+### UI rework — and a live-location bug I had missed ✅
+
+Feedback was blunt and correct: the options overlapped, the whole problem
+statement had been dumped into the app, the tour read like a story rather than
+showing one feature at a time, and **live location did not work**.
+
+**★ 1. Live location was broken — the same race I had already "fixed" once.**
+The live source is built behind `NativeSource.isAvailable()`, a promise, so
+`webRef` is empty for a moment after Live is selected. Tapping **Start** inside
+that moment left `play()` with nothing to start — while still setting
+`isRunning: true`. The button flipped to Stop, no fix ever arrived, and the app
+looked exactly like it could not find you.
+
+This is the *same* race that made the Demo button open onto a dead map. I fixed
+it there and did not check the path a user hits every single time. An
+unfulfilled play is now remembered and honoured the moment the source exists —
+covered for live and replay, and verified by restoring the race.
+
+**2. The controls physically could not fit.** Five buttons pinned top-right, on
+the same line as a HUD up to 359 px wide, on a 390 px phone. Each feature had
+been added by appending one more button to a row that was already full. Now
+**one ☰**, opening a sheet where every entry has a name and a line saying what
+it does — which the icons never had room for. Debug and the source picker moved
+in there too, so exactly two things sit over the map.
+
+**3. The tour was ten paragraphs.** Someone holding a borrowed phone presses
+Skip on that and learns nothing. Now **four steps, one line each**, blurring the
+screen and spotlighting a single control: Demo → HUD → ellipse → menu. About
+twenty seconds. The one-line cap is enforced by a test — if it will not fit on
+one line it is not a tour step, it is documentation.
+
+**4. The welcome screen was a wall.** It opened with three paragraphs and the
+drift figure with its caveats, before anyone had seen the app do anything. Now
+a loading spinner, a logo, two lines and two buttons. The honest numbers did
+not disappear — they live on the results screen and the pitch deck, one tap
+away, which state them in full and where they can be checked against something.
+
+**5. Demo is the single primary action**, bottom centre where a thumb reaches
+it, instead of one green button among five.
+
+**Tests:** 1114 passing. Three superseded tests were revised rather than
+deleted, each recording what changed and why.
 
 ## NEXT PHASE
 

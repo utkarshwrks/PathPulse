@@ -51,33 +51,36 @@ afterEach(() => {
 });
 
 describe('TOUR_STEPS', () => {
-  it('is short enough to finish', () => {
-    expect(TOUR_STEPS.length).toBeGreaterThan(5);
-    expect(TOUR_STEPS.length).toBeLessThanOrEqual(12);
+  it('★ is short enough that nobody skips it', () => {
+    // REVISED. It was ten steps of prose. Someone holding a borrowed phone
+    // presses Skip on that and learns nothing, so the tour is now four
+    // spotlights of one line each.
+    expect(TOUR_STEPS.length).toBeGreaterThanOrEqual(3);
+    expect(TOUR_STEPS.length).toBeLessThanOrEqual(6);
   });
 
   it('has unique ids', () => {
     expect(new Set(TOUR_STEPS.map((s) => s.id)).size).toBe(TOUR_STEPS.length);
   });
 
-  it('★ says something real in every step, and keeps it readable aloud', () => {
+  it('★ one line per step — anything longer is documentation', () => {
+    // The cap is the feature. If a step will not fit on one line it is not a
+    // tour step; it belongs in the README.
     for (const s of TOUR_STEPS) {
-      expect(s.title.length, s.id).toBeGreaterThan(5);
-      expect(s.body.length, s.id).toBeGreaterThan(60);
-      // Roughly fifteen seconds of speech. Longer and it gets skipped.
-      expect(s.body.length, s.id).toBeLessThan(400);
+      expect(s.title.length, s.id).toBeGreaterThan(4);
+      expect(s.title.length, s.id).toBeLessThan(30);
+      expect(s.body.length, s.id).toBeGreaterThan(20);
+      expect(s.body.length, s.id).toBeLessThanOrEqual(90);
     }
   });
 
-  it('opens by explaining the problem, not the interface', () => {
-    expect(TOUR_STEPS[0]!.body).toMatch(/tunnel|basement|satellite/i);
+  it('★ opens on the button we want pressed', () => {
+    // The tour exists to get someone to press Demo. That is step one.
+    expect(TOUR_STEPS[0]!.anchor).toBe('demo');
   });
 
-  it('★ covers the features that carry the credibility', () => {
-    const text = TOUR_STEPS.map((s) => `${s.title} ${s.body}`).join(' ').toLowerCase();
-    for (const topic of ['ellipse', 'dead reckoning', 'constraint', 'aeroplane', 'event log']) {
-      expect(text, topic).toContain(topic);
-    }
+  it('every step points at a control rather than at nothing', () => {
+    for (const s of TOUR_STEPS) expect(s.anchor, s.id).not.toBeNull();
   });
 });
 

@@ -105,6 +105,13 @@ export function useSensorSource(
   // Live mode resolves to NativeSource inside the APK and WebSource in a
   // browser. Same interface either way, so nothing downstream changes.
   const webRef = useRef<SensorSource | null>(null);
+  /**
+   * A play() that arrived before the source existed.
+   *
+   * The live and replay sources are built behind a promise, so there is a
+   * window after selecting them where there is nothing to start. See play().
+   */
+  const pendingPlayRef = useRef(false);
   const lastFixRef = useRef<GnssFix | null>(null);
 
   // Rate measurement: counted, never hardcoded.
@@ -173,6 +180,7 @@ export function useSensorSource(
     webRef.current?.stop();
     simRef.current = null;
     webRef.current = null;
+    pendingPlayRef.current = false;
     recRef.current = null;
     lastFixRef.current = null;
     imuTimes.current = [];
@@ -214,6 +222,10 @@ export function useSensorSource(
           src.onSample(handleSample);
           webRef.current = src;
           setState((p) => ({ ...p, sourceName: src.capabilities.name }));
+          if (pendingPlayRef.current) {
+            pendingPlayRef.current = false;
+            void src.start();
+          }
         })
         .catch(() => {
           if (cancelled) return;
@@ -233,6 +245,10 @@ export function useSensorSource(
         src.onSample(handleSample);
         webRef.current = src;
         setState((p) => ({ ...p, sourceName: src.capabilities.name }));
+        if (pendingPlayRef.current) {
+          pendingPlayRef.current = false;
+          void src.start();
+        }
       });
       return () => {
         cancelled = true;
@@ -247,13 +263,32 @@ export function useSensorSource(
     };
   }, [kind, routeKey, handleSample]);
 
+  /**
+   * ★ START MEANT NOTHING IF THE SOURCE WAS NOT READY YET ★
+   * The live source is built behind `NativeSource.isAvailable()`, which is a
+   * promise — so `webRef` is empty for a moment after Live is selected. Tap
+   * Start inside that moment and `play()` had nothing to start, yet still set
+   * `isRunning: true`: the button flipped to Stop, no fix ever arrived, and
+   * the app looked exactly like it could not find you. That is the same race
+   * that made the Demo button open onto a dead map, in the one place a user
+   * hits it every single time.
+   *
+   * Now an unfulfilled play is remembered and honoured the moment the source
+   * exists.
+   */
   const play = useCallback(() => {
-    if (simRef.current) void simRef.current.start();
-    else void webRef.current?.start();
+    if (simRef.current) {
+      void simRef.current.start();
+    } else if (webRef.current) {
+      void webRef.current.start();
+    } else {
+      pendingPlayRef.current = true;
+    }
     setState((p) => ({ ...p, isRunning: true }));
   }, []);
 
   const pause = useCallback(() => {
+    pendingPlayRef.current = false;
     simRef.current?.stop();
     webRef.current?.stop();
     setState((p) => ({ ...p, isRunning: false }));
