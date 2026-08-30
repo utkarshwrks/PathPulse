@@ -57,7 +57,7 @@ export default function Hud({
   const hzLow = updateHz > 0 && updateHz < 10;
 
   return (
-    <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[min(92vw,25rem)]" data-tour="hud">
+    <div className="pointer-events-none absolute left-3 right-16 top-3 z-10 max-w-[25rem]" data-tour="hud">
       <div className="rounded-xl border border-white/10 bg-black/80 px-3 py-2.5 backdrop-blur-md">
         {/* Mode badge — the single most-looked-at element in the demo. */}
         <div className="flex items-center gap-2">

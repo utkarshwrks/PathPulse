@@ -62,6 +62,19 @@ export interface SensorSourceState {
   isRunning: boolean;
   inOutage: boolean;
   progress: number;
+  /**
+   * Whether the running source can actually produce fixes.
+   *
+   * ★ THE SILENT FAILURE THIS EXISTS TO END ★
+   * `NativeSource.start()` catches a denied location permission, sets
+   * `capabilities.hasGnss = false` and returns — never starting a watch. That
+   * flag was read by nothing. `PermissionGate` watches `useGeolocation`, a
+   * different code path entirely, so it never learned about the denial either.
+   * The result on a real phone: IMU at 53 Hz, GNSS at 0.00 Hz, "waiting for
+   * first fix…" for ever, and no explanation anywhere. The app looked alive
+   * and simply never found you.
+   */
+  gnssAvailable: boolean;
   sourceName: string;
   recordedCount: number;
 }
@@ -96,6 +109,7 @@ export function useSensorSource(
     isRunning: false,
     inOutage: false,
     progress: 0,
+    gnssAvailable: true,
     sourceName: '',
     recordedCount: 0,
   });
@@ -112,6 +126,23 @@ export function useSensorSource(
    * window after selecting them where there is nothing to start. See play().
    */
   const pendingPlayRef = useRef(false);
+  /** Mirrors state.isRunning for the source-rebuild effect, which cannot read state. */
+  const isRunningRef = useRef(false);
+  /**
+   * Bumped to force the source to be built again from scratch.
+   *
+   * ★ WHY A REBUILD AND NOT A RESTART ★
+   * `NativeSource.start()` decides `hasGnss` once — from the permission and
+   * location-services state at that instant — and then early-returns on every
+   * later call because it is already running. `reset()` only ever handled the
+   * simulator. So a phone that started with Location switched off was stuck:
+   * turning Location on changed nothing, Restart did nothing, and the only
+   * escape was killing the app. Measured exactly that on a real device.
+   *
+   * Tearing the source down and constructing a new one is the only thing that
+   * makes it ask again.
+   */
+  const [rebuildToken, setRebuildToken] = useState(0);
   const lastFixRef = useRef<GnssFix | null>(null);
 
   // Rate measurement: counted, never hardcoded.
@@ -175,12 +206,40 @@ export function useSensorSource(
   }, []);
 
   // Rebuild the source whenever the selection changes.
+  /** Start a source and report back what it turned out to be able to do. */
+  const startSource = useCallback(async (src: SensorSource) => {
+    try {
+      await src.start();
+    } finally {
+      // Read AFTER start: the permission request happens inside it, and a
+      // denial is only knowable once it has resolved.
+      //
+      // `isRunning` is set here too, not only in play(). A source rebuilt by a
+      // switch resets it to false, so a pending start would leave the UI
+      // saying "Start" while samples were already arriving.
+      isRunningRef.current = true;
+      setState((p) => ({
+        ...p,
+        isRunning: true,
+        gnssAvailable: src.capabilities.hasGnss !== false,
+      }));
+    }
+  }, []);
+
   useEffect(() => {
+    // ★ CARRY THE INTENT ACROSS A SOURCE SWITCH ★
+    // The earlier fix only covered "no source exists yet". Switching BETWEEN
+    // sources is worse: the outgoing source is still in the ref, so a
+    // synchronous play() starts the one being torn down and the incoming one
+    // never starts — while isRunning is set true regardless. Measured on the
+    // device: picking "This phone" showed RUNNING with imu 0.0 Hz and gnss
+    // 0.00 Hz, and a manual Pause then Start took the IMU straight to 60 Hz.
+    // If it was running before the switch, it should be running after.
+    if (isRunningRef.current) pendingPlayRef.current = true;
     simRef.current?.stop();
     webRef.current?.stop();
     simRef.current = null;
     webRef.current = null;
-    pendingPlayRef.current = false;
     recRef.current = null;
     lastFixRef.current = null;
     imuTimes.current = [];
@@ -203,6 +262,7 @@ export function useSensorSource(
         sourceName: sim.capabilities.name,
         isRunning: false,
         progress: 0,
+        gnssAvailable: true,
       }));
     } else if (kind === 'replay') {
       let cancelled = false;
@@ -224,7 +284,7 @@ export function useSensorSource(
           setState((p) => ({ ...p, sourceName: src.capabilities.name }));
           if (pendingPlayRef.current) {
             pendingPlayRef.current = false;
-            void src.start();
+            void startSource(src);
           }
         })
         .catch(() => {
@@ -247,7 +307,7 @@ export function useSensorSource(
         setState((p) => ({ ...p, sourceName: src.capabilities.name }));
         if (pendingPlayRef.current) {
           pendingPlayRef.current = false;
-          void src.start();
+          void startSource(src);
         }
       });
       return () => {
@@ -261,7 +321,7 @@ export function useSensorSource(
       simRef.current?.stop();
       webRef.current?.stop();
     };
-  }, [kind, routeKey, handleSample]);
+  }, [kind, routeKey, rebuildToken, handleSample, startSource]);
 
   /**
    * ★ START MEANT NOTHING IF THE SOURCE WAS NOT READY YET ★
@@ -277,18 +337,16 @@ export function useSensorSource(
    * exists.
    */
   const play = useCallback(() => {
-    if (simRef.current) {
-      void simRef.current.start();
-    } else if (webRef.current) {
-      void webRef.current.start();
-    } else {
-      pendingPlayRef.current = true;
-    }
+    const src = simRef.current ?? webRef.current;
+    if (src) void startSource(src);
+    else pendingPlayRef.current = true;
+    isRunningRef.current = true;
     setState((p) => ({ ...p, isRunning: true }));
-  }, []);
+  }, [startSource]);
 
   const pause = useCallback(() => {
     pendingPlayRef.current = false;
+    isRunningRef.current = false;
     simRef.current?.stop();
     webRef.current?.stop();
     setState((p) => ({ ...p, isRunning: false }));
@@ -297,28 +355,28 @@ export function useSensorSource(
   const reset = useCallback(() => {
     const sim = simRef.current;
     if (!sim) {
-      // ★ THE BACKUP HAS TO BE RESTARTABLE ★
-      // These controls were written when the simulator was the only
-      // scriptable source, so they reach for simRef and give up. The replay
-      // source lives in webRef, and it does have a rewind — so Reset did
-      // nothing at all in replay: you could play the backup once and then had
-      // no way to run it again short of reloading the app, on the one run
-      // where everything else had already gone wrong.
-      const replay = webRef.current;
-      if (replay && 'reset' in replay && typeof replay.reset === 'function') {
-        (replay as { reset: () => void }).reset();
-        lastFixRef.current = null;
-        imuTimes.current = [];
-        gnssTimes.current = [];
-        setState((p) => ({
-          ...p,
-          fix: null,
-          mode: 'INITIALIZING',
-          isRunning: false,
-          inOutage: false,
-          progress: 0,
-        }));
-      }
+      // ★ LIVE AND REPLAY REBUILD RATHER THAN RESTART ★
+      // `NativeSource.start()` decides `hasGnss` once and early-returns
+      // afterwards because it is already running, and this function used to
+      // handle only the simulator — so a phone that started with Location
+      // switched off was stuck for good. Turning Location on changed nothing,
+      // Restart did nothing, and killing the app was the only way out.
+      // Measured exactly that on a device. Constructing a fresh source is the
+      // only thing that makes it ask again, and it rewinds the replay log too.
+      pendingPlayRef.current = isRunningRef.current;
+      lastFixRef.current = null;
+      imuTimes.current = [];
+      gnssTimes.current = [];
+      setState((p) => ({
+        ...p,
+        fix: null,
+        mode: 'INITIALIZING',
+        isRunning: false,
+        inOutage: false,
+        progress: 0,
+        gnssAvailable: true,
+      }));
+      setRebuildToken((t) => t + 1);
       return;
     }
     sim.stop();

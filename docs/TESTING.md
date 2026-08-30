@@ -33,9 +33,17 @@ Demo → HUD → the ellipse → the ☰ menu.
 
 ## 2 · The scripted demo (3 min) ★ the main event
 
+☐ **First check Location is ON** in quick settings — not just the app
+  permission. Measured on a real phone: the system toggle was off, the app
+  permission was granted, and nothing worked. They look identical from inside
+  the app.
 ☐ ☰ → **Where the data comes from** → tap **This phone**.
-  *One tap. It selects AND starts — no separate Start to hunt for. The marker
-  must find you.*
+  *One tap. It selects AND starts. The marker must find you, mode goes green
+  GNSS, and `gnss` shows a non-zero Hz in the HUD footer.*
+☐ If the amber **"Location is off"** banner appears: turn Location on, then
+  **Try again** — it rebuilds the source. *Before this, nothing could recover:
+  the source decided GNSS was unavailable once and Restart did nothing for
+  live, so killing the app was the only way out.*
 ☐ If a permission screen appears, it must offer **"Use the simulation
   instead"**. *That screen used to be a dead end with only Retry.*
 ☐ Close that, then tap **▶ Demo** (bottom centre).

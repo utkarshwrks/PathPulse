@@ -362,9 +362,12 @@ export default function Home() {
         </button>
       </div>
 
-      {/* The single primary action, where a thumb reaches it. */}
+      {/* The single primary action, where a thumb reaches it.
+          bottom-14 rather than bottom-4: measured on a 392 px device, the Demo
+          button at y 785-818 sat on top of the OpenStreetMap attribution at
+          y 791-835. That attribution is a licence requirement, not decoration. */}
       {!demo.running ? (
-        <div className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
+        <div className="absolute bottom-14 left-1/2 z-20 -translate-x-1/2">
           <ErrorBoundary area="Demo" fallback={null}>
             <DemoBar
               running={false}
@@ -533,6 +536,52 @@ export default function Home() {
         >
           Recenter
         </button>
+      ) : null}
+
+      {/* ★ SAY IT, RATHER THAN WAITING FOR EVER ★
+          When location is refused, NativeSource sets hasGnss=false and simply
+          never starts a watch. Measured on a real phone: IMU at 53 Hz, GNSS at
+          0.00 Hz, "waiting for first fix…" indefinitely, and nothing anywhere
+          saying why. The app looked alive and never found you. */}
+      {kind === 'live' && !source.gnssAvailable ? (
+        <div className="pointer-events-auto absolute inset-x-3 top-[9.5rem] z-30 rounded-xl border border-amber-400/40 bg-amber-500/15 p-3 backdrop-blur">
+          <p className="text-[12px] font-semibold text-amber-200">
+            Location is off, so there are no fixes
+          </p>
+          <p className="mt-1 text-[11px] leading-snug text-amber-100/80">
+            Motion sensors are running, but no fixes are arriving. Two different causes
+            look identical here: <strong>Location is switched off on the phone</strong>
+            {' '}(the quick-settings toggle), or this app was refused the permission.
+            Turn Location on first, then Try again — measured on a real device, that was
+            the actual cause, and no amount of granting the app permission helped while
+            the system toggle was off.
+          </p>
+          <div className="mt-2 flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                // reset() rebuilds the source. play() alone cannot work here:
+                // NativeSource.start() early-returns once running, so it would
+                // never re-check permission or location services.
+                live.start();
+                source.reset();
+              }}
+              className="rounded-lg bg-amber-400 px-3 py-1.5 text-[11px] font-semibold text-amber-950 transition hover:bg-amber-300"
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setKind('simulation');
+                source.play();
+              }}
+              className="rounded-lg border border-amber-300/40 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-400/20"
+            >
+              Use the simulation
+            </button>
+          </div>
+        </div>
       ) : null}
 
       {kind === 'live' ? (

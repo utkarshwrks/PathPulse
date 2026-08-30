@@ -81,3 +81,4 @@ describe('pressing Start immediately after choosing a source', () => {
     expect(result.current.isRunning).toBe(false);
   });
 });
+

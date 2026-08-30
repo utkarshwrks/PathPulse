@@ -39,14 +39,29 @@ describe('what is allowed to sit over the map', () => {
   it('★ exactly two things: the HUD and the menu button', () => {
     // Everything else moved behind the menu. This is what stops the top of
     // the screen filling up again one button at a time.
-    expect(read('Hud.tsx')).toContain('left-3 top-3');
+    expect(read('Hud.tsx')).toContain('left-3 right-16 top-3');
     expect(PAGE).toMatch(/absolute right-3 top-3[^"]*z-30/);
     // The old five-button row is gone.
     expect(PAGE).not.toContain('Benchmarks\n        </button>');
   });
 
-  it('the demo button is centred, so it cannot collide with a left panel', () => {
-    expect(PAGE).toMatch(/absolute bottom-4 left-1\/2[^"]*-translate-x-1\/2/);
+  it('★ the demo button clears the map attribution', () => {
+    // MEASURED ON THE DEVICE. At bottom-4 the button occupied y 785-818 and
+    // the OpenStreetMap attribution y 791-835 — a real overlap, and that
+    // attribution is a licence requirement rather than decoration.
+    expect(PAGE).toMatch(/absolute bottom-14 left-1\/2[^"]*-translate-x-1\/2/);
+  });
+
+  it('★ the HUD reserves room for the menu button rather than assuming it fits', () => {
+    // MEASURED ON THE DEVICE. A 1080x2460 phone at density 440 is a 393 px CSS
+    // viewport. The HUD was max-w-[min(92vw,25rem)] = 361 px at left-3, so it
+    // ended at 373 px — while the menu button at right-3 occupies roughly
+    // 337-381 px. They overlapped by about 36 px, and removing the other four
+    // buttons never fixed it because the HUD width was the other half of the
+    // problem. `right-16` reserves the button's column instead of guessing.
+    const hud = read('Hud.tsx');
+    expect(hud).toContain('right-16');
+    expect(hud).not.toContain('max-w-[min(92vw,25rem)]');
   });
 });
 

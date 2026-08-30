@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** UI rework — one menu, four-step tour, live-location fix ✅
+**CURRENT PHASE:** Live location fixed and verified on a real phone ✅
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Rehearsal. See [docs/TESTING.md](./docs/TESTING.md) for the step-by-step check
 
@@ -1617,6 +1617,63 @@ it, instead of one green button among five.
 
 **Tests:** 1114 passing. Three superseded tests were revised rather than
 deleted, each recording what changed and why.
+
+### Live location — debugged on the device, not reasoned about ✅
+
+Every UI fix before this was reasoned from source and none of them worked,
+which is why the overlap took three attempts and live location took four. With
+the phone attached over adb — screenshots, logcat, and a Chrome DevTools
+connection into the running WebView through `adb forward` — the causes took
+twenty minutes instead.
+
+**Live was broken by three stacked faults, and no button could recover from
+them.**
+
+1. **Location services were off system-wide.** Not the app permission — the
+   phone's own toggle. Capacitor said so plainly once asked directly:
+   `"Location services are not enabled"`, with `location_mode` at 0. The app
+   permission was granted the whole time, which is why granting it harder
+   never helped.
+2. **`NativeSource` decides `hasGnss` once.** It reads permission and location
+   state at `start()`, and early-returns on every later call because it is
+   already running. Turning Location on afterwards changed nothing.
+3. **`Restart` did nothing for live.** `reset()` only ever handled the
+   simulator. With (2), the app was **permanently stuck**: killing it was the
+   only way out.
+
+And a fourth, found the same way: **picking a source started the wrong one.**
+`SourcePicker.onPick` sets the kind and calls `play()` in the same handler,
+before React runs the rebuild effect — so the outgoing source was still in its
+ref. Measured: "This phone" showed **RUNNING** with imu 0.0 Hz and gnss
+0.00 Hz, while a manual Pause then Start took the IMU straight to 60 Hz.
+
+**Fixes**
+- `reset()` rebuilds the source rather than poking it, which is the only thing
+  that makes it re-check permission and location services
+- The play intent carries across a source teardown, so switching keeps running
+- `isRunning` is set where the source actually starts, not optimistically
+- The banner distinguishes **Location off** from **permission refused** — they
+  look identical and need completely different fixes
+- **Try again** rebuilds; calling `play()` could never have worked
+
+**Two overlaps, measured rather than guessed.** The device is 392x834 CSS px.
+The HUD was `max-w-[min(92vw,25rem)]` = 361 px at `left-3`, ending at 373 px,
+while the menu button occupies 344–381 px — a 36 px overlap that survived
+removing four buttons, because the HUD's own width was the other half of it.
+And the Demo button at y 785–818 sat on top of the OpenStreetMap attribution at
+y 791–835, which is a licence requirement rather than decoration. Both
+measurements are written into `app/layout.test.ts`.
+
+**Verified on the device afterwards:** green GNSS mode, marker on the road with
+its ellipse, `gnss 0.10 Hz`, confidence 100%, and nothing overlapping.
+
+**A note on method.** Two of my own tests passed against broken code in this
+session — one because `rerender` flushes effects before the play call, which is
+not the order the app uses. Both were rewritten to reproduce the real ordering,
+then confirmed by restoring the bug and watching them fail. A test that has
+never failed has not been shown to test anything.
+
+**Tests:** 1115 passing.
 
 ## NEXT PHASE
 
