@@ -1,10 +1,10 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. ✅ COMPLETE (9A-9F), all deep-tested
+**CURRENT PHASE:** Phase 10 — demo hardening. 10A + 10B + 10D done
 **LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Phase 10 — demo hardening, slides, rehearsal
+**NEXT PHASE:** Phase 10 remaining — 10C perf profile, 10E backup, 10F final audit
 
-> Phases 0-9 are complete. The ISRO screening artefact — a position plot
+> Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
 
 > ### Drift: **10.0% mean, 6.4% median, 22.6% p90** over 12 runs
@@ -1334,6 +1334,76 @@ so the app was not driven in a real browser this pass. Everything above is
 static analysis, unit/integration tests and HTTP checks against the dev server.
 MapLibre rendering, the service worker actually caching, and the download
 buttons actually downloading remain verified only on a phone.
+
+### Phase 10A — Demo Mode ✅
+
+One press sets the whole stage and runs the guide's sequence: 0-15 s GNSS,
+a 60 s scripted outage, recovery at 75 s, five seconds to read the drift.
+
+`lib/demoScript.ts` holds the sequence as pure data with a phase lookup, so it
+is unit tested rather than discovered live. `useDemoMode` drives it off
+wall-clock elapsed time rather than a tick count — a `setInterval` that misses
+a beat on a phone rendering a map would drift the script away from what the
+presenter is saying, and a dropped frame should cost smoothness, never
+sequence. The outage fires exactly once, guarded by a ref: a re-render between
+the check and the set would fire it twice, and the second call restarts a 60 s
+outage **mid-recovery**, so the marker never returns and the demo ends on the
+estimator apparently failing.
+
+**★ The banner says the outage is scripted.** It is triggered by us at fifteen
+seconds; it is not a tunnel. Golden Rule #8 — a judge who works that out
+themselves stops believing the rest of the screen, and one who is told up front
+gets a system candid about its own staging. The physics and the estimate are
+real; the timing is ours, and the banner says exactly that.
+
+**★ It runs the shipping configuration, not "everything on".** The guide says
+switch every constraint on. Taken literally that includes `forwardBias`, which
+the ablation measures as **worse** — 12.8% against 10.0%. Demonstrating a
+configuration we have measured as inferior, to satisfy the word "all", would
+cost the number on screen.
+
+The manual source controls hide while the script runs: it drives them, and
+leaving them within reach only invites someone to fight it mid-demo.
+
+### Phase 10B — crash-proofing ✅ (partial: error boundary)
+
+`components/ErrorBoundary.tsx`, wrapping the HUD, the debug panel, the pitch
+screen and each map layer separately. React unmounts the entire tree on an
+uncaught render error, so a null dereference inside a debug panel would blank
+the screen mid-demo and take the working estimator with it — the one failure a
+judge cannot be talked through. Map layers pass `fallback={null}`, because an
+apology card floating over the map is worse than the layer being absent.
+
+The rest of the guide's crash-proofing list was already in place and is
+re-confirmed: the NaN guard before emit (`isFiniteState`, holds the last good
+state and logs), the 200-entry event log cap, clock-jump rejection, and
+graceful degradation for a missing model, road graph, map tiles or permission.
+**One deliberate deviation:** the guide says cap the trail at 500 points. It is
+5000 — see the full verification pass above for the measurement that forced
+that, and why 500 silently deleted the outage from the export.
+
+### Phase 10D — in-app pitch deck ✅
+
+Five slides, arrow keys, `components/PitchScreen.tsx`. In the app rather than
+on a laptop because switching devices mid-demo breaks the thread, and the slide
+a judge most wants — the ablation table — is read from the same generated file
+the app already ships. A deck in Keynote goes stale the moment anything is
+re-measured; this one cannot.
+
+**★ The compliance matrix is the riskiest slide in the deck**, and the guide's
+version of it is not safe to copy. That version marks nearly every row *Done*,
+including "Drift < 10% — Done". Ours is 10.0% mean: **on the line, not under
+it**, with a 22.6% p90, on simulated logs. The slide says so. Four rows are
+`PARTIAL` and two `PART B`, each with a sentence that survives a follow-up
+question — because it is ISRO's problem statement and they will ask.
+
+The results slide carries "every log is simulated" next to the numbers rather
+than in a footnote: a judge reading 10.0% without that has been misled by
+omission. With no benchmark file bundled the slide says so and renders nothing
+rather than inventing figures.
+
+**Tests:** 1035 passing (nav-core 461, web 348, eval 140, sensor-sources 86) —
+46 new.
 
 ## NEXT PHASE
 

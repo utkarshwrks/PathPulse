@@ -25,6 +25,11 @@ import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
 import ConfidenceEllipse from '@/components/ConfidenceEllipse';
 import OfflinePanel from '@/components/OfflinePanel';
+import DemoBar from '@/components/DemoBar';
+import PitchScreen from '@/components/PitchScreen';
+import ErrorBoundary from '@/components/ErrorBoundary';
+import { useDemoMode } from '@/hooks/useDemoMode';
+import { DEMO_CONTROLS, DEMO_OUTAGE_MS } from '@/lib/demoScript';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import type { LatLonBounds } from '@/lib/tileCache';
 
@@ -43,6 +48,7 @@ export default function Home() {
   const [showDeviceInfo, setShowDeviceInfo] = useState(false);
   const [showBenchmarks, setShowBenchmarks] = useState(false);
   const [showOffline, setShowOffline] = useState(false);
+  const [showPitch, setShowPitch] = useState(false);
   const [mapBounds, setMapBounds] = useState<LatLonBounds | null>(null);
   /**
    * Wall-clock epoch of this session's t=0.
@@ -60,6 +66,27 @@ export default function Home() {
   const source = useSensorSource(kind, routeKey, nav.feed);
   const live = useGeolocation(false);
   const offline = useOfflineStatus();
+
+  // ★ 10A: one press sets the whole stage. See lib/demoScript.ts for why the
+  // configuration is the shipping one rather than literally "everything on".
+  const demo = useDemoMode({
+    prepare: () => {
+      setKind('simulation');
+      setRouteKey('city');
+      setShowOffline(false);
+      setShowPitch(false);
+      setShowBenchmarks(false);
+      setShowDeviceInfo(false);
+      setFollowing(true);
+      nav.setControls(DEMO_CONTROLS);
+      source.reset();
+      nav.reset();
+      setTrail([]);
+      sessionStartRef.current = Date.now();
+      source.play();
+    },
+    triggerOutage: () => source.triggerOutage(DEMO_OUTAGE_MS),
+  });
 
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [following, setFollowing] = useState(true);
@@ -202,6 +229,7 @@ export default function Home() {
         {/* Mount order is z-order: layers are added to the map in the order
             their effects run, so the ellipse goes down first and the trail
             draws on top of it rather than being washed out by the fill. */}
+        <ErrorBoundary area="Confidence ellipse" fallback={null}>
         {hasPosition ? (
           <ConfidenceEllipse
             lat={shownPosition!.lat}
@@ -212,7 +240,10 @@ export default function Home() {
             mode={navState?.mode ?? 'INITIALIZING'}
           />
         ) : null}
-        <TrailLayer trail={trail} />
+        </ErrorBoundary>
+        <ErrorBoundary area="Trail" fallback={null}>
+          <TrailLayer trail={trail} />
+        </ErrorBoundary>
         {hasPosition ? (
           <VehicleMarker
             lat={shownPosition!.lat}
@@ -223,6 +254,7 @@ export default function Home() {
         ) : null}
       </MapView>
 
+      <ErrorBoundary area="HUD">
       <Hud
         speedSource={nav.diagnostics.speedSource}
         navState={navState}
@@ -235,7 +267,9 @@ export default function Home() {
         events={nav.events}
         walkingMode={nav.controls.walkingMode}
       />
+      </ErrorBoundary>
 
+      <ErrorBoundary area="Debug panel">
       <TrustPanel
         modelInfo={nav.modelInfo}
         sample={nav.lastSample}
@@ -254,8 +288,21 @@ export default function Home() {
         gnssHz={source.gnssHz}
         updateHz={nav.updateHz}
       />
+      </ErrorBoundary>
 
       <div className="absolute right-3 top-3 z-10 flex gap-1.5">
+        {!demo.running ? (
+          <ErrorBoundary area="Demo" fallback={null}>
+            <DemoBar
+              running={false}
+              elapsedMs={0}
+              position={demo.position}
+              onStart={demo.start}
+              onReset={demo.restart}
+              onStop={demo.stop}
+            />
+          </ErrorBoundary>
+        ) : null}
         <button
           type="button"
           onClick={() => setShowOffline(true)}
@@ -266,6 +313,13 @@ export default function Home() {
           }`}
         >
           {offline.online ? 'Offline' : 'OFFLINE ✈'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowPitch(true)}
+          className="rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/85"
+        >
+          Pitch
         </button>
         <button
           type="button"
@@ -285,6 +339,12 @@ export default function Home() {
 
       {showBenchmarks ? <Benchmarks onClose={() => setShowBenchmarks(false)} /> : null}
 
+      {showPitch ? (
+        <ErrorBoundary area="Pitch">
+          <PitchScreen onClose={() => setShowPitch(false)} />
+        </ErrorBoundary>
+      ) : null}
+
       {showOffline ? (
         <OfflinePanel
           status={offline}
@@ -303,6 +363,25 @@ export default function Home() {
         />
       ) : null}
 
+      {demo.running ? (
+        <div className="absolute bottom-4 left-3 z-20">
+          <ErrorBoundary area="Demo bar" fallback={null}>
+            <DemoBar
+              running
+              elapsedMs={demo.elapsedMs}
+              position={demo.position}
+              onStart={demo.start}
+              onReset={demo.restart}
+              onStop={demo.stop}
+            />
+          </ErrorBoundary>
+        </div>
+      ) : null}
+
+      {/* Manual source controls step aside during a scripted run: the script
+          drives them, and leaving them within reach only invites someone to
+          fight it mid-demo. */}
+      {!demo.running ? (
       <SourcePanel
         kind={kind}
         routeKey={routeKey}
@@ -329,6 +408,7 @@ export default function Home() {
         onOutage={() => source.triggerOutage(60_000)}
         onDownload={source.downloadRecording}
       />
+      ) : null}
 
       {!following ? (
         <button
