@@ -15,9 +15,8 @@ Every slide below gives you three things:
 > answer, and for every number in this deck the answer is "measured, and here
 > is the command that regenerates it."
 
-> **Before you submit:** fill in **Team ID** on slide 1, and confirm the
-> **Theme** on the SIH portal — ISRO statements normally sit under *Space
-> Technology*, but the portal is the authority, not this file.
+> **Before you submit:** fill in **Team ID** on slide 1. The Theme is
+> *Miscellaneous*, matching the deck already registered on the portal.
 
 ---
 
@@ -32,7 +31,7 @@ redesign it.
 
 - **Problem Statement ID –** SIH26168
 - **Problem Statement Title-** AI-ML based Intelligent Dead Reckoning system for seamless navigation
-- **Theme-** Space Technology
+- **Theme-** Miscellaneous
 - **PS Category-** Software
 - **Team ID-** _(fill from the portal)_
 - **Team Name (Registered on portal) -** Avinya
@@ -329,6 +328,42 @@ hand-copied numbers.
 > **Built on established inertial-navigation theory, a public benchmark
 > dataset, and open geospatial data — with every claim reproduced by an
 > automated harness rather than asserted.**
+
+---
+
+## WHAT THE 24 AUGUST DECK IS MISSING, SLIDE BY SLIDE
+
+The registered deck was built before nearly all the engineering. It describes
+the idea correctly — nothing in it is *wrong* — but it describes a proposal,
+and what exists now is a working system with a published measurement table.
+
+**Two things are missing from all six slides at once:**
+
+1. **There is not a single number anywhere in the deck.** Not one. Six slides,
+   zero measured figures. A judge cannot tell a team that built something from
+   a team that wrote about building something, and the only thing that
+   separates them on paper is numbers.
+
+2. **The letters "AI" and "ML" never appear except inside the problem
+   statement title on slide 1.** The statement is *"AI-ML based Intelligent
+   Dead Reckoning"*. Slide 3 calls the core a "Sensor Fusion Algorithm". A
+   reader who compares the PS title with the deck concludes the AI is missing —
+   and it is not missing, it is trained, quantised and on the phone.
+
+| Slide | What the deck says now | What is in the project but not on the slide |
+|---|---|---|
+| **1 · Title** | Correct — no change needed | — |
+| **2 · Idea** | "Automatically detects signal loss, switches to dead reckoning" | **0 ms switchover** — DR is never "switched to", it has been running the whole time. The deck describes a slower design than the one that exists. Also missing: the AI layer, the confidence ellipse, and that it is **built and running** |
+| **3 · Technical** | Five generic boxes: monitor → detect → switch → estimate → recover. Bottom row lists "Sensor Fusion Algorithm" as one box | The actual technical content: **NHC, ZUPT, ZARU, speed clamp, road snapping** — the constraints that take drift from 61.3 % to 10.0 %. The **1D-CNN on IO-VNBD, 135 KB INT8 ONNX, on-device**. Motion-context classifier. Pedestrian step model. Attitude estimation. The pure-TypeScript `nav-core` architecture |
+| **4 · Feasibility** | "Technically achievable using existing sensors" | It is not achievable — it is **achieved**. APK running on a phone, **10.5–11.2 Hz measured**, **1,162 tests**, **84.7 % coverage**, and the full **nine-configuration ablation table**. Plus the three honest gaps |
+| **5 · Impact** | Four generic benefit boxes | **NavIC**, GNSS-denial / defence relevance, emergency response, and verifiability — GPX export of both tracks, live constraint toggles, an event log that explains every mode change |
+| **6 · References** | ESA Navipedia, Android developer docs, OpenStreetMap, MapLibre | Three of those four are **product documentation, not research**. Missing: **IO-VNBD** (the dataset the problem statement itself names), **ISRO/NavIC** (an ISRO problem statement with no ISRO reference), **Groves** and **Titterton** (the standard inertial-navigation texts), and the HMM map-matching paper |
+
+**If you only change two slides, change 3 and 6.** Slide 3 is where a technical
+judge decides whether you understand the problem, and right now it shows a flow
+chart any team could have drawn from the problem statement alone. Slide 6 is
+where they decide whether you read anything, and right now it cites the Android
+developer portal to an ISRO panel.
 
 ---
 
