@@ -1,10 +1,10 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. 9A (confidence ellipse) ✅ COMPLETE
+**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B ✅ COMPLETE
 **LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Phase 9C offline map, then 9B turn detection
+**NEXT PHASE:** Phase 9C offline map, then 9D/9E/9F
 
-> Phases 0-8 are complete, and Phase 9A is in. The ISRO screening artefact — a position plot
+> Phases 0-8 are complete, and Phase 9A and 9B are in. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
 
 > ### Drift: **10.0% mean, 6.4% median, 22.6% p90** over 12 runs
@@ -845,11 +845,75 @@ reach road-snap strength.
 **Still open in Phase 9:** 9C offline map, 9B turn detection, 9D spoofing
 detection, 9E NavIC breakdown, 9F GPX export.
 
+### Phase 9B — turn detection ✅
+
+Turns are detected, classified, logged and shown on the HUD.
+
+**What shipped**
+- `nav-core/src/mapmatch/turnDetector.ts` — a small state machine over
+  integrated yaw. Opens a turn when 40 degrees accumulate inside a 3-second
+  sliding window (the guide's numbers), closes it once the yaw rate has stayed
+  under 6 °/s for 700 ms, then classifies the *total*: `SLIGHT_LEFT`,
+  `LEFT_90`, `SLIGHT_RIGHT`, `RIGHT_90`, `U_TURN`.
+- A `TURN` event in the log — `RIGHT 87° over 4.0s (0° → 87°)` — and
+  `state.lastTurn` carried on every state so the HUD can show "last turn"
+  without keeping its own history.
+- HUD row under the confidence bar; violet in the event list.
+
+**★ The guide says "integrate the gyroscope z-axis". Doing that literally
+would have re-introduced field defect #1.** `gz` is yaw only when the phone
+lies flat on its back; upright in a cradle it measures roll, so turns would be
+missed or invented depending on how the phone was mounted. The detector
+consumes `AttitudeEstimator.yawRate()` instead — the gyro vector projected onto
+measured gravity, compass sense, clockwise positive — which is correct in any
+orientation. The engine-level test drives a phone tilted back 35° in a cradle
+specifically to pin this.
+
+**Why a state machine and not a threshold.** A turn is not an instant. Firing
+the moment 40 degrees accumulate would label every U-turn a right turn, because
+the total is not known until the rotation ends. Nothing is reported mid-sweep.
+
+**Three things it deliberately refuses to call a turn**, all tested:
+- **Rotation while stopped.** Picked up at a light and rotated to read a
+  message, a handset sweeps a clean 90°. Without the 1.5 m/s speed gate that
+  lands in the event log as a right turn at a junction — visible nonsense in
+  the one artefact whose whole purpose is being checkable.
+- **A gentle motorway bend.** 20° over 8 seconds never reaches 40° in any
+  3-second window.
+- **A lane change.** A real sweep out and back that nets to nothing.
+
+It also refuses to split one turn into two when the steering wobbles through a
+bend, which a naive "rate dropped, turn over" test does on every real drive.
+
+**Naming note:** the sliding-window field is called `sweep`, not `window`.
+`pnpm lint:core-purity` greps nav-core for browser globals by identifier and a
+field called `window` trips it. Golden Rule #1's guard is deliberately blunt;
+adding an exception to it would blunt it further.
+
+**Junction matching is NOT done.** The optional half of 9B — matching a
+detected turn to a road-graph junction and correcting position onto it — is
+left out on purpose. It is the most interesting idea in Phase 9 (it is
+relocalisation: position recovers *during* a long outage rather than waiting
+for GNSS), and it is also the one feature here that can make the drift numbers
+worse rather than better, because a wrong junction match teleports the estimate
+onto the wrong road. Golden Rule #10: it goes in with a proper ablation row
+behind it or it does not go in.
+
+**The estimator did not change** — ablation output byte-identical to the 9A
+run. Drift stays 10.0% / 6.4% / 22.6%. Turn detection only reads the yaw rate;
+it never writes to the estimate.
+
+**Tests:** 788 passing (nav-core 355, web 222, eval 125, sensor-sources 86) —
+24 new. Purity clean at 42 files.
+
+**APK:** `PathPulse_Phase9B.apk`.
+
 ## NEXT PHASE
 
 **Phase 9 — Wow features** (confidence ellipse, turn detection, offline map)
 - ~~9A confidence ellipse~~ ✅ done, see above
-- 9B turn detection + `turnDetector.ts`
+- ~~9B turn detection + `turnDetector.ts`~~ ✅ done, see above. Junction
+  matching (the optional half of 9B) is deliberately NOT done — see its note.
 - 9C PMTiles offline basemap, or service-worker tile caching as the cheap route
 - 9D spoofing detection, 9E NavIC breakdown, 9F GPX export
 

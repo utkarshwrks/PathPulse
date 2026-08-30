@@ -22,6 +22,7 @@ import {
   type RoadSnapConfig,
 } from '../constraints/roadsnap.js';
 import { RoadIndex } from '../mapmatch/RoadIndex.js';
+import { describeTurn, TurnDetector, type TurnEvent } from '../mapmatch/turnDetector.js';
 import {
   NullSpeedPredictor,
   SpeedSmoother,
@@ -182,6 +183,8 @@ export class NavigationEngine {
   private readonly zupt = new ZuptProcessor();
   private readonly zaru = new ZaruProcessor();
   private readonly forwardBias = new ForwardBiasEstimator();
+  private readonly turns = new TurnDetector();
+  private lastTurn: TurnEvent | null = null;
   /** Built lazily, because the ENU origin is not known until the first fix. */
   private roadIndex: RoadIndex | null = null;
   private roadGraph: RoadGraph | null = null;
@@ -685,6 +688,29 @@ export class NavigationEngine {
 
     if (this.dr.isInitialised) {
       const gnssSpeed = trusted ? speedForFix : undefined;
+      // 9B: turns come off the same corrected yaw rate the estimate does, so a
+      // detected turn is by construction the turn the engine believes it made.
+      const turn = this.turns.update(
+        sample.t,
+        yawRate,
+        dtMs,
+        this.dr.current.speedMps,
+        this.dr.current.headingDeg,
+      );
+      if (turn) {
+        this.lastTurn = turn;
+        this.log.push({
+          t: turn.t,
+          type: 'TURN',
+          message: `${describeTurn(turn)} over ${(turn.durationMs / 1000).toFixed(1)}s (${turn.fromHeadingDeg.toFixed(0)}° → ${turn.toHeadingDeg.toFixed(0)}°)`,
+          data: {
+            kind: turn.kind,
+            deltaDeg: Number(turn.deltaDeg.toFixed(1)),
+            durationMs: turn.durationMs,
+          },
+        });
+      }
+
       this.dr.propagate(forwardAccel, yawRate, dtMs, gnssSpeed, {
         lateralAccelMps2: lateralAccel,
         isStationary: stationaryForZupt,
@@ -1073,6 +1099,16 @@ export class NavigationEngine {
       timeSinceGnssMs,
       estimatedDriftM: this.estimatedDriftM,
       biases: this.dr.current.biases,
+      ...(this.lastTurn
+        ? {
+            lastTurn: {
+              t: this.lastTurn.t,
+              kind: this.lastTurn.kind,
+              deltaDeg: this.lastTurn.deltaDeg,
+              label: describeTurn(this.lastTurn),
+            },
+          }
+        : {}),
       ...(this.lastMatch
         ? {
             matchedRoad: {
@@ -1119,6 +1155,8 @@ export class NavigationEngine {
     this.dr.reset();
     this.recovery.reset();
     this.attitude.reset();
+    this.turns.reset();
+    this.lastTurn = null;
     this.alignment.reset();
     this.zupt.reset();
     this.zaru.reset();

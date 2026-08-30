@@ -15,7 +15,7 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phases 0-8 complete, Phase 9A in.** The dot
+**Phases 0-8 complete, Phase 9A and 9B in.** The dot
 survives a GNSS outage under an uncertainty ellipse that shows how wrong it
 might be, and the six defects a real-phone field test exposed on 2026-08-27 are
 fixed.
@@ -327,6 +327,7 @@ scripted animation can display any numbers it likes. These can.
 | **Session stats** | Debug → STATS | Duration, distance, outage count and durations, best/worst/mean drift. The drift figures here are **measured against a real fix on recovery**, not the engine's own uncertainty model. |
 | **Walking Mode** | Debug → CONSTRAINTS | Clamps speed to 3 m/s so you can walk the corridor with the phone and watch the dot move. Live physics, no vehicle needed. |
 
+| **Turn detection** | HUD, and Debug → EVENTS | Every turn is detected, classified and logged with its angle and duration — `RIGHT 87° over 4.0s (0° → 87°)`. It is computed from yaw about the *true vertical*, not device Z, so it is correct with the phone at any angle in the cradle. Hand the judge the phone and turn a corner: the label appears with a real number behind it. It refuses to count rotation while stopped, a motorway bend, or a lane change. |
 | **Confidence ellipse** | on the map | The shaded shape under the marker is the engine's own uncertainty, and it is an *ellipse, not a circle*: the long axis is along-track error, which grows every second of an outage, and the short axis is cross-track, which NHC bounds and road snapping caps outright. Watch it stretch forward during an outage and ease shut as the marker slews home. The same two numbers are printed in the HUD as `along/cross`, so the shape can be checked against them. |
 
 The debug panel states `n/a` for satellite count and C/N0 rather than inventing

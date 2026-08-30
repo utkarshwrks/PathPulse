@@ -11,6 +11,8 @@ export type NavEventType =
   | 'RECOVERY_COMPLETE'
   | 'POSITION_RESET'
   | 'ROAD_MATCH'
+  /** A completed turn, classified. Phase 9B. */
+  | 'TURN'
   /** The speed model threw and was disabled. Never silent. */
   | 'ML_ERROR'
   | 'WARNING';

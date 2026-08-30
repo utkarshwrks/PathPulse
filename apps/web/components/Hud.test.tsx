@@ -179,3 +179,29 @@ describe('Hud — the numbers a judge reads', () => {
     expect(screen.getByText('km/h')).toBeTruthy();
   });
 });
+
+describe('Hud — last turn', () => {
+  it('shows the last turn with its angle and session time', () => {
+    renderHud({
+      navState: state({
+        lastTurn: { t: 252_000, kind: 'RIGHT_90', deltaDeg: 87.4, label: 'RIGHT 87°' },
+      }),
+    });
+    expect(screen.getByText(/last turn/i)).toBeDefined();
+    expect(screen.getByText(/RIGHT 87° @ 04:12/)).toBeDefined();
+  });
+
+  it('shows a left turn as left', () => {
+    renderHud({
+      navState: state({
+        lastTurn: { t: 0, kind: 'LEFT_90', deltaDeg: -91, label: 'LEFT 91°' },
+      }),
+    });
+    expect(screen.getByText(/LEFT 91° @ 00:00/)).toBeDefined();
+  });
+
+  it('says nothing about turns before one has happened', () => {
+    renderHud();
+    expect(screen.queryByText(/last turn/i)).toBeNull();
+  });
+});

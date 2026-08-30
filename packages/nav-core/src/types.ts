@@ -81,6 +81,18 @@ export interface NavigationState {
   timeSinceGnssMs: number;
   estimatedDriftM: number;
   matchedRoad?: { wayId: string; arcLengthM: number; name?: string };
+  /**
+   * The most recent completed turn, if any. Carried on every state rather than
+   * only on the sample it fired, so the HUD can keep showing "last turn"
+   * without holding its own copy of engine history.
+   */
+  lastTurn?: {
+    t: number;
+    kind: string;
+    deltaDeg: number;
+    /** Pre-formatted for display: "RIGHT 87°". */
+    label: string;
+  };
   biases: { accel: Vec3; gyro: Vec3 };
 }
 

@@ -425,6 +425,8 @@ const EVENT_COLORS: Record<string, string> = {
   GNSS_LOST: 'text-orange-300',
   DRIFT_MEASURED: 'text-amber-300',
   RECOVERY_COMPLETE: 'text-emerald-300',
+  TURN: 'text-violet-300',
+  ROAD_MATCH: 'text-teal-300',
   ZUPT_TRIGGER: 'text-neutral-400',
   ZARU_TRIGGER: 'text-neutral-400',
   WARNING: 'text-red-400',

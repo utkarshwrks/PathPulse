@@ -174,6 +174,15 @@ export default function Hud({
           </div>
         )}
 
+        {navState?.lastTurn ? (
+          <div className="mt-2 rounded bg-white/5 px-1.5 py-1 text-[10px] leading-snug text-neutral-300">
+            last turn —{' '}
+            <span className="font-mono">
+              {navState.lastTurn.label} @ {formatClock(navState.lastTurn.t)}
+            </span>
+          </div>
+        ) : null}
+
         {lastDrift ? (
           <div className="mt-2 rounded bg-white/5 px-1.5 py-1 text-[10px] leading-snug text-neutral-300">
             last recovery — <span className="font-mono">{lastDrift.message}</span>
@@ -196,6 +205,23 @@ export default function Hud({
       </div>
     </div>
   );
+}
+
+/**
+ * Session-elapsed time as mm:ss.
+ *
+ * The guide's mock-up shows a wall clock — "@ 12:04:33". Sample timestamps are
+ * milliseconds since the source started, not epoch, so formatting one as a
+ * time of day would print a number that looks authoritative and means nothing
+ * (and would be flatly wrong on a replayed log). Elapsed time is what the
+ * event log is stamped with, so the two can be read against each other.
+ */
+function formatClock(tMs: number): string {
+  if (!Number.isFinite(tMs) || tMs < 0) return '--:--';
+  const total = Math.floor(tMs / 1000);
+  const mm = Math.floor(total / 60);
+  const ss = total % 60;
+  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
 }
 
 function Cell({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
