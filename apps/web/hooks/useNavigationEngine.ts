@@ -7,6 +7,7 @@ import {
   SessionStats,
   type ConstraintFlags,
   type NavEvent,
+  type MotionContext,
   type NavigationState,
   type SensorSample,
   type SessionSummary,
@@ -64,6 +65,13 @@ export interface EngineDiagnostics {
   mlLatencyMs: number;
   /** Why the model was disabled, if it was. Never leave this off screen. */
   mlError: string | null;
+  /** What the carrier is doing — a walk and a drive are not the same problem. */
+  motionContext: MotionContext;
+  motionReason: string;
+  /** True while the vehicle-trained speed model is held back as out-of-domain. */
+  mlSuppressed: boolean;
+  /** Age of the GNSS speed currently aiding the estimate, ms. */
+  gnssSpeedAgeMs: number;
   /** Why we are still ACQUIRING, or null once navigating. */
   acquiringReason: string | null;
   modeReason: string | null;
@@ -94,6 +102,10 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   mlInferences: 0,
   mlLatencyMs: NaN,
   mlError: null,
+  motionContext: 'UNKNOWN',
+  motionReason: 'no samples yet',
+  mlSuppressed: false,
+  gnssSpeedAgeMs: Number.POSITIVE_INFINITY,
   acquiringReason: null,
   modeReason: null,
   speedSource: 'NONE',
@@ -129,6 +141,10 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // On by default, but inert until the ONNX model actually loads — the engine
   // checks the predictor is ready before consulting it.
   useMlSpeed: true,
+  // Both default on. Off reproduces the field failures exactly — see the notes
+  // in nav-core — which is what makes them demonstrable rather than asserted.
+  mlVehicleOnly: true,
+  pedestrianHeadingFromGnss: true,
   walkingMode: false,
 };
 
@@ -303,6 +319,8 @@ export function useNavigationEngine(): NavEngineOutput {
         accelHighPass: next.accelHighPass,
         adaptiveTimeout: next.adaptiveTimeout,
         roadSnap: next.roadSnap,
+        mlVehicleOnly: next.mlVehicleOnly,
+        pedestrianHeadingFromGnss: next.pedestrianHeadingFromGnss,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });
       return next;

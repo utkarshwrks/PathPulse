@@ -129,6 +129,26 @@ describe('Hud — the numbers a judge reads', () => {
     expect(within(container).getByText('11.5 Hz').className).not.toMatch(/amber/);
   });
 
+  it('★ shows what the engine detected, in preference to the manual switch', () => {
+    // The detected context decides three behaviours; Walking Mode only moves a
+    // clamp. When both have something to say, the detected one is the useful
+    // one — and it is the one that explains why the AI badge vanished.
+    renderHud({ walkingMode: true, motionContext: 'PEDESTRIAN' });
+    expect(screen.getByText('on foot')).toBeTruthy();
+    expect(screen.queryByText('walking')).toBeNull();
+  });
+
+  it('says so when GNSS can see no movement at all', () => {
+    renderHud({ motionContext: 'STATIONARY' });
+    expect(screen.getByText('still')).toBeTruthy();
+  });
+
+  it('stays out of the way in a vehicle', () => {
+    renderHud({ motionContext: 'VEHICLE' });
+    expect(screen.queryByText('on foot')).toBeNull();
+    expect(screen.queryByText('still')).toBeNull();
+  });
+
   it('shows the WALKING badge only in walking mode', () => {
     renderHud({ walkingMode: false });
     expect(screen.queryByText('walking')).toBeNull();

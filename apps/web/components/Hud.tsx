@@ -1,6 +1,6 @@
 'use client';
 
-import type { NavEvent, NavigationState, SpeedSource } from '@pathpulse/nav-core';
+import type { MotionContext, NavEvent, NavigationState, SpeedSource } from '@pathpulse/nav-core';
 import { MODE_COLORS, MODE_LABELS } from '@/config/modes';
 
 interface HudProps {
@@ -13,6 +13,16 @@ interface HudProps {
   events: NavEvent[];
   error: string | null;
   walkingMode: boolean;
+  /**
+   * What the engine has worked out the carrier is doing.
+   *
+   * ★ IT IS NOT A COSMETIC BADGE ★ This one value decides whether the speed
+   * model is consulted at all, whether device yaw is integrated into the
+   * heading, and whether GNSS may assert a stop the accelerometer cannot see.
+   * Somebody watching the AI badge disappear when the phone leaves the cradle
+   * is owed the reason on the same line.
+   */
+  motionContext?: MotionContext;
   /** Phase 8 — where the speed came from, shown beside it. */
   speedSource?: SpeedSource;
   /**
@@ -48,6 +58,7 @@ export default function Hud({
   events,
   error,
   walkingMode,
+  motionContext,
   speedSource,
 }: HudProps) {
   const mode = navState?.mode ?? 'INITIALIZING';
@@ -79,7 +90,26 @@ export default function Hud({
           >
             {MODE_LABELS[mode]}
           </span>
-          {walkingMode ? (
+          {/*
+            One badge slot, not two. The detected context is the more useful of
+            the two facts and needs no explaining; the manual Walking Mode
+            switch only fills the slot when nothing has been detected yet.
+          */}
+          {motionContext === 'PEDESTRIAN' ? (
+            <span
+              title="Detected: on foot. The vehicle-trained speed model is held back and the heading comes from GNSS, not from device yaw."
+              className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300"
+            >
+              on foot
+            </span>
+          ) : motionContext === 'STATIONARY' ? (
+            <span
+              title="Detected: not moving. GNSS has found no displacement, so velocity is held at zero."
+              className="rounded bg-neutral-500/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-neutral-300"
+            >
+              still
+            </span>
+          ) : walkingMode ? (
             <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-sky-300">
               walking
             </span>

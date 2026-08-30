@@ -30,6 +30,24 @@ export interface DeadReckoningConfig {
   /** Bound speed by plausibility and bleed it off once integration is stale. */
   speedClamp: boolean;
   speedClampConfig: SpeedClampConfig;
+  /**
+   * Below this speed a step is noise rather than travel, m/s, and is not added
+   * to the distance total.
+   *
+   * ★ DISTANCE IS A PATH LENGTH, AND PATH LENGTHS ONLY EVER GROW ★
+   *
+   * Every step adds `hypot(dE, dN)`, never a signed displacement, so an
+   * estimate that jitters forward and back on the spot accumulates the sum of
+   * the jitter rather than cancelling it. A stationary phone reading 0.2 m/s
+   * of residual velocity at 60 Hz banks 12 m every minute and the total only
+   * climbs — which is how a walk of a few dozen steps was reported on screen
+   * as 473 m, and then 1664 m, and then 3323 m.
+   *
+   * 0.3 m/s is a tenth of walking pace: below anything a person or a vehicle
+   * does deliberately, above the residual velocity a corrected estimate sits
+   * at when it is stopped.
+   */
+  distanceFloorMps: number;
 }
 
 export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
@@ -42,6 +60,7 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   zupt: true,
   speedClamp: true,
   speedClampConfig: DEFAULT_SPEED_CLAMP_CONFIG,
+  distanceFloorMps: 0.3,
 };
 
 /** Per-sample inputs that are optional or only available in some modes. */
@@ -57,6 +76,25 @@ export interface PropagateOptions {
   mlSpeedMps?: number;
   /** Matched road's speed limit, m/s, when road snapping has a match. */
   roadMaxSpeedMps?: number;
+  /**
+   * Whether `gnssSpeedMps` still carries full authority. 1 for a speed
+   * measured on this sample, 0 for one that is too old to use. Defaults to 1.
+   *
+   * A slow receiver leaves the estimator with no Doppler on almost every
+   * sample, so the caller holds the last one across the gap — otherwise a
+   * 0.2 Hz handset runs unaided for 299 samples in 300 while the badge reads
+   * GNSS. But a held speed is a stale measurement, not a fresh one, and it
+   * must not restart the coasting clock: doing so would let a receiver that
+   * has quietly stopped fixing keep the estimate confident indefinitely.
+   *
+   * ★ WHY THIS IS A GATE AND NOT A GAIN ★
+   * Blending the held speed with what integration would have said, in
+   * proportion to its age, is the textbook answer and it measured worse: on
+   * the highway log it mixed a scalar along the heading with a vector that had
+   * lateral content and took one run from 1.2 % drift to 10.2 %. Held or not
+   * held; nothing in between.
+   */
+  gnssSpeedWeight?: number;
 }
 
 /** A GNSS fix trusted enough to seed or reset dead reckoning. */
@@ -288,13 +326,19 @@ export class DeadReckoningEngine {
     let vE: number;
     let vN: number;
 
-    if (gnssSpeedMps !== undefined && Number.isFinite(gnssSpeedMps)) {
+    const gnssWeight = Number.isFinite(opts.gnssSpeedWeight ?? 1)
+      ? Math.max(0, Math.min(1, opts.gnssSpeedWeight ?? 1))
+      : 1;
+
+    if (gnssSpeedMps !== undefined && Number.isFinite(gnssSpeedMps) && gnssWeight > 0) {
       // 1. GNSS Doppler speed. Independent of position error and far more
       //    accurate than anything we can integrate. Re-anchors the vector.
+      //
       vE = gnssSpeedMps * fE;
       vN = gnssSpeedMps * fN;
       this.lastTrustedSpeed = gnssSpeedMps;
-      this.state.unaidedMs = 0;
+      if (gnssWeight >= 1) this.state.unaidedMs = 0;
+      else this.state.unaidedMs += dtMs;
     } else if (opts.mlSpeedMps !== undefined && Number.isFinite(opts.mlSpeedMps)) {
       // 2. ★ THE ML SPEED MODEL (Phase 8). ★
       //    An IO-VNBD-trained CNN reading two seconds of IMU. It ranks below
@@ -363,7 +407,11 @@ export class DeadReckoningEngine {
     this.state.enu = { e: this.state.enu.e + dE, n: this.state.enu.n + dN };
     this.state.velocityEnu = { e: vE, n: vN };
     this.state.speedMps = speed;
-    this.state.distanceTravelledM += Math.hypot(dE, dN);
+    // See `distanceFloorMps`: below the floor this is jitter, and adding the
+    // magnitude of jitter to a path length only ever inflates it.
+    if (speed >= this.config.distanceFloorMps) {
+      this.state.distanceTravelledM += Math.hypot(dE, dN);
+    }
 
     return this.state;
   }

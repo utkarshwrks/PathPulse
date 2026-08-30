@@ -17,6 +17,14 @@ export type NavEventType =
   | 'GNSS_ANOMALY'
   /** The speed model threw and was disabled. Never silent. */
   | 'ML_ERROR'
+  /**
+   * The speed model was held back because the motion is outside the domain it
+   * was trained on. Logged, because a model quietly not being consulted is
+   * indistinguishable from a model that is broken.
+   */
+  | 'ML_SUPPRESSED'
+  /** The motion classifier changed its mind about what the carrier is doing. */
+  | 'MOTION_CONTEXT'
   | 'WARNING';
 
 export interface NavEvent {

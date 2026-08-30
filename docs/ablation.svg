@@ -21,8 +21,8 @@
   <rect x="210" y="256" width="264.5" height="30" rx="4" fill="#eab308" />
   <text x="484.5" y="276.4" font-size="13" fill="#e2e8f0">27.0%</text>
   <text x="198" y="316.4" text-anchor="end" font-size="13" fill="#cbd5e1">highpass</text>
-  <rect x="210" y="296" width="133.3" height="30" rx="4" fill="#eab308" />
-  <text x="353.3" y="316.4" font-size="13" fill="#e2e8f0">13.6%</text>
+  <rect x="210" y="296" width="133.2" height="30" rx="4" fill="#eab308" />
+  <text x="353.2" y="316.4" font-size="13" fill="#e2e8f0">13.6%</text>
   <text x="198" y="356.4" text-anchor="end" font-size="13" fill="#cbd5e1">full</text>
   <rect x="210" y="336" width="98.1" height="30" rx="4" fill="#eab308" />
   <text x="318.1" y="356.4" font-size="13" fill="#e2e8f0">10.0%</text>

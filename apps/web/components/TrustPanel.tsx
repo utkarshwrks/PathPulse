@@ -312,6 +312,18 @@ function SensorsTab({
       </Group>
 
       <Group title="estimator">
+        {/*
+          ★ THE CLASSIFIER DECIDES THREE THINGS, SO IT HAS TO BE VISIBLE ★
+          Whether the speed model is consulted, whether device yaw is
+          integrated into the heading, and whether GNSS may assert a stop. If a
+          judge asks why the AI badge disappeared when the phone was picked up,
+          the answer has to be on screen next to the reason it decided.
+        */}
+        <Row k="MOTION" v={diagnostics.motionContext} accent={diagnostics.motionContext === 'PEDESTRIAN'} />
+        <Row k="  WHY" v={diagnostics.motionReason} />
+        {diagnostics.mlSuppressed ? (
+          <Row k="AI SPEED" v="held — out of domain" accent />
+        ) : null}
         <Row
           k="STATIONARY"
           v={diagnostics.isStationary ? 'YES' : 'NO'}
@@ -357,6 +369,16 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
     key: 'useMlSpeed',
     label: 'AI speed model',
     hint: 'The IO-VNBD-trained CNN, used for speed when GNSS is gone. Inert until the model loads — see the SENSORS tab.',
+  },
+  {
+    key: 'mlVehicleOnly',
+    label: 'AI model: vehicle only',
+    hint: 'The model was trained on car data. On foot it saturated the ceiling and the HUD read a flat 11 km/h. Off puts that back.',
+  },
+  {
+    key: 'pedestrianHeadingFromGnss',
+    label: 'On foot: course from GNSS',
+    hint: 'A hand is not a chassis. Off integrates device yaw on foot, which drew the star-shaped trail over a straight footpath.',
   },
   {
     key: 'accelHighPass',

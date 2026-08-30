@@ -25,6 +25,11 @@ import { RoadIndex } from '../mapmatch/RoadIndex.js';
 import { describeTurn, TurnDetector, type TurnEvent } from '../mapmatch/turnDetector.js';
 import { SpoofingDetector } from '../detect/spoofing.js';
 import {
+  DEFAULT_MOTION_CONTEXT_CONFIG,
+  MotionContextDetector,
+  type MotionContext,
+} from '../motion/context.js';
+import {
   NullSpeedPredictor,
   SpeedSmoother,
   SpeedWindowBuffer,
@@ -88,6 +93,28 @@ export interface ConstraintFlags {
    * which is what makes the app safe to ship before the weights exist.
    */
   useMlSpeed: boolean;
+  /**
+   * Restrict the vehicle-trained speed model to vehicle motion.
+   *
+   * ★ THE MODEL'S TRAINING SET IS PART OF ITS SPECIFICATION ★
+   * IO-VNBD is dashcam-and-OBD data from cars. Asked about a phone swinging in
+   * somebody's hand it does not fail loudly — it answers, confidently, with a
+   * number pinned to the plausibility ceiling, and the HUD then read a flat
+   * 11 km/h whether the carrier was walking or the handset was face-up on a
+   * table. Declining to answer outside the training domain is the correct
+   * behaviour and is a result worth showing, so this is a toggle rather than
+   * a hard rule: turn it off and the saturation comes straight back.
+   */
+  mlVehicleOnly: boolean;
+  /**
+   * On foot, take the direction of travel from GNSS rather than device yaw.
+   *
+   * The non-holonomic constraint's premise — that the carrier travels in the
+   * direction it points — holds for a car and fails for a hand. Integrating
+   * gyro yaw between two fixes five seconds apart walked the heading through
+   * most of the compass and drew the estimate out and back on every interval.
+   */
+  pedestrianHeadingFromGnss: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -127,6 +154,36 @@ export interface EngineConfig extends ConstraintFlags {
    * constant error cannot integrate for minutes.
    */
   accelHighPassTauMs: number;
+  /**
+   * How long a GNSS speed keeps aiding the estimate after the fix that
+   * carried it, ms — bounded below by this and by the receiver's own cadence.
+   *
+   * ★ A 0.2 Hz RECEIVER IS NOT "NO GNSS" FOR 4.99 SECONDS OUT OF EVERY 5 ★
+   *
+   * `sample.gnss` is only populated on the sample a fix lands on. The field
+   * handset fixes every five seconds while the IMU runs at 60 Hz, so 299
+   * samples in 300 carried no fix — and the engine, reading that literally,
+   * fell through to the speed model or to raw integration on every one of
+   * them. It was dead reckoning for 99.7 % of a run during which the badge
+   * said GNSS and the confidence bar said 100 %.
+   *
+   * A Doppler speed does not expire the instant it is reported. Holding it
+   * for the receiver's own fix interval is what makes "GNSS is healthy" mean
+   * the same thing to the estimator that it means on the badge.
+   */
+  gnssSpeedHoldMs: number;
+  /** Never hold a GNSS speed longer than this however slow the receiver, ms. */
+  gnssSpeedHoldMaxMs: number;
+  /**
+   * How long the course baseline may grow without clearing the noise bar
+   * before we conclude the carrier is simply not moving, s.
+   */
+  gnssCourseStaleS: number;
+  /**
+   * Below this the step is fix noise or hand tremor rather than travel, m/s,
+   * and is not added to the distance total.
+   */
+  distanceFloorMps: number;
   roadSnapConfig: RoadSnapConfig;
 }
 
@@ -142,6 +199,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   adaptiveTimeout: true,
   roadSnap: true,
   useMlSpeed: true,
+  mlVehicleOnly: true,
+  pedestrianHeadingFromGnss: true,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
@@ -151,6 +210,10 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   uncorrectedGyroBiasRadPerSec: 0.01,
   accelHighPassTauMs: 40_000,
   mlInferenceIntervalMs: 500,
+  gnssSpeedHoldMs: 3_000,
+  gnssSpeedHoldMaxMs: 12_000,
+  gnssCourseStaleS: 20,
+  distanceFloorMps: 0.3,
   roadSnapConfig: DEFAULT_ROAD_SNAP_CONFIG,
 };
 
@@ -210,6 +273,31 @@ export class NavigationEngine {
   private lastMovingGnssT: number | null = null;
   /** Previous trusted fix, used to derive speed and heading when absent. */
   private lastTrustedFixForDerivation: { t: number; enu: EnuPoint } | null = null;
+  /**
+   * The last speed GNSS actually gave us, and when.
+   *
+   * Held rather than consumed on the sample it arrived on — see
+   * `gnssSpeedHoldMs`. Without this a 0.2 Hz receiver leaves the estimator
+   * unaided for 299 samples out of every 300 while the badge reads GNSS.
+   */
+  private lastGnssSpeed: { t: number; mps: number } | null = null;
+  /** Oldest fix since the last course derivation. See the note where it is used. */
+  private gnssCourseBaseline: { t: number; enu: EnuPoint } | null = null;
+  /** Speed and course measured over that baseline, for receivers reporting neither. */
+  private gnssCourse: { speedMps: number; headingDeg: number } | null = null;
+  /**
+   * Whether GNSS has ever supplied a speed — measured or derived.
+   *
+   * ★ ONE FIX GIVES YOU A POSITION. IT TAKES TWO TO GIVE YOU A SPEED. ★
+   * Until the second one arrives there is no speed reference of any kind, and
+   * integrating an accelerometer with no reference is not an estimate, it is a
+   * number. An agitated handset reached 11 m/s and banked 55 m inside the
+   * first five seconds that way, while the badge still read ACQUIRING.
+   */
+  private hasGnssSpeedEvidence = false;
+  private readonly motion = new MotionContextDetector();
+  /** Logged once per suppression episode, not once per sample. */
+  private mlSuppressed = false;
   private lastStationarity: StationarityResult = {
     isStationary: false,
     confidence: 0,
@@ -270,6 +358,7 @@ export class NavigationEngine {
         ...DEFAULT_SPEED_CLAMP_CONFIG,
         maxSpeedMps: this.config.maxSpeedMps,
       },
+      distanceFloorMps: this.config.distanceFloorMps,
     });
   }
 
@@ -298,6 +387,7 @@ export class NavigationEngine {
         ...DEFAULT_SPEED_CLAMP_CONFIG,
         maxSpeedMps: this.config.maxSpeedMps,
       },
+      distanceFloorMps: this.config.distanceFloorMps,
     });
     this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
     if (!this.config.roadSnap) {
@@ -338,6 +428,13 @@ export class NavigationEngine {
     mlLatencyMs: number;
     /** Why the model was disabled, if it was. Surfaced in the debug panel. */
     mlError: string | null;
+    /** What the carrier is doing, and what decided it. Drives three behaviours. */
+    motionContext: MotionContext;
+    motionReason: string;
+    /** True while the vehicle-trained speed model is being held back. */
+    mlSuppressed: boolean;
+    /** Age of the GNSS speed currently aiding the estimate, ms. */
+    gnssSpeedAgeMs: number;
     /** Why we are still ACQUIRING, or null once navigating. */
     acquiringReason: string | null;
     /** Why the engine is dead reckoning or degraded, for the HUD. */
@@ -354,6 +451,13 @@ export class NavigationEngine {
       observedFixIntervalMs: this.stateMachine.observedFixIntervalMs,
       effectiveNoFixTimeoutMs: this.stateMachine.effectiveNoFixTimeoutMs,
       unaidedMs: this.dr.current.unaidedMs,
+      motionContext: this.motion.current,
+      motionReason: this.motion.reason,
+      mlSuppressed: this.mlSuppressed,
+      gnssSpeedAgeMs:
+        this.lastGnssSpeed === null || this.lastSampleT === null
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, this.lastSampleT - this.lastGnssSpeed.t),
       forwardBiasMps2: this.forwardBias.estimateMps2,
       forwardBiasObservations: this.forwardBias.observationCount,
       roadSnapAppliedFraction: this.roadSnapAppliedFraction,
@@ -615,35 +719,102 @@ export class NavigationEngine {
     // estimator never received a single observation (it read "0.000 (0)" on
     // screen for a whole session).
     //
-    // Consecutive fixes give both back. It is a coarse estimate over an 11 s
-    // baseline rather than an instantaneous Doppler reading, but a coarse
-    // truth every 11 s beats no truth at all.
+    // Consecutive fixes give both back, measured over a baseline long enough
+    // to clear the receiver's own noise. Coarse, and later than a Doppler
+    // reading would be — but a coarse truth is worth more than none, and none
+    // was what the field device had.
     let speedForFix = sample.gnss?.speedMps;
     let headingForFix = sample.gnss?.headingDeg;
     if (trusted && gnssEnu) {
       const prev = this.lastTrustedFixForDerivation;
       if (prev && sample.t > prev.t) {
         const dtS = (sample.t - prev.t) / 1000;
-        const de = gnssEnu.e - prev.enu.e;
-        const dn = gnssEnu.n - prev.enu.n;
-        const distM = Math.hypot(de, dn);
-        // Only derive from a displacement clearly larger than the fix
-        // uncertainty. Over an 11 s baseline with 6 m accuracy, anything under
-        // ~18 m of movement is mostly noise, and a speed derived from noise is
-        // worse than admitting we do not know.
-        const trustworthy = distM > 3 * (sample.gnss?.accuracyM ?? 10);
-        if (dtS > 0.2 && dtS < 30 && trustworthy) {
-          if (speedForFix === undefined || !Number.isFinite(speedForFix)) {
-            speedForFix = distM / dtS;
+        const acc = sample.gnss?.accuracyM ?? 10;
+        if (dtS > 0.2 && dtS < 30) {
+          // ★ ONE INTERVAL IS NOT A BASELINE ★
+          //
+          // This used to derive speed and course from a single pair of fixes.
+          // At walking pace that is hopeless: 1.35 m/s over the field device's
+          // five-second interval is 6.8 m of travel against a 4 m accuracy
+          // radius, so the displacement is barely larger than its own noise.
+          //
+          // The first version of this guard demanded three radii and, failing
+          // that, derived nothing — which left every consumer below reading
+          // `speedForFix ?? <the speed we already hold>`, so the speed the
+          // engine happened to be holding was re-affirmed by every fix
+          // forever. That is the latch that pinned the HUD at a flat 11 km/h
+          // with the handset face-up on a table.
+          //
+          // The second version subtracted a noise floor and reported whatever
+          // was left. That answered, but it answered near zero: a genuine walk
+          // measured 0.9 m/s one interval and 0.1 m/s the next, and the
+          // classifier read the low ones as a stop and had ZUPT arrest a
+          // person mid-stride.
+          //
+          // A displacement measured over a baseline that is *allowed to grow*
+          // until it clears the noise gives a real answer a few seconds later
+          // instead of a bad answer immediately. At walking pace the bar falls
+          // in about nine seconds; at 14 m/s it falls on the very next fix, so
+          // vehicles see no change at all.
+          const bar = Math.max(8, 3 * acc);
+          const base = this.gnssCourseBaseline;
+          if (base === null) {
+            this.gnssCourseBaseline = { t: sample.t, enu: gnssEnu };
+          } else {
+            const bde = gnssEnu.e - base.enu.e;
+            const bdn = gnssEnu.n - base.enu.n;
+            const bDist = Math.hypot(bde, bdn);
+            const bDtS = (sample.t - base.t) / 1000;
+            if (bDist > bar && bDtS > 0) {
+              this.gnssCourse = {
+                speedMps: bDist / bDtS,
+                headingDeg: normaliseDeg((Math.atan2(bde, bdn) * 180) / Math.PI),
+              };
+              this.gnssCourseBaseline = { t: sample.t, enu: gnssEnu };
+            } else if (bDtS > 0) {
+              // ★ A DISPLACEMENT TOO SMALL TO MEASURE IS STILL AN UPPER BOUND ★
+              //
+              // The baseline has not cleared the noise bar, so we cannot say
+              // what the speed is. We can say what it is not: the carrier has
+              // demonstrably not covered more than the observed displacement
+              // plus a radius of fix noise in the time elapsed. Without this
+              // bound the fix carried no speed at all, `resetTo` fell back to
+              // whatever the engine already held, and an agitated handset
+              // integrated its way to 11 m/s and banked 575 m of travel in the
+              // fifty seconds before the stale timer below could rescue it.
+              //
+              // The bound tightens on its own: as the baseline ages without
+              // moving, the same displacement over a longer interval means a
+              // lower ceiling, until the stale branch calls it a stop outright.
+              const ceiling = (bDist + acc) / Math.max(1, bDtS);
+              const held = this.gnssCourse?.speedMps;
+              this.gnssCourse = {
+                speedMps: held === undefined ? ceiling : Math.min(held, ceiling),
+                headingDeg: this.gnssCourse?.headingDeg ?? this.dr.current.headingDeg,
+              };
+            }
+            if (bDist <= bar && bDtS > this.config.gnssCourseStaleS) {
+              // Long enough to be sure. Whatever this is, it is not travel:
+              // the receiver has been watching for twenty seconds and cannot
+              // find eight metres of it. Reporting a stop is the answer, and
+              // reporting it is what lets ZUPT fire on a handset being carried
+              // — the IMU alone can never call this, because a hand is never
+              // still enough to clear the stationarity thresholds.
+              this.gnssCourse = {
+                speedMps: 0,
+                headingDeg: this.gnssCourse?.headingDeg ?? this.dr.current.headingDeg,
+              };
+              this.gnssCourseBaseline = { t: sample.t, enu: gnssEnu };
+            }
           }
-          // Below a few metres the displacement is mostly fix noise, and its
-          // direction is meaningless — deriving a heading from it would spin
-          // the vehicle on the spot.
-          if (
-            (headingForFix === undefined || !Number.isFinite(headingForFix)) &&
-            distM > 5
-          ) {
-            headingForFix = normaliseDeg((Math.atan2(de, dn) * 180) / Math.PI);
+
+          // The receiver's own values always win; these only fill the gap left
+          // by a handset that reports null for both, which many do.
+          if (speedForFix === undefined || !Number.isFinite(speedForFix)) {
+            speedForFix = this.gnssCourse?.speedMps;
+          }
+          if (headingForFix === undefined || !Number.isFinite(headingForFix)) {
+            headingForFix = this.gnssCourse?.headingDeg;
           }
         }
       }
@@ -666,7 +837,10 @@ export class NavigationEngine {
       // multipath speed learned here would be applied for the whole of the
       // next outage, which is the worst possible time to be wrong.
       if (trusted && speedForFix !== undefined && Number.isFinite(speedForFix)) {
+        this.hasGnssSpeedEvidence = true;
         this.forwardBias.pushGnssSpeed(sample.t, speedForFix);
+        // Held, not consumed. See `gnssSpeedHoldMs`.
+        this.lastGnssSpeed = { t: sample.t, mps: speedForFix };
       }
       if (trusted) {
         this.dr.pushFix({
@@ -678,6 +852,75 @@ export class NavigationEngine {
         });
       }
     }
+
+    // ★ WHAT KIND OF MOTION IS THIS? ★
+    //
+    // Three of this engine's load-bearing assumptions are vehicle assumptions:
+    // that the speed model's training set covers the motion, that the carrier
+    // travels in the direction it points, and that stillness is visible in the
+    // accelerometer. All three fail on foot, in different and compounding
+    // ways. See motion/context.ts. Classify first, then act.
+    const gnssSpeedAgeMs =
+      this.lastGnssSpeed === null ? Number.POSITIVE_INFINITY : sample.t - this.lastGnssSpeed.t;
+    // ★ HOLD FOR THE RECEIVER'S OWN CADENCE, NOT FOR A FIXED TIME ★
+    // The window has to be the thing it is compensating for. A flat floor of a
+    // few seconds over-holds a 1 Hz receiver — it keeps asserting a measured
+    // speed through the start of an outage, when the vehicle is very likely
+    // decelerating — and that alone put 1.2 points back on the published mean
+    // drift. One and a half fix intervals holds exactly long enough to cover a
+    // late fix and no longer. The configured value is only the fallback for
+    // before any interval has been observed.
+    const observedFixMs = this.stateMachine.observedFixIntervalMs;
+    const gnssSpeedHoldMs = Math.min(
+      this.config.gnssSpeedHoldMaxMs,
+      observedFixMs !== null && observedFixMs > 0
+        ? 1.5 * observedFixMs
+        : this.config.gnssSpeedHoldMs,
+    );
+    const contextBefore = this.motion.current;
+    this.motion.push({
+      t: sample.t,
+      accelVariance: this.lastStationarity.accelVariance,
+      isStationary: this.lastStationarity.isStationary,
+      ...(this.lastGnssSpeed
+        ? { gnssSpeedMps: this.lastGnssSpeed.mps, gnssSpeedT: this.lastGnssSpeed.t }
+        : {}),
+    });
+    const context = this.motion.current;
+    if (context !== contextBefore) {
+      this.log.push({
+        t: sample.t,
+        type: 'MOTION_CONTEXT',
+        message: `${contextBefore.toLowerCase()} -> ${context.toLowerCase()} (${this.motion.reason})`,
+        data: { context },
+      });
+    }
+
+    // ★ GNSS CAN CALL A STOP THAT THE IMU NEVER WILL ★
+    //
+    // Standing still holding a phone breaches both stationarity thresholds
+    // continuously — hand tremor alone exceeds the 0.02 rad/s gyro gate — so
+    // ZUPT, the one constraint that can arrest an unaided estimate, could
+    // never fire on foot. A recent fix reporting no displacement says the
+    // velocity is zero whatever the accelerometer happens to be doing.
+    //
+    // Bias harvesting above deliberately keeps keying on the IMU verdict: a
+    // shaken phone is stopped, but it is not a quiet enough sample to learn an
+    // accelerometer bias from, and a bias learned from hand movement would be
+    // applied for the whole of the next outage.
+    //
+    // Not in a vehicle, though. The stationarity detector's thresholds were
+    // measured on vehicle data and work there; the failure this repairs is
+    // specific to a handset being carried. Applying it in a vehicle instead
+    // asserts a stop from a fix that may be a whole second old, which zeroes
+    // the velocity of a car pulling away from a light — the exact error the
+    // `gnssSaysMoving` interlock above exists to prevent, reintroduced from
+    // the other side.
+    const gnssSaysStill =
+      this.lastGnssSpeed !== null &&
+      gnssSpeedAgeMs <= gnssSpeedHoldMs &&
+      this.lastGnssSpeed.mps < DEFAULT_MOTION_CONTEXT_CONFIG.stationarySpeedMps;
+    if (gnssSaysStill && context !== 'VEHICLE') stationaryForZupt = true;
 
     const modeBefore = this.stateMachine.current;
 
@@ -697,15 +940,84 @@ export class NavigationEngine {
     // is what a runaway integration always saturates at — and 551 m of travel,
     // all while the badge still read ACQUIRING. Every one of those numbers was
     // invented before the system knew where it was.
-    const mlSpeed = this.runSpeedModel(sample.t);
+    const mlRaw = this.runSpeedModel(sample.t);
+    // ★ OUTSIDE ITS TRAINING DOMAIN, THE MODEL DECLINES TO ANSWER ★
+    // See `mlVehicleOnly`. Logged rather than silent: a model that is quietly
+    // never consulted is indistinguishable, from outside, from a broken one.
+    const mlAllowed = !this.config.mlVehicleOnly || context === 'VEHICLE';
+    const mlSpeed = mlAllowed ? mlRaw : undefined;
+    if (!mlAllowed && mlRaw !== undefined && !this.mlSuppressed) {
+      this.mlSuppressed = true;
+      this.log.push({
+        t: sample.t,
+        type: 'ML_SUPPRESSED',
+        message: `speed model held back — motion is ${context.toLowerCase()}, model is vehicle-trained`,
+        data: { context },
+      });
+    }
+    if (mlAllowed) this.mlSuppressed = false;
 
     if (this.dr.isInitialised) {
-      const gnssSpeed = trusted ? speedForFix : undefined;
+      // ★ HOLD THE DOPPLER SPEED BETWEEN FIXES ★ See `gnssSpeedHoldMs`. Two
+      //   conditions, for two different reasons.
+      //
+      //   The mode must still be healthy: during an outage the whole point is
+      //   that there is nothing left to hold on to.
+      //
+      //   And the motion must not be vehicular. The hold is worth having when
+      //   the speed is small next to the error integration accrues across one
+      //   fix interval — which is the pedestrian case, where 5 s of unaided
+      //   integration can be most of a walking pace. In a vehicle the ratio
+      //   inverts and integration is the better estimate, and the ablation
+      //   says so plainly: applying the hold to vehicle data moved the
+      //   published mean drift from 10.00 % to 10.33 % and the p90 from
+      //   17.57 % to 21.31 %. Restricted this way, all of Phase 9's pedestrian
+      //   repairs reproduce the vehicle headline to the last digit — which is
+      //   the point. They fix what was broken and touch nothing else.
+      const gnssHealthy =
+        modeBefore === 'GNSS' ||
+        modeBefore === 'GNSS_DEGRADED' ||
+        modeBefore === 'INITIALIZING';
+      const gnssSpeedHeld =
+        !trusted &&
+        gnssHealthy &&
+        context !== 'VEHICLE' &&
+        this.lastGnssSpeed !== null &&
+        gnssSpeedAgeMs <= gnssSpeedHoldMs;
+      const gnssSpeed = trusted
+        ? speedForFix
+        : gnssSpeedHeld
+          ? this.lastGnssSpeed!.mps
+          : // Before any speed evidence has ever arrived, zero is not a guess
+            // — it is the only figure we are entitled to. See
+            // `hasGnssSpeedEvidence`. It self-clears on the second fix, which
+            // for a vehicle is one second later.
+            !this.hasGnssSpeedEvidence
+            ? 0
+            : undefined;
+      // Full authority on the sample the fix landed on, falling linearly to
+      // nothing by the end of the hold window. See `gnssSpeedWeight`.
+      const gnssSpeedWeight = gnssSpeedHeld
+        ? Math.max(0, 1 - gnssSpeedAgeMs / Math.max(1, gnssSpeedHoldMs))
+        : 1;
+
+      // ★ A HAND IS NOT A CHASSIS ★
+      // On foot the device's yaw is uncorrelated with the direction of travel,
+      // so integrating it does not refine the heading — it randomises it. Over
+      // a five-second fix interval it walked through most of the compass, and
+      // the estimate went out and came back on every interval: the star-shaped
+      // trail from a walk down a straight footpath. Freeze it and let the
+      // course between fixes supply the bearing instead.
+      const drYawRate =
+        this.config.pedestrianHeadingFromGnss && context === 'PEDESTRIAN' ? 0 : yawRate;
+
       // 9B: turns come off the same corrected yaw rate the estimate does, so a
       // detected turn is by construction the turn the engine believes it made.
+      // Which also means: on foot, where we refuse to integrate device yaw,
+      // there are no turns to report rather than a stream of invented ones.
       const turn = this.turns.update(
         sample.t,
-        yawRate,
+        drYawRate,
         dtMs,
         this.dr.current.speedMps,
         this.dr.current.headingDeg,
@@ -724,11 +1036,12 @@ export class NavigationEngine {
         });
       }
 
-      this.dr.propagate(forwardAccel, yawRate, dtMs, gnssSpeed, {
+      this.dr.propagate(forwardAccel, drYawRate, dtMs, gnssSpeed, {
         lateralAccelMps2: lateralAccel,
         isStationary: stationaryForZupt,
         mlSpeedMps: mlSpeed,
         roadMaxSpeedMps: this.roadMaxSpeedMps,
+        gnssSpeedWeight,
       });
       // Record what actually supplied the speed, in the same priority order
       // DeadReckoningEngine.propagate() applies it.
@@ -1223,6 +1536,12 @@ export class NavigationEngine {
     this.lastFixAccuracyM = null;
     this.lastMovingGnssT = null;
     this.lastTrustedFixForDerivation = null;
+    this.lastGnssSpeed = null;
+    this.gnssCourseBaseline = null;
+    this.gnssCourse = null;
+    this.hasGnssSpeedEvidence = false;
+    this.motion.reset();
+    this.mlSuppressed = false;
     this.roadIndex = null;
     this.lastMatchedWayId = null;
     this.lastMatch = null;

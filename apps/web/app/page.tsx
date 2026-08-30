@@ -337,6 +337,7 @@ export default function Home() {
         gnssHz={source.gnssHz}
         events={nav.events}
         walkingMode={nav.controls.walkingMode}
+        motionContext={nav.diagnostics.motionContext}
       />
       </ErrorBoundary>
 
