@@ -1,4 +1,4 @@
-import { normalizeAngle } from '../geo/angles.js';
+import { normalizeAngle, normalizeAngle360 } from '../geo/angles.js';
 
 /**
  * Turn detection from integrated yaw.
@@ -244,8 +244,12 @@ export class TurnDetector {
       durationMs: tMs - startedAtMs,
       kind,
       deltaDeg: total,
-      fromHeadingDeg: (fromHeadingDeg + 360) % 360,
-      toHeadingDeg: (headingDeg + 360) % 360,
+      // normalizeAngle360, not `(x + 360) % 360` — the latter still returns a
+      // negative for anything below -360, and these two numbers are printed
+      // straight onto the HUD. "Turned from -350° to -260°" is not a compass
+      // bearing; it is a bug that reads as one.
+      fromHeadingDeg: normalizeAngle360(fromHeadingDeg),
+      toHeadingDeg: normalizeAngle360(headingDeg),
     };
     this.lastTurn = event;
     this.turnCount++;

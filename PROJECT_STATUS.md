@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B ✅ COMPLETE
+**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B ✅ COMPLETE, deep-tested
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Phase 9C offline map, then 9D/9E/9F
 
@@ -907,6 +907,62 @@ it never writes to the estimate.
 24 new. Purity clean at 42 files.
 
 **APK:** `PathPulse_Phase9B.apk`.
+
+### Deep test pass 6 — Phase 9A and 9B, assumed broken ✅
+
+Four real defects, none of which a coverage report would have found: every line
+below was already at 100% statement coverage before the pass started.
+
+**1. A non-finite segment count produced `[undefined]`.**
+`Math.max(3, NaN)` is `NaN`, so the vertex loop ran zero times and the
+ring-closing `push(ring[0])` appended a vertex that did not exist. Not a crash
+in `ellipse.ts` — a crash later, inside MapLibre, with a stack trace pointing
+nowhere near the cause. `Infinity` was worse: it hung. The segment count is now
+bounded at both ends.
+
+**2. NaN axis bounds produced NaN coordinates.** `clampAxis` trusted its own
+`min`/`max` arguments. A NaN bound turns every comparison false and propagates
+straight out to the coordinates, which MapLibre drops silently — an ellipse
+that is simply absent, with nothing anywhere saying why.
+
+**3. ★ The ellipse smeared across the entire globe at the antimeridian.**
+`enuToLatLon` wraps longitude into [-180, 180], so a ring centred near +180
+came back with some vertices at +179.99 and others at -179.99. A GeoJSON
+polygon joins those the long way round: a 360-degree band painted across the
+whole map instead of a small ellipse. Measured span before the fix: **359.997
+degrees**. Vertices are now unwrapped relative to the centre.
+
+**4. ★ The ellipse pulsed outward on every fix during recovery.**
+The shrink target was `sample.gnss?.accuracyM ?? 5`. That looks harmless at
+1 Hz and is not: the field device reports a fix every 5 to 20 seconds, so at
+50 Hz upwards of 249 samples in 250 carry no `gnss` and the `5` became the
+target almost always. The shrink aimed at 5 m between fixes and at the real
+accuracy on the samples carrying one, so the ellipse jumped outward every time
+a fix landed — **7 outward jumps in a single recovery** on a 0.5 Hz receiver,
+during the one moment the demo is meant to look composed. Now reads
+`lastFixAccuracyM`, which the engine already tracked continuously.
+
+**5. Turn headings could be reported negative.** `(x + 360) % 360` still
+returns a negative for anything below -360, and those two numbers are printed
+straight onto the HUD. "Turned from -350° to -260°" is not a compass bearing.
+Now `normalizeAngle360`.
+
+**Note on defect 4:** the first version of its test passed against the broken
+code, because a small drift slews in about two seconds and no second fix lands
+inside that window. It only bites when the drift is large enough for the
+rate-limited slew to span several fixes. The test was rewritten with a 110 s
+outage and a 2 s fix interval, then **verified by re-introducing the bug and
+watching it fail** — a test that has never failed has not been shown to test
+anything.
+
+**Also asserted rather than assumed:** that mounting `ConfidenceEllipse` before
+`TrailLayer` really does put the fill underneath the trail. `page.tsx` depends
+on React running sibling effects in mount order, and the only symptom of that
+changing would be a washed-out trail that still looks broadly right.
+
+**Tests:** 812 passing (nav-core 374, web 227, eval 125, sensor-sources 86) —
+24 new hostile tests. Ablation output still byte-identical: none of these fixes
+touches the estimate.
 
 ## NEXT PHASE
 

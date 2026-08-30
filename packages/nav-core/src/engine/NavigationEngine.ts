@@ -857,7 +857,16 @@ export class NavigationEngine {
       // which reads as the shape being decorative rather than measured. Easing
       // it down on the blender's own progress curve means the marker arriving
       // and the uncertainty closing are visibly the same event.
-      const recoveredAccuracyM = sample.gnss?.accuracyM ?? 5;
+      // ★ THE TARGET MUST NOT DEPEND ON WHETHER THIS SAMPLE CARRIED A FIX ★
+      // Reading `sample.gnss?.accuracyM ?? 5` looks harmless at 1 Hz and is
+      // not: the field device reports a fix every 5 to 20 seconds, so at 50 Hz
+      // upwards of 249 samples in 250 have no `gnss` at all and the fallback
+      // becomes the target almost always. The shrink then aims at 5 m between
+      // fixes and at the real accuracy on the samples that carry one, so the
+      // ellipse jumps outward on every fix — a pulsing shape, during the one
+      // moment the demo is meant to look composed. `lastFixAccuracyM` is
+      // already tracked on every fix and is the same number, continuously.
+      const recoveredAccuracyM = sample.gnss?.accuracyM ?? this.lastFixAccuracyM ?? 5;
       const from = this.recoveryStartCovariance;
       if (from) {
         const p = Math.max(0, Math.min(1, blended.progress));

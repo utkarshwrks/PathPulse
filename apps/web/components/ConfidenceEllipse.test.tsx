@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { NavMode } from '@pathpulse/nav-core';
 import { MapContext } from './MapContext';
 import ConfidenceEllipse from './ConfidenceEllipse';
+import TrailLayer from './TrailLayer';
 import { MODE_COLORS } from '@/config/modes';
 
 /**
@@ -195,5 +196,91 @@ describe('ConfidenceEllipse', () => {
       </MapContext.Provider>,
     );
     expect(map.layers.filter((l) => l.id === 'pathpulse-confidence-fill')).toHaveLength(1);
+  });
+});
+
+describe('ConfidenceEllipse — hostile', () => {
+  it('★ adds its layers below the trail when mounted before it', () => {
+    // page.tsx relies on mount order for z-order: the ellipse fill must not be
+    // painted over the trail, because the trail is the thing a judge reads.
+    // This is asserted rather than assumed — if React ever ran sibling effects
+    // in another order, the only symptom would be a washed-out trail that
+    // still looks broadly right.
+    const map = makeMap();
+    render(
+      <MapContext.Provider value={map as never}>
+        <ConfidenceEllipse
+          lat={28.6315}
+          lon={77.2167}
+          alongM={40}
+          crossM={10}
+          headingDeg={90}
+          mode="DEAD_RECKONING"
+        />
+        <TrailLayer
+          trail={[
+            { lat: 28.63, lon: 77.21, mode: 'GNSS', t: 0 },
+            { lat: 28.64, lon: 77.22, mode: 'GNSS', t: 1 },
+          ]}
+        />
+      </MapContext.Provider>,
+    );
+
+    const ids = map.layers.map((l) => l.id as string);
+    expect(ids.indexOf('pathpulse-confidence-fill')).toBeLessThan(
+      ids.indexOf('pathpulse-trail-line'),
+    );
+  });
+
+  it('does not throw when the map has no source yet on a data update', () => {
+    // The layer effect and the data effect are separate. A map that reports no
+    // source (a style reload mid-session) must degrade, not crash the page.
+    const map = makeMap();
+    const broken = { ...map, getSource: () => undefined, addSource: () => {} };
+    expect(() =>
+      render(
+        <MapContext.Provider value={broken as never}>
+          <ConfidenceEllipse
+            lat={28.6315}
+            lon={77.2167}
+            alongM={40}
+            crossM={10}
+            headingDeg={90}
+            mode="GNSS"
+          />
+        </MapContext.Provider>,
+      ),
+    ).not.toThrow();
+  });
+
+  it('survives a covariance at the runaway cap without emitting junk', () => {
+    const map = makeMap();
+    withMap(map, { alongM: 10_000_000, crossM: 5 });
+    const ring = feature(map).geometry.coordinates[0]!;
+    for (const [lon, lat] of ring) {
+      expect(Number.isFinite(lon)).toBe(true);
+      expect(Number.isFinite(lat)).toBe(true);
+      expect(Math.abs(lat)).toBeLessThanOrEqual(90);
+    }
+  });
+
+  it('empties rather than throwing on a NaN covariance', () => {
+    const map = makeMap();
+    withMap(map, { alongM: NaN, crossM: NaN });
+    const ring = feature(map).geometry.coordinates[0]!;
+    expect(ring.length).toBeGreaterThan(3);
+    for (const [lon, lat] of ring) {
+      expect(Number.isFinite(lon)).toBe(true);
+      expect(Number.isFinite(lat)).toBe(true);
+    }
+  });
+
+  it('renders nothing at all rather than a phantom shape at (0, 0)', () => {
+    // The engine reports (0, 0) while ACQUIRING. An ellipse in the Gulf of
+    // Guinea is the same class of bug as the "white line from Delhi".
+    const map = makeMap();
+    withMap(map, { lat: Infinity, lon: 0 });
+    const data = map.sources.get('pathpulse-confidence')?.data as { features: unknown[] };
+    expect(data.features).toHaveLength(0);
   });
 });

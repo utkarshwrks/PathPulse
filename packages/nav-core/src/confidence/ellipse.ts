@@ -57,8 +57,16 @@ export const DEFAULT_ELLIPSE_OPTIONS: EllipseRingOptions = {
 
 /** Clamp one semi-axis into the drawable range, treating junk as zero. */
 function clampAxis(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value) || value <= 0) return min;
-  return Math.min(max, Math.max(min, value));
+  // The bounds themselves are caller-supplied and can be junk. A NaN bound
+  // silently turns every comparison false and NaN propagates all the way out
+  // to the coordinates, which MapLibre drops without a word — an ellipse that
+  // is simply absent, with nothing anywhere saying why.
+  const lo = Number.isFinite(min) ? min : DEFAULT_ELLIPSE_OPTIONS.minAxisM;
+  const hi = Number.isFinite(max) ? max : DEFAULT_ELLIPSE_OPTIONS.maxAxisM;
+  const safeLo = Math.min(lo, hi);
+  const safeHi = Math.max(lo, hi);
+  if (!Number.isFinite(value) || value <= 0) return safeLo;
+  return Math.min(safeHi, Math.max(safeLo, value));
 }
 
 /**
@@ -82,7 +90,14 @@ export function buildConfidenceRing(
   if (!Number.isFinite(centre.lat) || !Number.isFinite(centre.lon)) return [];
   if (Math.abs(centre.lat) > 90 || Math.abs(centre.lon) > 180) return [];
 
-  const steps = Math.max(3, Math.floor(segments));
+  // A non-finite segment count makes `Math.max` return NaN, the vertex loop
+  // run zero times, and the ring-closing push append `ring[0]` — which does
+  // not exist. The result is `[undefined]`: not a crash here, but a crash
+  // later, inside the map, with a stack trace pointing nowhere near this file.
+  // Infinity is worse; it hangs. Bounded at both ends.
+  const steps = Number.isFinite(segments)
+    ? Math.max(3, Math.min(720, Math.floor(segments)))
+    : DEFAULT_ELLIPSE_OPTIONS.segments;
   const along = clampAxis(axes.alongM, minAxisM, maxAxisM);
   const cross = clampAxis(axes.crossM, minAxisM, maxAxisM);
   // A heading of NaN means "stationary, direction unknown". North-up is the
@@ -103,7 +118,18 @@ export function buildConfidenceRing(
     const e = a * sinH + c * cosH;
     const n = a * cosH - c * sinH;
     const p = enuToLatLon(e, n, centre.lat, centre.lon);
-    ring.push([p.lon, p.lat]);
+    // ★ KEEP THE RING CONTIGUOUS ACROSS THE ANTIMERIDIAN ★
+    // enuToLatLon returns longitude wrapped into [-180, 180]. A ring centred
+    // near +180 therefore comes back with some vertices at +179.99 and others
+    // at -179.99, and a polygon joins those the long way round: a 360-degree
+    // band painted across the entire map instead of a small ellipse. Unwrap
+    // relative to the centre so consecutive vertices stay adjacent. MapLibre
+    // accepts longitudes outside [-180, 180] and renders them across the seam.
+    let lon = p.lon;
+    const delta = lon - centre.lon;
+    if (delta > 180) lon -= 360;
+    else if (delta < -180) lon += 360;
+    ring.push([lon, p.lat]);
   }
   ring.push(ring[0]!);
   return ring;
