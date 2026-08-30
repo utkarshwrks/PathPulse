@@ -6,6 +6,17 @@ interface PermissionGateProps {
   status: GeolocationStatus;
   error: string | null;
   onRetry: () => void;
+  /**
+   * Leave live sensors and go back to something that works.
+   *
+   * ★ THIS GATE USED TO BE A TRAP ★
+   * It covers the whole screen and offered only "Retry". Choose live sensors
+   * on an http origin, or deny the prompt once, and there was no way back —
+   * the source picker was underneath it and the menu button was behind it. The
+   * app was not broken; it was unreachable, which to the person holding it is
+   * the same thing and looks worse.
+   */
+  onUseSimulation: () => void;
 }
 
 /**
@@ -17,9 +28,24 @@ interface PermissionGateProps {
  * to "allow location" when the real problem is an http:// origin sends them
  * chasing a setting that will not help.
  */
-export default function PermissionGate({ status, error, onRetry }: PermissionGateProps) {
+export default function PermissionGate({
+  status,
+  error,
+  onRetry,
+  onUseSimulation,
+}: PermissionGateProps) {
   const blocked = status === 'denied' || status === 'unsupported' || status === 'insecure';
   if (!blocked) return null;
+
+  const escape = (
+    <button
+      type="button"
+      onClick={onUseSimulation}
+      className="mt-3 w-full rounded-lg border border-white/15 px-4 py-2 text-sm text-neutral-300 transition hover:bg-white/10"
+    >
+      Use the simulation instead
+    </button>
+  );
 
   if (status === 'insecure') {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -51,6 +77,7 @@ export default function PermissionGate({ status, error, onRetry }: PermissionGat
             </li>
           </ul>
         </div>
+        {escape}
       </Shell>
     );
   }
@@ -64,6 +91,7 @@ export default function PermissionGate({ status, error, onRetry }: PermissionGat
           track instead.
         </p>
         {error ? <p className="mt-2 text-xs text-amber-400">{error}</p> : null}
+        {escape}
       </Shell>
     );
   }
@@ -82,13 +110,14 @@ export default function PermissionGate({ status, error, onRetry }: PermissionGat
       >
         Retry
       </button>
+      {escape}
     </Shell>
   );
 }
 
 function Shell({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 p-6 backdrop-blur">
+    <div className="absolute inset-0 z-[45] flex items-center justify-center bg-black/80 p-6 backdrop-blur">
       <div className="max-w-sm rounded-xl border border-white/10 bg-neutral-900 p-6 text-center">
         <h2 className="text-lg font-semibold text-neutral-100">{title}</h2>
         <div className="mt-2">{children}</div>

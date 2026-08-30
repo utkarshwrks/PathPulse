@@ -17,7 +17,8 @@ import { useNavigationEngine } from '@/hooks/useNavigationEngine';
 import { useSensorSource, type RouteKey, type SourceKind } from '@/hooks/useSensorSource';
 import Hud from '@/components/Hud';
 import TrustPanel from '@/components/TrustPanel';
-import SourcePanel from '@/components/SourcePanel';
+import SourcePicker from '@/components/SourcePicker';
+import Sheet from '@/components/Sheet';
 import PermissionGate from '@/components/PermissionGate';
 import DeviceInfo from '@/components/DeviceInfo';
 import Benchmarks from '@/components/Benchmarks';
@@ -46,16 +47,30 @@ const MapView = dynamic(() => import('@/components/MapView'), {
   ),
 });
 
+type Panel =
+  | null
+  | 'menu'
+  | 'sources'
+  | 'debug'
+  | 'offline'
+  | 'benchmarks'
+  | 'pitch'
+  | 'device';
+
 export default function Home() {
   const [kind, setKind] = useState<SourceKind>('simulation');
   const [routeKey, setRouteKey] = useState<RouteKey>('city');
-  const [showDeviceInfo, setShowDeviceInfo] = useState(false);
-  const [showBenchmarks, setShowBenchmarks] = useState(false);
-  const [showOffline, setShowOffline] = useState(false);
-  const [showPitch, setShowPitch] = useState(false);
-  const [showMenu, setShowMenu] = useState(false);
-  const [showDebug, setShowDebug] = useState(false);
-  const [showSources, setShowSources] = useState(false);
+
+  /**
+   * ★ ONE PANEL AT A TIME, BY CONSTRUCTION ★
+   * This was six independent booleans, so several panels could be open at
+   * once and stack — and each had picked its own corner and z-index over ten
+   * phases, so they overlapped even when only one was up. A single value
+   * cannot express "two things open", which is the only reliable way to stop
+   * a bug whose every instance looks like a small positioning mistake.
+   */
+  const [panel, setPanel] = useState<Panel>(null);
+  const closePanel = useCallback(() => setPanel(null), []);
   /**
    * Bumped by Demo Mode to request a staged start.
    *
@@ -96,13 +111,7 @@ export default function Home() {
     prepare: () => {
       setKind('simulation');
       setRouteKey('city');
-      setShowOffline(false);
-      setShowPitch(false);
-      setShowMenu(false);
-      setShowDebug(false);
-      setShowSources(false);
-      setShowBenchmarks(false);
-      setShowDeviceInfo(false);
+      setPanel(null);
       setFollowing(true);
       nav.setControls(DEMO_CONTROLS);
       // The actual start happens in the effect below, once the source for the
@@ -308,10 +317,10 @@ export default function Home() {
       />
       </ErrorBoundary>
 
-      {showDebug ? (
+      {panel === 'debug' ? (
       <ErrorBoundary area="Debug panel">
       <TrustPanel
-        onClose={() => setShowDebug(false)}
+        onClose={closePanel}
         modelInfo={nav.modelInfo}
         sample={nav.lastSample}
         lastGnss={nav.lastGnss}
@@ -342,7 +351,7 @@ export default function Home() {
           type="button"
           data-tour="menu"
           aria-label="Open menu"
-          onClick={() => setShowMenu(true)}
+          onClick={() => setPanel('menu')}
           className={`rounded-lg border px-3 py-2 text-sm backdrop-blur transition ${
             offline.online
               ? 'border-white/15 bg-black/70 text-neutral-200 hover:bg-black/85'
@@ -369,10 +378,10 @@ export default function Home() {
         </div>
       ) : null}
 
-      {showMenu ? (
+      {panel === 'menu' ? (
         <ErrorBoundary area="Menu" fallback={null}>
           <AppMenu
-            onClose={() => setShowMenu(false)}
+            onClose={closePanel}
             items={[
               {
                 id: 'demo',
@@ -387,42 +396,42 @@ export default function Home() {
                 icon: '📡',
                 label: 'Choose a source',
                 hint: 'Simulation, your phone\u2019s real sensors, or the recorded backup.',
-                onSelect: () => setShowSources(true),
+                onSelect: () => setPanel('sources'),
               },
               {
                 id: 'debug',
                 icon: '🔧',
                 label: 'Live sensors & proof',
                 hint: 'Raw readings, the event log, and switches that break the physics on purpose.',
-                onSelect: () => setShowDebug(true),
+                onSelect: () => setPanel('debug'),
               },
               {
                 id: 'offline',
                 icon: '⛰',
                 label: offline.online ? 'Offline maps' : 'Offline — radio is off',
                 hint: 'Store the map area, then try it in aeroplane mode.',
-                onSelect: () => setShowOffline(true),
+                onSelect: () => setPanel('offline'),
               },
               {
                 id: 'benchmarks',
                 icon: '📊',
                 label: 'Measured results',
                 hint: 'The ablation table: one component switched off per row.',
-                onSelect: () => setShowBenchmarks(true),
+                onSelect: () => setPanel('benchmarks'),
               },
               {
                 id: 'pitch',
                 icon: '📈',
                 label: 'The pitch',
                 hint: 'Five slides: problem, approach, results, model, compliance.',
-                onSelect: () => setShowPitch(true),
+                onSelect: () => setPanel('pitch'),
               },
               {
                 id: 'device',
                 icon: '📱',
                 label: 'Device & build',
                 hint: 'What this phone exposes, and which build you are running.',
-                onSelect: () => setShowDeviceInfo(true),
+                onSelect: () => setPanel('device'),
               },
               {
                 id: 'tour',
@@ -436,29 +445,29 @@ export default function Home() {
         </ErrorBoundary>
       ) : null}
 
-      {showBenchmarks ? <Benchmarks onClose={() => setShowBenchmarks(false)} /> : null}
+      {panel === 'benchmarks' ? <Benchmarks onClose={closePanel} /> : null}
 
-      {showPitch ? (
+      {panel === 'pitch' ? (
         <ErrorBoundary area="Pitch">
-          <PitchScreen onClose={() => setShowPitch(false)} />
+          <PitchScreen onClose={closePanel} />
         </ErrorBoundary>
       ) : null}
 
-      {showOffline ? (
+      {panel === 'offline' ? (
         <OfflinePanel
           status={offline}
           bounds={mapBounds}
           mapSourceLabel={styleInfo.label}
-          onClose={() => setShowOffline(false)}
+          onClose={closePanel}
         />
       ) : null}
 
-      {showDeviceInfo ? (
+      {panel === 'device' ? (
         <DeviceInfo
           imuHz={source.imuHz}
           gnssHz={source.gnssHz}
           sourceName={source.sourceName}
-          onClose={() => setShowDeviceInfo(false)}
+          onClose={closePanel}
         />
       ) : null}
 
@@ -477,36 +486,43 @@ export default function Home() {
         </div>
       ) : null}
 
-      {/* Manual source controls step aside during a scripted run: the script
-          drives them, and leaving them within reach only invites someone to
-          fight it mid-demo. */}
-      {showSources && !demo.running ? (
-      <SourcePanel
-        kind={kind}
-        routeKey={routeKey}
-        isRunning={source.isRunning}
-        inOutage={source.inOutage}
-        progress={source.progress}
-        imuHz={source.imuHz}
-        gnssHz={source.gnssHz}
-        recordedCount={source.recordedCount}
-        onKindChange={setKind}
-        onRouteChange={setRouteKey}
-        onPlay={() => {
-          if (kind === 'live') live.start();
-          source.play();
-        }}
-        onPause={source.pause}
-        onReset={() => {
-          source.reset();
-          nav.reset();
-          setTrail([]);
-          setFollowing(true);
-        }}
-        onSpeed={source.setSpeed}
-        onOutage={() => source.triggerOutage(60_000)}
-        onDownload={source.downloadRecording}
-      />
+      {panel === 'sources' ? (
+        <ErrorBoundary area="Sources" fallback={null}>
+          <Sheet
+            title="Where the data comes from"
+            subtitle="Picking one starts it."
+            onClose={closePanel}
+          >
+            <SourcePicker
+              kind={kind}
+              routeKey={routeKey}
+              isRunning={source.isRunning}
+              progress={source.progress}
+              sourceName={source.sourceName}
+              onPick={(next) => {
+                setKind(next);
+                // Selecting a source is an explicit "run this". The old panel
+                // made you find a separate Play button afterwards, which is
+                // how "I chose Live and nothing happened" happened.
+                if (next === 'live') live.start();
+                source.play();
+              }}
+              onRouteChange={setRouteKey}
+              onPlay={() => {
+                if (kind === 'live') live.start();
+                source.play();
+              }}
+              onPause={source.pause}
+              onReset={() => {
+                source.reset();
+                nav.reset();
+                setTrail([]);
+                setFollowing(true);
+                source.play();
+              }}
+            />
+          </Sheet>
+        </ErrorBoundary>
       ) : null}
 
       {!following ? (
@@ -520,7 +536,16 @@ export default function Home() {
       ) : null}
 
       {kind === 'live' ? (
-        <PermissionGate status={live.status} error={live.error} onRetry={live.start} />
+        <PermissionGate
+          status={live.status}
+          error={live.error}
+          onRetry={live.start}
+          onUseSimulation={() => {
+            setKind('simulation');
+            setPanel(null);
+            source.play();
+          }}
+        />
       ) : null}
 
       {tour.phase === 'loading' ? (

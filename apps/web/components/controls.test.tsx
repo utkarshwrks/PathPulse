@@ -2,7 +2,6 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import DeviceInfo from './DeviceInfo';
 import PermissionGate from './PermissionGate';
-import SourcePanel from './SourcePanel';
 
 /**
  * The remaining interactive components, rendered and clicked.
@@ -15,122 +14,10 @@ import SourcePanel from './SourcePanel';
 
 afterEach(cleanup);
 
-function renderSourcePanel(overrides: Partial<React.ComponentProps<typeof SourcePanel>> = {}) {
-  const handlers = {
-    onKindChange: vi.fn(),
-    onRouteChange: vi.fn(),
-    onPlay: vi.fn(),
-    onPause: vi.fn(),
-    onReset: vi.fn(),
-    onSpeed: vi.fn(),
-    onOutage: vi.fn(),
-    onDownload: vi.fn(),
-  };
-  const utils = render(
-    <SourcePanel
-      kind="simulation"
-      routeKey="city"
-      isRunning={false}
-      inOutage={false}
-      progress={0}
-      imuHz={50}
-      gnssHz={1}
-      recordedCount={0}
-      {...handlers}
-      {...overrides}
-    />,
-  );
-  return { ...utils, ...handlers };
-}
-
-describe('SourcePanel — the demo transport', () => {
-  it('offers both sources and reports the change', () => {
-    const { onKindChange } = renderSourcePanel();
-    const select = screen.getByDisplayValue(/simulation/i);
-    fireEvent.change(select, { target: { value: 'live' } });
-    expect(onKindChange).toHaveBeenCalledWith('live');
-  });
-
-  it('offers both routes and reports the change', () => {
-    const { onRouteChange } = renderSourcePanel();
-    const route = screen.getByDisplayValue(/city/i);
-    fireEvent.change(route, { target: { value: 'highway' } });
-    expect(onRouteChange).toHaveBeenCalledWith('highway');
-  });
-
-  it('shows Play when stopped and fires it', () => {
-    const { onPlay } = renderSourcePanel({ isRunning: false });
-    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
-    expect(onPlay).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows Pause when running and fires it', () => {
-    const { onPause } = renderSourcePanel({ isRunning: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
-    expect(onPause).toHaveBeenCalledTimes(1);
-  });
-
-  it('fires Reset', () => {
-    const { onReset } = renderSourcePanel();
-    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
-    expect(onReset).toHaveBeenCalledTimes(1);
-  });
-
-  it('fires the GNSS-loss button — the whole demo hangs off this', () => {
-    // ★ The single button that produces the dead-reckoning story. ★
-    const { onOutage } = renderSourcePanel({ isRunning: true });
-    fireEvent.click(screen.getByRole('button', { name: 'GNSS loss' }));
-    expect(onOutage).toHaveBeenCalledTimes(1);
-  });
-
-  it('says so while an outage is already running', () => {
-    renderSourcePanel({ inOutage: true });
-    expect(screen.getByRole('button', { name: 'In outage' })).toBeTruthy();
-  });
-
-  it('reports playback speed changes', () => {
-    const { onSpeed, container } = renderSourcePanel();
-    const slider = container.querySelector('input[type="range"]')!;
-    fireEvent.change(slider, { target: { value: '3' } });
-    expect(onSpeed).toHaveBeenCalledWith(3);
-    expect(container.textContent).toContain('3.0×');
-  });
-
-  it('offers a download only once something has been recorded', () => {
-    const { onDownload } = renderSourcePanel({ recordedCount: 0 });
-    expect(screen.queryByRole('button', { name: /download/i })).toBeNull();
-    cleanup();
-
-    const second = renderSourcePanel({ recordedCount: 3962 });
-    fireEvent.click(screen.getByRole('button', { name: /download recording/i }));
-    expect(second.onDownload).toHaveBeenCalledTimes(1);
-    void onDownload;
-  });
-
-  it('shows Start/Stop rather than Play/Pause for the live source', () => {
-    renderSourcePanel({ kind: 'live', isRunning: false });
-    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
-    cleanup();
-    renderSourcePanel({ kind: 'live', isRunning: true });
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
-  });
-
-  it('reports measured rates rather than the nominal ones', () => {
-    const { container } = renderSourcePanel({ imuHz: 37.2, gnssHz: 0.09 });
-    expect(container.textContent).toContain('37.2');
-    expect(container.textContent).toContain('0.09');
-  });
-
-  it('renders the live source without a route picker', () => {
-    renderSourcePanel({ kind: 'live' });
-    expect(screen.queryByDisplayValue(/city/i)).toBeNull();
-  });
-});
-
 describe('PermissionGate — three blocked states that look identical but are not', () => {
   it('stays out of the way when nothing is blocked', () => {
     const { container } = render(
-      <PermissionGate status="watching" error={null} onRetry={vi.fn()} />,
+      <PermissionGate status="watching" error={null} onRetry={vi.fn()} onUseSimulation={vi.fn()} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -140,7 +27,7 @@ describe('PermissionGate — three blocked states that look identical but are no
     // fixes. Telling someone to "allow location" when the real problem is an
     // http:// origin sends them chasing a setting that cannot help.
     const { container } = render(
-      <PermissionGate status="insecure" error={null} onRetry={vi.fn()} />,
+      <PermissionGate status="insecure" error={null} onRetry={vi.fn()} onUseSimulation={vi.fn()} />,
     );
     const text = container.textContent ?? '';
     expect(text).toMatch(/secure|https/i);
@@ -149,28 +36,56 @@ describe('PermissionGate — three blocked states that look identical but are no
 
   it('explains a real denial', () => {
     const { container } = render(
-      <PermissionGate status="denied" error="User denied Geolocation" onRetry={vi.fn()} />,
+      <PermissionGate status="denied" error="User denied Geolocation" onRetry={vi.fn()} onUseSimulation={vi.fn()} />,
     );
     expect(container.textContent).toMatch(/denied|permission/i);
   });
 
   it('explains an unsupported browser', () => {
     const { container } = render(
-      <PermissionGate status="unsupported" error={null} onRetry={vi.fn()} />,
+      <PermissionGate status="unsupported" error={null} onRetry={vi.fn()} onUseSimulation={vi.fn()} />,
     );
     expect(container.textContent).toMatch(/unsupported|not available|no geolocation/i);
   });
 
   it('offers a retry that fires', () => {
     const onRetry = vi.fn();
-    render(<PermissionGate status="denied" error={null} onRetry={onRetry} />);
-    fireEvent.click(screen.getByRole('button'));
+    render(
+      <PermissionGate
+        status="denied"
+        error={null}
+        onRetry={onRetry}
+        onUseSimulation={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('★ always offers a way out — this gate used to be a trap', () => {
+    // It covers the whole screen and only offered Retry. Choose live sensors
+    // on an http origin, or deny the prompt once, and there was no way back:
+    // the source picker was underneath it and the menu button behind it. The
+    // app was not broken, it was unreachable — which looks worse.
+    for (const status of ['denied', 'insecure', 'unsupported'] as const) {
+      cleanup();
+      const onUseSimulation = vi.fn();
+      render(
+        <PermissionGate
+          status={status}
+          error={null}
+          onRetry={vi.fn()}
+          onUseSimulation={onUseSimulation}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /use the simulation/i }));
+      expect(onUseSimulation, status).toHaveBeenCalled();
+    }
   });
 
   it('shows the underlying error text when there is one', () => {
     const { container } = render(
-      <PermissionGate status="denied" error="User denied Geolocation" onRetry={vi.fn()} />,
+      <PermissionGate status="denied" error="User denied Geolocation" onRetry={vi.fn()} onUseSimulation={vi.fn()} />,
     );
     expect(container.textContent).toContain('User denied Geolocation');
   });
@@ -205,67 +120,3 @@ describe('DeviceInfo — "it works on my phone" is not evidence', () => {
   });
 });
 
-describe('SourcePanel — the replay backup is usable (deep test pass 10)', () => {
-  /**
-   * ★ THE FEATURE EXISTED AND COULD NOT BE USED ★
-   * Play, Pause and Reset lived inside the `simulation` branch and the
-   * fallback text described the live sensors, so selecting Replay produced a
-   * loaded backup log, an explanation of DeviceMotion, and no way to start it.
-   */
-  function renderReplay(over: Partial<React.ComponentProps<typeof SourcePanel>> = {}) {
-    const onPlay = vi.fn();
-    const onReset = vi.fn();
-    render(
-      <SourcePanel
-        kind="replay"
-        routeKey="city"
-        isRunning={false}
-        inOutage={false}
-        progress={0.4}
-        imuHz={50}
-        gnssHz={1}
-        recordedCount={0}
-        onKindChange={vi.fn()}
-        onRouteChange={vi.fn()}
-        onPlay={onPlay}
-        onPause={vi.fn()}
-        onReset={onReset}
-        onSpeed={vi.fn()}
-        onOutage={vi.fn()}
-        onDownload={vi.fn()}
-        {...over}
-      />,
-    );
-    return { onPlay, onReset };
-  }
-
-  it('★ offers Play, so the backup can actually be started', () => {
-    const { onPlay } = renderReplay();
-    fireEvent.click(screen.getByRole('button', { name: /^play$/i }));
-    expect(onPlay).toHaveBeenCalled();
-  });
-
-  it('★ offers Restart, so it can be run more than once', () => {
-    const { onReset } = renderReplay();
-    fireEvent.click(screen.getByRole('button', { name: /restart/i }));
-    expect(onReset).toHaveBeenCalled();
-  });
-
-  it('does not describe the live sensors when replaying a file', () => {
-    renderReplay();
-    expect(screen.queryByText(/DeviceMotion and Geolocation/i)).toBeNull();
-  });
-
-  it('says it is a replay, and to announce it as one', () => {
-    renderReplay();
-    expect(screen.getByText(/Announce it as a replay/i)).toBeDefined();
-  });
-
-  it('hides the simulator-only controls that cannot work here', () => {
-    renderReplay();
-    // The outage is baked into the log; a button that silently did nothing
-    // would be worse than its absence.
-    expect(screen.queryByRole('button', { name: /gnss loss/i })).toBeNull();
-    expect(screen.queryByText(/Speed \d/)).toBeNull();
-  });
-});

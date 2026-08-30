@@ -33,9 +33,11 @@ Demo → HUD → the ellipse → the ☰ menu.
 
 ## 2 · The scripted demo (3 min) ★ the main event
 
-☐ ☰ → **Choose a source** → **Live browser sensors** → **Start**.
-  *The marker must find you. This was broken: Start fired before the source
-  existed, so nothing happened while the button said "Stop".*
+☐ ☰ → **Where the data comes from** → tap **This phone**.
+  *One tap. It selects AND starts — no separate Start to hunt for. The marker
+  must find you.*
+☐ If a permission screen appears, it must offer **"Use the simulation
+  instead"**. *That screen used to be a dead end with only Retry.*
 ☐ Close that, then tap **▶ Demo** (bottom centre).
   *Also previously broken — starting the demo while on Live opened a dead map.*
 
@@ -57,10 +59,11 @@ Then watch the banner:
 
 ## 2b · Layout (30 sec)
 
-☐ Only **two** things sit over the map: the HUD (top left) and ☰ (top right).
-They must **not overlap**, on any screen size.
-☐ ☰ opens a sheet with eight named entries, each with a one-line hint.
-☐ Every panel opened from it has a way to close it.
+☐ Only **three** things sit over the map: the HUD (top left), ☰ (top right)
+and **▶ Demo** (bottom centre). Nothing overlaps.
+☐ ☰ opens a sheet with named entries, each with a one-line hint.
+☐ **Every** panel has a ✕ and closes on Escape or a tap outside.
+☐ Opening one panel closes any other — you can never stack two.
 
 ## 3 · The HUD (1 min)
 
@@ -107,7 +110,7 @@ progress bar runs.
 
 ## 6 · The backup (1 min)
 
-☐ ☰ → **Choose a source** → **Replay — demo.jsonl (backup)**.
+☐ ☰ → **Where the data comes from** → **Recorded run**.
 ☐ It loads and names itself (`Demo replay (N samples)`).
 ☐ **Play** → the full outage-and-recovery sequence runs with nothing to trigger.
 ☐ Progress bar **moves**.
