@@ -1270,6 +1270,71 @@ tell which they have.
 
 **APK:** `PathPulse_Phase9F.apk`.
 
+### Full verification pass — everything, together ✅
+
+Not a feature pass: a check of the whole project as it now stands. Two real
+defects, both in code that had been passing its own tests for weeks.
+
+**1. ★ The trail held 39 seconds, and the export lost the outage.**
+Measured on the standard 180 s replay: the trail was a 500-point ring buffer
+with a 0.5 m separation filter, so at 10 Hz and 14 m/s it retained the last
+**38.9 seconds** — and the final trail contained **nothing but GNSS**. The
+entire 60 s dead-reckoned stretch, the whole point of the project, had been
+evicted before the run ended.
+
+This was invisible for eight phases because the trail was only ever a line on a
+map, and during an outage the orange line is right there in front of you. Phase
+9F made it matter: the trip export is built from that buffer, so a judge
+opening the file afterwards would find a tidy GNSS track and **no evidence the
+outage ever happened**. The map had the same problem — the "GNSS → outage →
+recovery" story could not be seen in full at the end of a run.
+
+Raised to 5000 points (~8 minutes at driving speed), which also matches the
+GNSS reference buffer the export pairs it with, so the two tracks cover the
+same span. A perf budget test now measures the cost of the larger buffer:
+append plus a full segment rebuild is ~0.3 ms against a 100 ms frame.
+
+**2. The coverage number was measuring build output.** The report walked
+`out/`, `.next/` and the Capacitor assets copied into `android/`, counting
+Cordova's 1034-line `native-bridge.js` as untested application code. It read
+**48%** for a package whose components are all above 90 — a number too low to
+act on, and one that moved when you rebuilt rather than when you changed a
+test. This project runs coverage-driven test passes, so a polluted denominator
+is not cosmetic. Scoped to source: **84.67%**.
+
+**New: a Phase 9 integration test.** Every Phase 9 feature had its own tests
+and its own hostile pass, all green. None of that said what happens when the
+ellipse, the turn detector, the anomaly detector, the constellation panel and
+the trip export all run over the same drive — which is the only configuration
+that ships. `packages/eval/test/phase9-integration.test.ts` drives the full
+engine over a recorded log with the shipping config, a real road graph and a
+real outage, and asserts across all of it: no non-finite value on any sample,
+a drawable ellipse at every frame, along-track uncertainty exceeding
+cross-track, **no false GNSS anomaly on a clean drive**, self-consistent turn
+labels, a valid GPX and GeoJSON from the real trail, and the 10 Hz floor. It is
+what found defect 1.
+
+**Verified across the whole project**
+- 989 tests passing (nav-core 461, web 302, eval 140, sensor-sources 86)
+- Typecheck clean in all four packages; `lint:core-purity` clean at 48 files
+- Ablation **byte-identical to the pre-Phase-9 baseline** — nothing in Phase 9
+  reached the estimator. Drift stays 10.0% mean / 6.4% median / 22.6% p90
+- Eval CLI runs end to end against a real log (4.12% drift on `sim_city_1337`)
+- Production web build succeeds; APK builds and contains `assets/public/sw.js`
+- Dev server serves `/`, `/sw.js`, the benchmarks JSON and the map index
+
+**Known coverage gaps, stated rather than chased:** `page.tsx` and
+`MapView.tsx` are at 0%. MapLibre needs WebGL, which jsdom has not got, and
+`page.tsx` dynamically imports it. `public/sw.js` is 0% — a service worker
+does not run in jsdom. These are real gaps in real files; the mocked-map tests
+cover the layers those files compose.
+
+**Not done: the live browser check.** The Chrome extension was not connected,
+so the app was not driven in a real browser this pass. Everything above is
+static analysis, unit/integration tests and HTTP checks against the dev server.
+MapLibre rendering, the service worker actually caching, and the download
+buttons actually downloading remain verified only on a phone.
+
 ## NEXT PHASE
 
 **Phase 9 — Wow features** (confidence ellipse, turn detection, offline map)

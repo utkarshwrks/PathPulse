@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { RoadIndex, findRoadMatch, type RoadGraph } from '../src/index.js';
+import {
+  appendTrailPoint,
+  buildTrailSegments,
+  DEFAULT_TRAIL_OPTIONS,
+  findRoadMatch,
+  RoadIndex,
+  type RoadGraph,
+  type TrailPoint,
+} from '../src/index.js';
 
 const ROOT = new URL('../../../', import.meta.url).pathname;
 
@@ -45,4 +53,47 @@ describe('road matching stays inside its budget', () => {
     // 20 ms is one sample period at 50 Hz, and matching is only part of it.
     expect(perQueryMs).toBeLessThan(1);
   }, 60_000);
+});
+
+describe('the trail stays inside its budget at the larger cap', () => {
+  /**
+   * The buffer went from 500 to 5000 points so the export outlives the outage
+   * (see trail/index.ts). Both append and segment-building are linear in the
+   * buffer, and both run at the 10 Hz UI rate — so a tenfold buffer is a
+   * tenfold cost on a path that has 100 ms to spend. Worth a number rather
+   * than an assumption.
+   *
+   * Bounds are loose, as elsewhere here: this catches an algorithmic
+   * regression, not machine variation.
+   */
+  it('appends and rebuilds segments far inside one UI frame', () => {
+    let trail: TrailPoint[] = [];
+    // Fill to capacity first: appending to a full ring is the expensive case.
+    for (let i = 0; i < DEFAULT_TRAIL_OPTIONS.maxPoints; i++) {
+      trail = appendTrailPoint(trail, {
+        lat: 23.18 + i * 0.00002,
+        lon: 79.98 + i * 0.00002,
+        mode: i % 400 < 300 ? 'GNSS' : 'DEAD_RECKONING',
+        t: i * 100,
+      });
+    }
+    expect(trail).toHaveLength(DEFAULT_TRAIL_OPTIONS.maxPoints);
+
+    // One UI frame's work: one append plus one full segment rebuild.
+    const frames = 100;
+    const t0 = performance.now();
+    for (let i = 0; i < frames; i++) {
+      trail = appendTrailPoint(trail, {
+        lat: 23.3 + i * 0.00002,
+        lon: 80.1 + i * 0.00002,
+        mode: 'GNSS',
+        t: 1_000_000 + i * 100,
+      });
+      buildTrailSegments(trail);
+    }
+    const perFrameMs = (performance.now() - t0) / frames;
+
+    // The UI budget is 100 ms per frame at 10 Hz. Measured around 0.3 ms.
+    expect(perFrameMs).toBeLessThan(20);
+  });
 });
