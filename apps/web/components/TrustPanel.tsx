@@ -377,6 +377,10 @@ function ConstellationGroup({
   const summary = summariseConstellations({
     ...(gnss?.constellations ? { constellations: gnss.constellations } : {}),
     ...(gnss?.satCount != null ? { satCount: gnss.satCount } : {}),
+    // Both: the marker on the fix is authoritative and survives a source
+    // switch, while the caller's flag covers a source that forgets to set it.
+    // Either one being true means simulated; provenance is never upgraded.
+    ...(gnss?.constellationsSimulated ? { constellationsSimulated: true } : {}),
     simulated,
   });
 
@@ -400,6 +404,9 @@ function ConstellationGroup({
               accent={r.id === 'NAVIC'}
             />
           ))}
+          {summary.unlistedCount > 0 ? (
+            <Row k="UNNAMED" v={String(summary.unlistedCount)} warn />
+          ) : null}
           <Row k="TOTAL" v={String(summary.total ?? 0)} />
         </>
       ) : (

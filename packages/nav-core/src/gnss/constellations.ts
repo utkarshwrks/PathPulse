@@ -49,6 +49,31 @@ export type ConstellationProvenance =
   /** Nothing at all. The WebView reports no satellite data whatsoever. */
   | 'unavailable';
 
+/**
+ * Every spelling a platform might use, mapped to one id.
+ *
+ * ★ IRNSS IS NAVIC ★
+ * NavIC's system name is IRNSS, and Android's constants, ISRO's own material
+ * and half the literature still say IRNSS. Recognising only "NAVIC" would drop
+ * the single constellation this panel exists to show — silently, and on a
+ * stand sponsored by the organisation that operates it. Matching is
+ * case-insensitive because nothing guarantees a native layer will shout its
+ * enum names.
+ */
+/** Canonical lookup, built once: every alias in upper case to its id. */
+const ALIAS_TO_ID: ReadonlyMap<string, ConstellationId> = new Map<string, ConstellationId>([
+  ['NAVIC', 'NAVIC'],
+  ['IRNSS', 'NAVIC'],
+  ['GPS', 'GPS'],
+  ['NAVSTAR', 'GPS'],
+  ['GALILEO', 'GALILEO'],
+  ['GLONASS', 'GLONASS'],
+  ['BEIDOU', 'BEIDOU'],
+  ['BDS', 'BEIDOU'],
+  ['COMPASS', 'BEIDOU'],
+  ['QZSS', 'QZSS'],
+]);
+
 export interface ConstellationRow {
   id: ConstellationId;
   label: string;
@@ -63,17 +88,50 @@ export interface ConstellationSummary {
   total: number | null;
   /** NavIC satellites, or null when the breakdown is not available. */
   navicCount: number | null;
+  /**
+   * Satellites the platform tracked that this breakdown does not name.
+   *
+   * Reported rather than dropped: a TOTAL smaller than the SATELLITES row
+   * directly above it, with nothing explaining the difference, is exactly the
+   * kind of quiet contradiction that costs the panel its credibility.
+   */
+  unlistedCount: number;
   /** One line stating what is known and what is not. Always present. */
   note: string;
 }
 
 export interface ConstellationInput {
-  /** Per-constellation counts, when the platform provides them. */
-  constellations?: Partial<Record<ConstellationId, number>>;
+  /**
+   * Per-constellation counts, when the platform provides them.
+   *
+   * Keyed by whatever string the platform used, not by `ConstellationId`:
+   * aliases and casing are resolved here rather than being pushed onto every
+   * caller, and a name this file does not know is counted as unlisted instead
+   * of being silently dropped.
+   */
+  constellations?: Record<string, number | undefined>;
   /** Total tracked satellites, when only the total is available. */
   satCount?: number;
-  /** True when the active source is the simulator rather than hardware. */
+  /**
+   * True when the active source is the simulator rather than hardware.
+   *
+   * Context from the caller. Prefer `constellationsSimulated`, which travels
+   * with the numbers themselves — see below.
+   */
   simulated?: boolean;
+  /**
+   * ★ PROVENANCE THAT TRAVELS WITH THE DATA ★
+   * Set by whichever source generated the counts. The UI used to join
+   * provenance to the numbers at render time from a *separate* source — the
+   * currently selected source kind — and switching from simulation to live
+   * flips that one render before the stale simulated fix is cleared. For one
+   * painted frame the simulator's invented sky was labelled MEASURED, which is
+   * the precise failure this whole module exists to prevent.
+   *
+   * Either flag being true means simulated. Provenance is never upgraded
+   * towards "measured" by a disagreement.
+   */
+  constellationsSimulated?: boolean;
 }
 
 const isCount = (v: unknown): v is number =>
@@ -87,29 +145,42 @@ const isCount = (v: unknown): v is number =>
  * a set of zeroes that reads as "no satellites in view".
  */
 export function summariseConstellations(input: ConstellationInput = {}): ConstellationSummary {
-  const { constellations, satCount, simulated = false } = input;
+  const { constellations, satCount, simulated = false, constellationsSimulated } = input;
 
-  const rows: ConstellationRow[] = [];
+  // Fold every recognised spelling onto its canonical id, summing aliases
+  // rather than letting the last one win.
+  const byId = new Map<ConstellationId, number>();
+  let unrecognised = 0;
   if (constellations) {
-    for (const id of CONSTELLATION_ORDER) {
-      const count = constellations[id];
-      if (isCount(count)) {
-        rows.push({ id, label: CONSTELLATION_LABELS[id], count });
-      }
+    for (const [key, value] of Object.entries(constellations)) {
+      if (!isCount(value)) continue;
+      const id = ALIAS_TO_ID.get(key.trim().toUpperCase());
+      if (id) byId.set(id, (byId.get(id) ?? 0) + value);
+      else unrecognised += value;
     }
   }
 
+  const rows: ConstellationRow[] = [];
+  for (const id of CONSTELLATION_ORDER) {
+    const count = byId.get(id);
+    if (count !== undefined) rows.push({ id, label: CONSTELLATION_LABELS[id], count });
+  }
+
   if (rows.length > 0) {
-    const breakdownTotal = rows.reduce((sum, r) => sum + r.count, 0);
+    const breakdownTotal = rows.reduce((sum, r) => sum + r.count, 0) + unrecognised;
+    // The platform's own total wins when it is LARGER, because that means it
+    // tracked something this breakdown cannot name. Reporting the smaller
+    // number would contradict the SATELLITES row without explaining why.
+    const total = isCount(satCount) ? Math.max(breakdownTotal, satCount) : breakdownTotal;
     const navic = rows.find((r) => r.id === 'NAVIC');
+    const isSimulated = simulated || constellationsSimulated === true;
     return {
-      provenance: simulated ? 'simulated' : 'measured',
+      provenance: isSimulated ? 'simulated' : 'measured',
       rows,
-      // The breakdown is the more specific claim, so it wins over a total that
-      // disagrees with it rather than being silently averaged with it.
-      total: breakdownTotal,
+      total,
       navicCount: navic ? navic.count : 0,
-      note: simulated
+      unlistedCount: Math.max(0, total - rows.reduce((sum, r) => sum + r.count, 0)),
+      note: isSimulated
         ? 'Simulated sky — a plausible Indian-subcontinent mix, not a measurement.'
         : 'Measured per-constellation from the platform.',
     };
@@ -121,6 +192,7 @@ export function summariseConstellations(input: ConstellationInput = {}): Constel
       rows: [],
       total: satCount,
       navicCount: null,
+      unlistedCount: 0,
       note: 'Total only — this platform does not break the count down by constellation. Needs the native GnssStatus API (Phase 15).',
     };
   }
@@ -130,6 +202,7 @@ export function summariseConstellations(input: ConstellationInput = {}): Constel
     rows: [],
     total: null,
     navicCount: null,
+    unlistedCount: 0,
     note: 'No satellite data at all — the Capacitor WebView exposes none. Needs the native Kotlin sensor loop and GnssStatus (Phase 15).',
   };
 }

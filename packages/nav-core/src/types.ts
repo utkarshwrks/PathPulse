@@ -43,6 +43,15 @@ export interface SensorSample {
      * required to say which. See gnss/constellations.ts.
      */
     constellations?: Partial<Record<string, number>>;
+    /**
+     * True when `constellations` was generated rather than measured.
+     *
+     * Travels with the numbers on purpose. The UI cannot be trusted to join
+     * provenance on at render time from the currently selected source, because
+     * that flips one render before a stale fix is cleared — and for that frame
+     * an invented sky is labelled MEASURED.
+     */
+    constellationsSimulated?: boolean;
   };
   imu?: {
     /** Specific force, m/s^2, device frame. Includes gravity. */

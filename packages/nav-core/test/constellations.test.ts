@@ -90,11 +90,36 @@ describe('summariseConstellations', () => {
     expect(s.rows.find((r) => r.id === 'NAVIC')?.count).toBe(0);
   });
 
-  it('prefers the breakdown over a total that disagrees with it', () => {
-    // The breakdown is the more specific claim; averaging the two would
-    // produce a number neither source reported.
-    const s = summariseConstellations({ constellations: { GPS: 7, NAVIC: 4 }, satCount: 99 });
+  it('★ reports the platform’s larger total, and how much of it is unnamed', () => {
+    // REVISED during deep test pass 8. This test used to assert the opposite —
+    // that a breakdown summing to 11 beats a reported total of 13 — on the
+    // reasoning that the breakdown is the more specific claim. That rule
+    // silently discards satellites: a receiver tracking SBAS or some system
+    // this file does not name would show TOTAL 11 directly beneath a
+    // SATELLITES row reading 13, with nothing explaining the gap. Reporting
+    // the platform's total and stating the unnamed remainder is the honest
+    // version of the same information.
+    const s = summariseConstellations({
+      constellations: { GPS: 7, NAVIC: 4 },
+      satCount: 13,
+    });
+    expect(s.total).toBe(13);
+    expect(s.unlistedCount).toBe(2);
+  });
+
+  it('does not invent an unlisted count when the numbers agree', () => {
+    const s = summariseConstellations({
+      constellations: { GPS: 7, NAVIC: 4 },
+      satCount: 11,
+    });
     expect(s.total).toBe(11);
+    expect(s.unlistedCount).toBe(0);
+  });
+
+  it('ignores a total smaller than the breakdown rather than losing satellites', () => {
+    const s = summariseConstellations({ constellations: { GPS: 7, NAVIC: 4 }, satCount: 2 });
+    expect(s.total).toBe(11);
+    expect(s.unlistedCount).toBe(0);
   });
 
   it('never throws on missing or malformed input', () => {

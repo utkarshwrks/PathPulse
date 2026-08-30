@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B + 9C + 9D + 9E ✅ COMPLETE
+**CURRENT PHASE:** Phase 9 — Wow features. 9A-9E ✅ COMPLETE, deep-tested
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Phase 9F GPX export, then Phase 10 (demo hardening)
 
@@ -1169,6 +1169,52 @@ says so too.
 16 new. Purity clean at 46 files.
 
 **APK:** `PathPulse_Phase9E.apk`.
+
+### Deep test pass 8 — Phase 9E, assumed broken ✅
+
+Six failures from eight hostile tests. The feature's whole claim is that a
+viewer can tell a measured sky from an invented one, so the defects worth
+hunting were the ways a real reading could go missing or a label could end up
+on the wrong data — not arithmetic.
+
+**1. ★ `IRNSS` was silently dropped.** NavIC's system name *is* IRNSS, and
+Android's constants, ISRO's own material and much of the literature use it.
+Recognising only the string `NAVIC` would have hidden the one constellation
+this panel exists to show — on a stand sponsored by the organisation that
+operates it. Names are now folded through an alias table (`IRNSS`→NavIC,
+`BDS`/`COMPASS`→BeiDou, `NAVSTAR`→GPS).
+
+**2. Matching was case-sensitive.** `Galileo` and `gps` were dropped on the
+floor. Nothing guarantees Phase 15's native layer will shout its enum names —
+and the simulator's own keys only worked because they happened to be
+upper-case. Now case-insensitive, and aliases are summed rather than letting
+the last spelling win.
+
+**3. ★ Provenance was joined to the numbers at render time, from a different
+source.** `simulated` came from the currently selected source kind, which flips
+during render, while the stale simulated fix is cleared by an effect that runs
+*after* the commit. For one painted frame the simulator's invented sky was
+labelled `MEASURED` — precisely the failure this module exists to prevent. The
+marker now travels **with the data** (`gnss.constellationsSimulated`, set by
+the simulator itself), and either flag being true means simulated: provenance
+is never upgraded toward "measured" by a disagreement.
+
+**4. Unrecognised constellations vanished from the total.** A receiver tracking
+SBAS or some future system would show `TOTAL 11` directly beneath a
+`SATELLITES` row reading `13`, with nothing explaining the gap. The platform's
+own total now wins when it is larger, and the remainder is shown as `UNNAMED`.
+
+**A rule of mine was revised, not deleted.** The original test asserted that a
+breakdown beats a disagreeing total, on the reasoning that the breakdown is the
+more specific claim. That rule silently discards satellites, which is the
+defect above. The test now encodes the opposite rule and says why it changed —
+a superseded decision is worth more visible than removed.
+
+Both the alias fix and the provenance fix were confirmed by re-introducing the
+bug and watching the tests fail (four failures and one respectively).
+
+**Tests:** 930 passing (nav-core 426, web 293, eval 125, sensor-sources 86) —
+12 new. Purity clean at 46 files. Ablation byte-identical.
 
 ## NEXT PHASE
 

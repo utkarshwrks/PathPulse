@@ -395,3 +395,49 @@ describe('TrustPanel — constellation breakdown (9E)', () => {
     expect(screen.getByText('MEASURED')).toBeDefined();
   });
 });
+
+describe('TrustPanel — provenance survives a source switch (deep test pass 8)', () => {
+  it('★ labels a simulator fix SIMULATED even when the caller says live', () => {
+    // The window this closes: `simulated` is derived from the selected source
+    // kind and flips during render, while the stale simulated fix is cleared
+    // by an effect that runs afterwards. For one painted frame the panel had
+    // simulated counts and simulated={false} — an invented sky labelled
+    // MEASURED, which is the exact failure the feature exists to prevent.
+    openPanel({
+      simulated: false,
+      lastGnss: {
+        gnss: {
+          lat: 23.16,
+          lon: 79.93,
+          accuracyM: 6,
+          constellations: { GPS: 7, NAVIC: 4 },
+          constellationsSimulated: true,
+        },
+        t: 10_000,
+        ageMs: 2340,
+      },
+    });
+    expect(screen.getByText('SIMULATED')).toBeDefined();
+    expect(screen.queryByText('MEASURED')).toBeNull();
+  });
+
+  it('shows how many tracked satellites the breakdown cannot name', () => {
+    openPanel({
+      simulated: false,
+      lastGnss: {
+        gnss: {
+          lat: 23.16,
+          lon: 79.93,
+          accuracyM: 6,
+          constellations: { GPS: 7, NAVIC: 4 },
+          satCount: 13,
+        },
+        t: 10_000,
+        ageMs: 2340,
+      },
+    });
+    // 13 tracked, 11 named: the two unnamed are stated rather than dropped.
+    expect(screen.getByText('UNNAMED')).toBeDefined();
+    expect(screen.getByText('2')).toBeDefined();
+  });
+});

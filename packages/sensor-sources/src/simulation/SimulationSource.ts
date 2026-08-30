@@ -214,6 +214,7 @@ export class SimulationSource implements SensorSource {
           // does). Anything rendering them must label them simulated; see
           // nav-core/src/gnss/constellations.ts.
           constellations: { GPS: 7, NAVIC: 4, GALILEO: 3, GLONASS: 2, BEIDOU: 1 },
+          constellationsSimulated: true,
         };
       }
     }
