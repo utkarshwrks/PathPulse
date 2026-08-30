@@ -93,6 +93,13 @@ export interface NavigationState {
     /** Pre-formatted for display: "RIGHT 87°". */
     label: string;
   };
+  /**
+   * A GNSS anomaly currently worth showing, if any.
+   *
+   * Advisory only — nothing in the estimator reads this. See detect/spoofing.ts
+   * for why detection must never gate the fix it is suspicious of.
+   */
+  gnssAnomaly?: { t: number; kind: string; message: string };
   biases: { accel: Vec3; gyro: Vec3 };
 }
 

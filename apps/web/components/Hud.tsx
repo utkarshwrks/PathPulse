@@ -174,6 +174,18 @@ export default function Hud({
           </div>
         )}
 
+        {navState?.gnssAnomaly ? (
+          <div className="mt-2 rounded border border-red-500/40 bg-red-500/15 px-1.5 py-1 text-[10px] leading-snug text-red-200">
+            <span className="font-semibold uppercase tracking-wide">GNSS anomaly detected</span>
+            <br />
+            <span className="font-mono">{navState.gnssAnomaly.message}</span>
+            <br />
+            <span className="text-red-300/70">
+              Advisory only — the estimate is unchanged.
+            </span>
+          </div>
+        ) : null}
+
         {navState?.lastTurn ? (
           <div className="mt-2 rounded bg-white/5 px-1.5 py-1 text-[10px] leading-snug text-neutral-300">
             last turn —{' '}

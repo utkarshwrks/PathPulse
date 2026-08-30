@@ -20,5 +20,6 @@ export * from './fusion/index.js';
 export * from './mapmatch/index.js';
 export * from './constraints/index.js';
 export * from './confidence/index.js';
+export * from './detect/index.js';
 export * from './ml/index.js';
 export * from './engine/index.js';

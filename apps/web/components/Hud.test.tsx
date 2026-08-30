@@ -205,3 +205,36 @@ describe('Hud — last turn', () => {
     expect(screen.queryByText(/last turn/i)).toBeNull();
   });
 });
+
+describe('Hud — GNSS anomaly badge', () => {
+  it('shows the anomaly with the number behind it', () => {
+    renderHud({
+      navState: state({
+        gnssAnomaly: {
+          t: 12_000,
+          kind: 'IMPLAUSIBLE_JUMP',
+          message: 'fix moved 4900m in 1.0s — 4900 m/s',
+        },
+      }),
+    });
+    expect(screen.getByText(/GNSS anomaly detected/i)).toBeDefined();
+    expect(screen.getByText(/4900m in 1\.0s/)).toBeDefined();
+  });
+
+  it('★ says the estimate is unchanged, so the badge cannot be read as a failure', () => {
+    // The detector is advisory. A judge seeing a red badge must be able to see
+    // immediately that navigation is still trusted — otherwise the feature
+    // reads as the app admitting it is lost.
+    renderHud({
+      navState: state({
+        gnssAnomaly: { t: 1, kind: 'STATIC_HOLD', message: 'held still' },
+      }),
+    });
+    expect(screen.getByText(/Advisory only/i)).toBeDefined();
+  });
+
+  it('shows nothing when GNSS looks fine', () => {
+    renderHud();
+    expect(screen.queryByText(/GNSS anomaly/i)).toBeNull();
+  });
+});

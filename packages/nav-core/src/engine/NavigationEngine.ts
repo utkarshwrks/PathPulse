@@ -23,6 +23,7 @@ import {
 } from '../constraints/roadsnap.js';
 import { RoadIndex } from '../mapmatch/RoadIndex.js';
 import { describeTurn, TurnDetector, type TurnEvent } from '../mapmatch/turnDetector.js';
+import { SpoofingDetector } from '../detect/spoofing.js';
 import {
   NullSpeedPredictor,
   SpeedSmoother,
@@ -185,6 +186,7 @@ export class NavigationEngine {
   private readonly forwardBias = new ForwardBiasEstimator();
   private readonly turns = new TurnDetector();
   private lastTurn: TurnEvent | null = null;
+  private readonly spoofing = new SpoofingDetector();
   /** Built lazily, because the ENU origin is not known until the first fix. */
   private roadIndex: RoadIndex | null = null;
   private roadGraph: RoadGraph | null = null;
@@ -731,6 +733,25 @@ export class NavigationEngine {
       this.speedSource = 'NONE';
     }
 
+    // 5b. GNSS anomaly detection. Advisory only: it reads the fix and the
+    //     inertial state and reports disagreement, and NOTHING downstream
+    //     consults it. Detection that gated the fix would turn a false
+    //     positive into a navigation failure — see detect/spoofing.ts.
+    const anomaly = this.spoofing.update({
+      t: sample.t,
+      ...(sample.gnss ? { gnss: sample.gnss } : {}),
+      drSpeedMps: this.dr.current.speedMps,
+      stationary: this.lastStationarity.isStationary,
+    });
+    if (anomaly) {
+      this.log.push({
+        t: anomaly.t,
+        type: 'GNSS_ANOMALY',
+        message: `${anomaly.kind}: ${anomaly.message}`,
+        data: { kind: anomaly.kind },
+      });
+    }
+
     // 6. Step the state machine.
     const recoveryDone = modeBefore === 'RECOVERING' && !this.recovery.isActive;
     const mode = this.stateMachine.update(
@@ -1108,6 +1129,15 @@ export class NavigationEngine {
       timeSinceGnssMs,
       estimatedDriftM: this.estimatedDriftM,
       biases: this.dr.current.biases,
+      ...(this.spoofing.current
+        ? {
+            gnssAnomaly: {
+              t: this.spoofing.current.t,
+              kind: this.spoofing.current.kind,
+              message: this.spoofing.current.message,
+            },
+          }
+        : {}),
       ...(this.lastTurn
         ? {
             lastTurn: {
@@ -1165,6 +1195,7 @@ export class NavigationEngine {
     this.recovery.reset();
     this.attitude.reset();
     this.turns.reset();
+    this.spoofing.reset();
     this.lastTurn = null;
     this.alignment.reset();
     this.zupt.reset();

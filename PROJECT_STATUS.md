@@ -1,10 +1,10 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B + 9C ✅ COMPLETE
+**CURRENT PHASE:** Phase 9 — Wow features. 9A + 9B + 9C + 9D ✅ COMPLETE
 **LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Phase 9D spoofing detection, 9E NavIC, 9F GPX export
+**NEXT PHASE:** Phase 9E NavIC breakdown, 9F GPX export, then Phase 10
 
-> Phases 0-8 are complete, and Phase 9A, 9B and 9C are in. The ISRO screening artefact — a position plot
+> Phases 0-8 are complete, and Phase 9A, 9B, 9C and 9D are in. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
 
 > ### Drift: **10.0% mean, 6.4% median, 22.6% p90** over 12 runs
@@ -1025,6 +1025,62 @@ estimator.
 
 **APK:** `PathPulse_Phase9C.apk`.
 
+### Phase 9D — GNSS anomaly detection ✅
+
+Jamming, spoofing, and plain nonsense, in `nav-core/src/detect/spoofing.ts`.
+
+**★ IT WARNS. IT NEVER ACTS.** Nothing in the estimator reads it. Rejecting
+fixes that "look spoofed" would be easy and is exactly the wrong trade: the
+evidence is circumstantial by construction, so a false positive would stop the
+app navigating. A badge that is occasionally wrong costs a sentence of
+explanation; an estimator that rejects good fixes costs the demo. Verified, not
+asserted — the ablation is byte-identical with the detector in place.
+
+**The hard part was not detecting. It was not crying wolf.** This app spends
+much of its time in GNSS outages, and the guide's phrasing of every check fires
+on ordinary correct behaviour:
+
+- **"position jump over 50 m in one second"** fires on *every single recovery
+  from an outage*. Measured as implied **speed** over the gap instead, a 60 s
+  outage covering 840 m is 14 m/s and unremarkable. Two further gates: a
+  minimum fix interval, because two fixes 100 ms apart with a few metres of
+  scatter imply 50 m/s and that is noise, not motion; and a margin against the
+  fixes' own reported accuracy, so two 60 m fixes cannot trip it by disagreeing
+  with each other by 60 m.
+- **"GNSS speed ~0 but IMU shows motion"** fires at every traffic light unless
+  it demands sustained disagreement (6 s) and agrees with the same stationarity
+  detector that drives ZUPT — so it can never contradict the constraint that is
+  simultaneously zeroing our speed. Falls back to speed derived from
+  consecutive fixes when Android omits Doppler, which a spoofer holding
+  position derives to zero just the same.
+- **"satellite count dropped"** fires entering any tunnel. A tunnel takes
+  carrier-to-noise down *with* the count; a jammer or spoofer need not. The
+  check is satellites-collapsed-while-C/N0-healthy.
+
+**The test that matters** is not the unit tests — every one of those can pass
+while the badge fires constantly on the demo. It runs the full engine over the
+standard drive (GNSS → 20 s outage → dead reckoning → recovery) and requires
+**total silence**, and again over a 110 s outage, which is the most
+anomaly-shaped thing the app does. It then teleports one fix 5 km sideways and
+requires the badge to appear.
+
+**Honest limit:** the constellation check needs `satCount` and `meanCn0`, which
+the Capacitor/WebView stack does not expose — see KNOWN ISSUES. Today it fires
+only in simulation and replay. The native `GnssStatus` loop in Phase 15 makes
+it real on a phone; the logic and wiring are testable now, which is the part
+Phase 15 would otherwise have to invent. The other two checks work on hardware
+today.
+
+**UI:** a red badge in the HUD reading `GNSS ANOMALY DETECTED` with the number
+that triggered it, and — deliberately — the line *"Advisory only — the estimate
+is unchanged"*, so a judge cannot read the badge as the app admitting it is
+lost. `GNSS_ANOMALY` events are red in the event log.
+
+**Tests:** 895 passing (nav-core 398, web 286, eval 125, sensor-sources 86) —
+27 new. Purity clean at 44 files.
+
+**APK:** `PathPulse_Phase9D.apk`.
+
 ## NEXT PHASE
 
 **Phase 9 — Wow features** (confidence ellipse, turn detection, offline map)
@@ -1033,7 +1089,8 @@ estimator.
   matching (the optional half of 9B) is deliberately NOT done — see its note.
 - ~~9C offline basemap~~ ✅ done via the service-worker route, see above.
   PMTiles was deliberately not taken — see its note.
-- 9D spoofing detection, 9E NavIC breakdown, 9F GPX export
+- ~~9D spoofing detection~~ ✅ done, see above
+- 9E NavIC breakdown, 9F GPX export
 
 ### Superseded — Phase 6D (done)
 **Phase 6D — road graph + road snapping** (the rest of Phase 6)

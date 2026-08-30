@@ -13,6 +13,8 @@ export type NavEventType =
   | 'ROAD_MATCH'
   /** A completed turn, classified. Phase 9B. */
   | 'TURN'
+  /** GNSS looks jammed, spoofed, or simply wrong. Advisory only. Phase 9D. */
+  | 'GNSS_ANOMALY'
   /** The speed model threw and was disabled. Never silent. */
   | 'ML_ERROR'
   | 'WARNING';
