@@ -21,8 +21,6 @@ interface TrustPanelProps {
   onExportTrip: (format: 'gpx' | 'geojson') => void;
   /** Points in the estimated track, so the buttons can refuse an empty trip. */
   tripPointCount: number;
-  /** Dismiss the panel. It is opened from the menu. */
-  onClose: () => void;
   imuHz: number;
   gnssHz: number;
   updateHz: number;
@@ -74,44 +72,39 @@ export default function TrustPanel({
   onExportEvents,
   onExportTrip,
   tripPointCount,
-  onClose,
   imuHz,
   gnssHz,
   updateHz,
   modelInfo,
   simulated,
 }: TrustPanelProps) {
-  // Opened from the menu now, not from a button competing with the HUD for
-  // the top of the screen. The internal toggle stays as the collapse.
-  const [open, setOpen] = useState(true);
   const [tab, setTab] = useState<Tab>('sensors');
 
+  /**
+   * ★ THIS PANEL PLACED ITSELF, AND GOT IT WRONG ★
+   * It used to own its corner, its layer and its own close button — which was
+   * positioned `top-0 -translate-y-9` on a container anchored at `top-2`, so
+   * the ✕ rendered around y = -34 px, off the top of the screen. The panel
+   * could be opened and then not dismissed. That is precisely the class of bug
+   * the shared Sheet exists to make unexpressible, and this was the one panel
+   * still exempt from it.
+   *
+   * It now renders content only. Position, layer, scrolling and the close
+   * button all belong to Sheet.
+   */
   return (
-    <div className="absolute right-2 top-2 z-40 w-[min(96vw,21rem)]" data-tour="debug">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="ml-auto flex items-center gap-1.5 rounded-lg border border-white/15 bg-black/75 px-3 py-2 text-xs font-medium text-neutral-200 backdrop-blur transition hover:bg-black/90"
-      >
+    <div data-tour="debug">
+      <div className="flex items-center gap-1.5 pb-2 text-[10px] text-neutral-500">
         <span
           className={`inline-block h-1.5 w-1.5 rounded-full ${
             diagnostics.isStationary ? 'bg-sky-400' : 'bg-emerald-400'
           }`}
         />
-        Debug
-        <span className="text-neutral-500">{open ? '▾' : '▸'}</span>
-      </button>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close panel"
-        className="absolute right-0 top-0 -translate-y-9 rounded-lg border border-white/15 bg-black/75 px-2.5 py-2 text-xs text-neutral-300 backdrop-blur transition hover:bg-black/90"
-      >
-        ✕
-      </button>
+        {diagnostics.isStationary ? 'stationary' : 'moving'}
+      </div>
 
-      {open ? (
-        <div className="mt-1.5 overflow-hidden rounded-xl border border-white/10 bg-black/85 backdrop-blur-md">
+      {true ? (
+        <div className="overflow-hidden rounded-xl border border-white/10 bg-black/40">
           <div className="flex border-b border-white/10 text-[10px] font-medium">
             {(
               [

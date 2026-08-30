@@ -212,12 +212,26 @@ export class NavigationStateMachine {
           this.transition(nowMs, 'GNSS', 'fix quality restored');
         } else if (
           this.degradedSinceMs !== null &&
-          nowMs - this.degradedSinceMs >= this.config.degradedToDrMs
+          nowMs - this.degradedSinceMs >= this.config.degradedToDrMs &&
+          // ★ A POOR FIX IS STILL INFORMATION ★
+          // This used to fall to dead reckoning after two seconds of *any*
+          // degradation, including "the fix is 35 m instead of 25 m". Indoors
+          // that is every fix, so the app sat permanently in DEAD RECKONING
+          // while fixes arrived every ten seconds — free-running on the IMU
+          // and accumulating hundreds of metres of phantom distance with the
+          // phone flat on a table. Observed on a real phone.
+          //
+          // Unaided inertial dead reckoning is worse than a 35 m fix within
+          // seconds, so throwing the fix away to rely on it is a bad trade.
+          // Fall to dead reckoning only when the fixes have actually STOPPED.
+          // >= not >: "no fix for the whole timeout" includes the instant it
+          // elapses, which is what the hysteresis test asserts.
+          msSinceFix >= this.effectiveNoFixTimeoutMs
         ) {
           this.transition(
             nowMs,
             'DEAD_RECKONING',
-            `degraded for ${((nowMs - this.degradedSinceMs) / 1000).toFixed(1)}s`,
+            `no fix for ${(msSinceFix / 1000).toFixed(1)}s`,
           );
         }
         break;
@@ -268,6 +282,38 @@ export class NavigationStateMachine {
       return `accuracy ${lastAccuracyM.toFixed(0)} m, need ${this.config.goodAccuracyM} m or better (indoors this may never clear)`;
     }
     return `${this.consecutiveGoodFixes}/${need} consecutive good fixes`;
+  }
+
+  /**
+   * Why the machine is in its current mode, for display.
+   *
+   * ★ "DEAD RECKONING" AND "no gnss 1.3 s" ON SCREEN TOGETHER ★
+   * Observed on a real phone indoors: fixes arriving every ten seconds at
+   * 35 m accuracy, correctly refused as too poor to navigate on — so the app
+   * sat in DEAD RECKONING while also reporting a fix 1.3 s old. Both true,
+   * together unreadable, and the honest reason was computed and thrown away.
+   * Someone watching a phone lie still on a table concluded the app was
+   * inventing movement, which is exactly the wrong thing to conclude about
+   * this project.
+   *
+   * `acquiringReason` already did this for INITIALIZING. This is the same
+   * courtesy for the two modes a user actually spends time looking at.
+   */
+  modeReason(fix: FixQuality, msSinceFixMs: number): string | null {
+    if (this.mode !== 'DEAD_RECKONING' && this.mode !== 'GNSS_DEGRADED') return null;
+    if (!fix.hasFix && msSinceFixMs > this.effectiveNoFixTimeoutMs) {
+      return `no fix for ${(msSinceFixMs / 1000).toFixed(0)}s`;
+    }
+    if (fix.accuracyM !== undefined && fix.accuracyM > this.config.degradedAccuracyM) {
+      return `fixes arriving but only ${fix.accuracyM.toFixed(0)} m accurate — needs ${this.config.degradedAccuracyM} m or better. Common indoors.`;
+    }
+    if (fix.satCount !== undefined && fix.satCount < this.config.minSatellites) {
+      return `only ${fix.satCount} satellites`;
+    }
+    if (msSinceFixMs > this.effectiveNoFixTimeoutMs) {
+      return `no fix for ${(msSinceFixMs / 1000).toFixed(0)}s`;
+    }
+    return 'waiting for consecutive good fixes';
   }
 
   private isGoodFix(fix: FixQuality): boolean {

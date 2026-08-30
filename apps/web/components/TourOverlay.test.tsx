@@ -101,7 +101,7 @@ describe('Welcome', () => {
     const onTour = vi.fn();
     const onSkip = vi.fn();
     render(<Welcome onTour={onTour} onSkip={onSkip} buildId="abc123" />);
-    fireEvent.click(screen.getByRole('button', { name: /quick tour/i }));
+    fireEvent.click(screen.getByRole('button', { name: /take the tour/i }));
     expect(onTour).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
     expect(onSkip).toHaveBeenCalled();
@@ -110,5 +110,43 @@ describe('Welcome', () => {
   it('shows the build id, so a phone can be told which APK it is running', () => {
     render(<Welcome onTour={vi.fn()} onSkip={vi.fn()} buildId="deadbee" />);
     expect(screen.getByText(/build deadbee/)).toBeDefined();
+  });
+});
+
+describe('TourOverlay — the spotlight must actually be visible', () => {
+  it('★ leaves the highlighted control uncovered, not blurred with everything else', () => {
+    // A single full-screen backdrop-blur blurs what it is pointing at. The
+    // ring drew a target around a button you then could not read. The scrim
+    // is now four rectangles around the highlight, so the hole is a real hole.
+    const target = document.createElement('div');
+    target.setAttribute('data-tour', 'demo');
+    Object.defineProperty(target, 'getBoundingClientRect', {
+      value: () => ({ top: 400, left: 100, width: 120, height: 40, right: 220, bottom: 440 }),
+    });
+    document.body.appendChild(target);
+
+    const { container } = render(
+      <TourOverlay index={0} onNext={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />,
+    );
+
+    const scrims = [...container.querySelectorAll('div')].filter((d) =>
+      d.className.includes('backdrop-blur'),
+    );
+    // Four pieces around the hole, never one covering everything.
+    expect(scrims.length).toBe(4);
+    for (const s of scrims) {
+      expect(s.className).not.toContain('inset-0');
+    }
+    target.remove();
+  });
+
+  it('falls back to one full scrim when there is nothing to highlight', () => {
+    const { container } = render(
+      <TourOverlay index={0} onNext={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />,
+    );
+    const scrims = [...container.querySelectorAll('div')].filter((d) =>
+      d.className.includes('backdrop-blur'),
+    );
+    expect(scrims.length).toBe(1);
   });
 });

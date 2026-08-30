@@ -29,6 +29,7 @@ import OfflinePanel from '@/components/OfflinePanel';
 import DemoBar from '@/components/DemoBar';
 import PitchScreen from '@/components/PitchScreen';
 import Welcome from '@/components/Welcome';
+import Splash from '@/components/Splash';
 import AppMenu from '@/components/AppMenu';
 import TourOverlay from '@/components/TourOverlay';
 import { useTour } from '@/hooks/useTour';
@@ -86,6 +87,25 @@ export default function Home() {
    * the source it is starting.
    */
   const [demoEpoch, setDemoEpoch] = useState(0);
+  /**
+   * Held until the map is actually up, or a few seconds pass.
+   *
+   * ★ WAIT FOR SOMETHING REAL, BUT NEVER FOR EVER ★
+   * Without this the splash rendered for a single frame — a flicker, which
+   * reads as a glitch rather than as loading. Waiting on `MapView`'s own ready
+   * event means the screen is showing for a genuine reason. The cap is there
+   * because the map is presentation: if tiles never arrive, the engine still
+   * works and the user must not be held at a loading screen to find out.
+   */
+  const [mapReady, setMapReady] = useState(false);
+  const [bootTimedOut, setBootTimedOut] = useState(false);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setBootTimedOut(true), 4000);
+    return () => window.clearTimeout(id);
+  }, []);
+
+
   const [mapBounds, setMapBounds] = useState<LatLonBounds | null>(null);
   /**
    * Wall-clock epoch of this session's t=0.
@@ -104,6 +124,7 @@ export default function Home() {
   const live = useGeolocation(false);
   const offline = useOfflineStatus();
   const tour = useTour();
+  const booting = tour.phase === 'loading' || (!mapReady && !bootTimedOut);
 
   // ★ 10A: one press sets the whole stage. See lib/demoScript.ts for why the
   // configuration is the shipping one rather than literally "everything on".
@@ -210,6 +231,7 @@ export default function Home() {
   const handleReady = useCallback(
     (map: MapLibreMap) => {
       mapRef.current = map;
+      setMapReady(true);
       readBounds(map);
       // The download button offers whatever is on screen, so the viewport has
       // to be current when the panel opens — not whatever it was at startup.
@@ -305,6 +327,7 @@ export default function Home() {
       <ErrorBoundary area="HUD">
       <Hud
         speedSource={nav.diagnostics.speedSource}
+        modeReason={nav.diagnostics.modeReason}
         navState={navState}
         error={kind === 'live' ? live.error : null}
         mapSourceLabel={styleInfo.label}
@@ -319,8 +342,8 @@ export default function Home() {
 
       {panel === 'debug' ? (
       <ErrorBoundary area="Debug panel">
+      <Sheet title="Live sensors & proof" onClose={closePanel}>
       <TrustPanel
-        onClose={closePanel}
         modelInfo={nav.modelInfo}
         sample={nav.lastSample}
         lastGnss={nav.lastGnss}
@@ -338,6 +361,7 @@ export default function Home() {
         gnssHz={source.gnssHz}
         updateHz={nav.updateHz}
       />
+      </Sheet>
       </ErrorBoundary>
       ) : null}
 
@@ -597,16 +621,11 @@ export default function Home() {
         />
       ) : null}
 
-      {tour.phase === 'loading' ? (
-        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#080b10]">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/10 border-t-sky-400" />
-          <p className="mt-4 text-[11px] uppercase tracking-widest text-neutral-500">
-            PathPulse
-          </p>
-        </div>
+      {booting ? (
+        <Splash label={tour.phase === 'loading' ? 'Starting engine' : 'Loading map'} />
       ) : null}
 
-      {tour.phase === 'welcome' ? (
+      {!booting && tour.phase === 'welcome' ? (
         <ErrorBoundary area="Welcome" fallback={null}>
           <Welcome
             onTour={tour.begin}

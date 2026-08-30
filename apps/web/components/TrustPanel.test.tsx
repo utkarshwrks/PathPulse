@@ -46,6 +46,7 @@ const DIAGNOSTICS: EngineDiagnostics = {
   mlLatencyMs: 8.2,
   mlError: null,
   acquiringReason: null,
+  modeReason: null,
   speedSource: 'ML' as const,
 };
 
@@ -99,7 +100,6 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
       onExportEvents={onExportEvents}
       onExportTrip={onExportTrip}
       tripPointCount={42}
-      onClose={vi.fn()}
       imuHz={37}
       gnssHz={0.09}
       updateHz={11.5}
@@ -127,28 +127,26 @@ describe('TrustPanel — opening and tabs', () => {
     expect(screen.getByText(/SENSORS/)).toBeDefined();
   });
 
-  it('can be dismissed', () => {
-    const onClose = vi.fn();
-    renderPanel({ onClose });
-    fireEvent.click(screen.getByRole('button', { name: /close panel/i }));
-    expect(onClose).toHaveBeenCalled();
+  it('★ no longer places or dismisses itself — Sheet does both', () => {
+    // It used to own its corner, its layer and its own close button, which sat
+    // at `top-0 -translate-y-9` on a container anchored at `top-2` — so the ✕
+    // rendered around y = -34 px, off the top of the screen. The panel could
+    // be opened and then not dismissed. Every other panel already went
+    // through the shared Sheet; this was the one exemption, and it broke.
+    const { container } = renderPanel();
+    expect(container.querySelector('.absolute')).toBeNull();
+    expect(screen.queryByRole('button', { name: /close panel/i })).toBeNull();
   });
 
-  it('still collapses in place, for a quick look at the map underneath', () => {
+  it('renders its tabs directly, with no shell of its own', () => {
     renderPanel();
-    // Starts expanded now; one press of its own header collapses it.
     expect(screen.getByRole('button', { name: 'SENSORS' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /debug/i }));
-    expect(screen.queryByRole('button', { name: 'SENSORS' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'EVENTS' })).toBeTruthy();
   });
 
-  it('collapses and expands on its own header button', () => {
+  it('shows whether the vehicle is stationary at a glance', () => {
     renderPanel();
-    const toggle = screen.getByRole('button', { name: /debug/i });
-    fireEvent.click(toggle);
-    expect(screen.queryByRole('button', { name: 'SENSORS' })).toBeNull();
-    fireEvent.click(toggle);
-    expect(screen.getByRole('button', { name: 'SENSORS' })).toBeTruthy();
+    expect(screen.getByText(/stationary|moving/)).toBeDefined();
   });
 
   it('shows all four tabs', () => {

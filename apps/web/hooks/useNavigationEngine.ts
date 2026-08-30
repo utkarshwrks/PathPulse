@@ -66,6 +66,7 @@ export interface EngineDiagnostics {
   mlError: string | null;
   /** Why we are still ACQUIRING, or null once navigating. */
   acquiringReason: string | null;
+  modeReason: string | null;
   speedSource: SpeedSource;
 }
 
@@ -94,6 +95,7 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   mlLatencyMs: NaN,
   mlError: null,
   acquiringReason: null,
+  modeReason: null,
   speedSource: 'NONE',
 };
 

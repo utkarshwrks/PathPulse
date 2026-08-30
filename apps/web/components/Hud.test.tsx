@@ -238,3 +238,21 @@ describe('Hud — GNSS anomaly badge', () => {
     expect(screen.queryByText(/GNSS anomaly/i)).toBeNull();
   });
 });
+
+describe('Hud — why it is dead reckoning', () => {
+  it('★ explains a mode that would otherwise read as a contradiction', () => {
+    // Observed on a real phone indoors: "DEAD RECKONING" and "no gnss 1.3 s"
+    // on screen together. Both true; together they read as the app inventing
+    // movement while a fix sat one second old.
+    renderHud({
+      navState: state({ mode: 'DEAD_RECKONING' }),
+      modeReason: 'fixes arriving but only 35 m accurate — needs 25 m or better. Common indoors.',
+    });
+    expect(screen.getByText(/only 35 m accurate/)).toBeDefined();
+  });
+
+  it('says nothing when the mode needs no explanation', () => {
+    renderHud({ navState: state({ mode: 'GNSS' }), modeReason: null });
+    expect(screen.queryByText(/accurate/)).toBeNull();
+  });
+});

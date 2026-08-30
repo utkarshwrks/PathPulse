@@ -15,6 +15,13 @@ interface HudProps {
   walkingMode: boolean;
   /** Phase 8 — where the speed came from, shown beside it. */
   speedSource?: SpeedSource;
+  /**
+   * Why the engine is degraded or dead reckoning, in words.
+   *
+   * Both facts were already on screen — the mode, and the fix age — and read
+   * as a contradiction without this.
+   */
+  modeReason?: string | null;
 }
 
 /**
@@ -31,6 +38,7 @@ interface HudProps {
  * change — a HUD that visibly twitches reads as unstable even when it is not.
  */
 export default function Hud({
+  modeReason,
   navState,
   updateHz,
   imuHz,
@@ -173,6 +181,18 @@ export default function Hud({
             waiting for first fix…
           </div>
         )}
+
+        {/* ★ SAY WHY, NOT JUST WHAT ★
+            Observed on a real phone indoors: "DEAD RECKONING" and
+            "no gnss 1.3 s" on screen together — both true, together
+            unreadable. Someone watching the phone lie still on a table
+            concluded the app was inventing movement. The reason was computed
+            all along and thrown away. */}
+        {modeReason ? (
+          <div className="mt-2 rounded bg-amber-500/10 px-1.5 py-1 text-[10px] leading-snug text-amber-300">
+            {modeReason}
+          </div>
+        ) : null}
 
         {navState?.gnssAnomaly ? (
           <div className="mt-2 rounded border border-red-500/40 bg-red-500/15 px-1.5 py-1 text-[10px] leading-snug text-red-200">

@@ -56,3 +56,84 @@ body {
     color 300ms linear;
   filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.8));
 }
+
+/* ------------------------------------------------------------------ splash
+ *
+ * The loading and landing screens. All CSS keyframes: no timers and no
+ * animation frames, so nothing here competes with the engine for the main
+ * thread while the map and the ONNX model are loading — which is exactly the
+ * moment the app is busiest on a mid-range phone.
+ *
+ * The motif is expanding rings from a fixed point: a position broadcast and
+ * lost. It is the same shape the confidence ellipse makes when it grows during
+ * an outage, so the first thing the app shows is the idea it is built around.
+ */
+
+.pp-splash-glow {
+  width: 32rem;
+  height: 32rem;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.14) 0%, transparent 62%);
+  animation: pp-breathe 6s ease-in-out infinite;
+}
+
+@keyframes pp-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 0.95; transform: scale(1.09); }
+}
+
+.pp-ring {
+  position: absolute;
+  width: 5rem;
+  height: 5rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  animation: pp-pulse 2.4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+}
+
+@keyframes pp-pulse {
+  0%   { transform: scale(1);   opacity: 0.75; }
+  70%  { opacity: 0.12; }
+  100% { transform: scale(3.1); opacity: 0; }
+}
+
+.pp-mark {
+  animation: pp-rise 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  box-shadow: 0 0 34px rgba(56, 189, 248, 0.28);
+}
+
+@keyframes pp-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.9); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Indeterminate bar, for when there is nothing real to report. A fake
+ * percentage would be a number that means nothing, on a screen whose whole
+ * point elsewhere is that its numbers are measured. */
+.pp-bar {
+  width: 40%;
+  animation: pp-sweep 1.25s ease-in-out infinite;
+}
+
+@keyframes pp-sweep {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(260%); }
+}
+
+.pp-fade { animation: pp-fade-up 620ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.pp-delay-1 { animation-delay: 110ms; }
+.pp-delay-2 { animation-delay: 220ms; }
+.pp-delay-3 { animation-delay: 330ms; }
+.pp-delay-4 { animation-delay: 440ms; }
+
+@keyframes pp-fade-up {
+  from { opacity: 0; transform: translateY(9px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Someone who has asked for less motion gets less motion. The rings are
+ * decoration; the words are the content. */
+@media (prefers-reduced-motion: reduce) {
+  .pp-ring, .pp-splash-glow, .pp-bar { animation: none; }
+  .pp-ring { opacity: 0.18; }
+  .pp-fade, .pp-mark { animation-duration: 1ms; }
+}

@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Live location fixed and verified on a real phone ✅
+**CURRENT PHASE:** Splash, landing, tour spotlight, and the indoor GNSS rule ✅
 **LAST UPDATED:** 2026-08-30
 **NEXT PHASE:** Rehearsal. See [docs/TESTING.md](./docs/TESTING.md) for the step-by-step check
 
@@ -1674,6 +1674,52 @@ then confirmed by restoring the bug and watching them fail. A test that has
 never failed has not been shown to test anything.
 
 **Tests:** 1115 passing.
+
+### Indoor GNSS, a splash screen, and a tour you can actually see ✅
+
+**★ The engine was throwing away usable fixes.** Anything worse than 25 m
+counted as degraded, and after **two seconds** of that it fell to full dead
+reckoning — regardless of whether fixes were still arriving. Indoors every fix
+is worse than 25 m, so it sat in DEAD RECKONING permanently while fixes came in
+every ten seconds, free-running on the IMU. Measured on a phone lying flat on a
+table: **323 m of phantom distance**, 2 km/h, climbing.
+
+Unaided inertial dead reckoning is worse than a 35 m fix within seconds, so
+discarding the fix to rely on it is a bad trade. It now falls to dead reckoning
+only when fixes have actually **stopped**. Same table, after: `GNSS DEGRADED`,
+**8 m** and static, 0 km/h, `[STOPPED]`.
+
+**And the screen never said why.** `DEAD RECKONING` sat next to `no gnss 1.3 s`
+— both true, together unreadable, and it looked like the app inventing
+movement. The reason was computed for the event log all along and thrown away.
+`modeReason` now puts it on the HUD: *"fixes arriving but only 37 m accurate —
+needs 25 m or better. Common indoors."* The ablation is unchanged at 10.0% /
+22.6%, so this is a state-machine correction rather than a retune.
+
+**★ The debug panel could be opened and not closed.** It was the one panel
+still placing itself, and its close button sat at `top-0 -translate-y-9` on a
+container anchored at `top-2` — so the ✕ rendered at about **y = -34 px**, off
+the top of the screen. It now renders content only; `Sheet` owns the corner,
+the layer, the scrolling and the close. Measured after: the ✕ is at y = 267 and
+reachable. `layout.test.ts` now asserts no panel carries its own `absolute`,
+`z-*` or transform class.
+
+**★ The tour blurred the thing it was pointing at.** One full-screen
+`backdrop-blur` blurs everything beneath it, so the ring drew a target around a
+button you then could not read. `backdrop-filter` cannot be given a hole, so
+the scrim is built from four rectangles around the highlight and the highlight
+itself is left completely uncovered — sharp, full colour, obviously the subject.
+
+**Splash and landing.** Expanding rings from a fixed point: a position
+broadcast and lost, the same shape the confidence ellipse makes during an
+outage — so the first thing the app shows is the idea it is built around. Pure
+CSS keyframes, no timers and no animation frames, because it renders while the
+map and the ONNX model are loading and the engine needs the main thread. The
+bar is indeterminate rather than a fabricated percentage, and it waits for
+`MapView`'s real ready event with a four-second cap so a failed map cannot trap
+anyone at a loading screen. `prefers-reduced-motion` stops the animation.
+
+**Tests:** 1130 passing.
 
 ## NEXT PHASE
 

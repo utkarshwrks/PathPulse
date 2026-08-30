@@ -66,6 +66,21 @@ describe('what is allowed to sit over the map', () => {
 });
 
 describe('every overlay can be dismissed', () => {
+  it('★ no panel positions itself — Sheet owns corner, layer and close', () => {
+    // The debug panel was the one exemption from this rule, and it broke
+    // exactly as predicted: its own close button sat at `top-0 -translate-y-9`
+    // on a container anchored at `top-2`, rendering the ✕ at roughly
+    // y = -34 px — off the top of the screen. The panel could be opened and
+    // then not dismissed. Reported from the phone.
+    const trust = read('TrustPanel.tsx');
+    // Match class attributes only — the prose above explains the old bug and
+    // naturally quotes the class name that caused it.
+    expect(trust).not.toMatch(/className="[^"]*\babsolute\b/);
+    expect(trust).not.toMatch(/className="[^"]*-translate-y-/);
+    expect(trust).not.toMatch(/className="[^"]*\bz-\d/);
+    expect(PAGE).toMatch(/<Sheet title="Live sensors & proof"/);
+  });
+
   it('★ the shared sheet always renders a close button', () => {
     const sheet = read('Sheet.tsx');
     expect(sheet).toMatch(/aria-label=\{`Close \$\{title\}`\}/);

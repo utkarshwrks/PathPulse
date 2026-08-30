@@ -10,6 +10,11 @@ interface TourOverlayProps {
   onSkip: () => void;
 }
 
+/** Dim + blur, used for each piece of the scrim around the highlight. */
+const SCRIM = 'absolute bg-black/65 backdrop-blur-[3px]';
+/** Breathing room between the highlighted element and the hole's edge. */
+const PAD = 6;
+
 interface Box {
   top: number;
   left: number;
@@ -73,22 +78,35 @@ export default function TourOverlay({ index, onNext, onBack, onSkip }: TourOverl
 
   return (
     <div className="absolute inset-0 z-50" data-testid="tour-overlay">
-      {/* Backdrop. Pointer events are captured so a stray tap during the tour
-          cannot fire a control the tour is currently describing. */}
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-[3px]" onClick={onNext} />
-
+      {/*
+        ★ THE HOLE HAS TO BE A REAL HOLE ★
+        A single full-screen `backdrop-blur` blurs everything underneath it —
+        including the control the step is pointing at. The ring drew a target
+        around a button you then could not read, which defeats the whole
+        exercise. `backdrop-filter` cannot be given a hole, so the dimmed,
+        blurred area is built from four rectangles around the highlight and
+        the highlight itself is left completely uncovered: sharp, full colour,
+        and obviously the thing being talked about.
+      */}
       {box ? (
-        <div
-          className="pointer-events-none absolute rounded-xl ring-2 ring-sky-400"
-          style={{
-            top: box.top - 6,
-            left: box.left - 6,
-            width: box.width + 12,
-            height: box.height + 12,
-            boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
-          }}
-        />
-      ) : null}
+        <>
+          <div className={SCRIM} onClick={onNext} style={{ top: 0, left: 0, right: 0, height: Math.max(0, box.top - PAD) }} />
+          <div className={SCRIM} onClick={onNext} style={{ top: box.top + box.height + PAD, left: 0, right: 0, bottom: 0 }} />
+          <div className={SCRIM} onClick={onNext} style={{ top: box.top - PAD, left: 0, width: Math.max(0, box.left - PAD), height: box.height + PAD * 2 }} />
+          <div className={SCRIM} onClick={onNext} style={{ top: box.top - PAD, left: box.left + box.width + PAD, right: 0, height: box.height + PAD * 2 }} />
+          <div
+            className="pointer-events-none absolute rounded-xl ring-2 ring-sky-400"
+            style={{
+              top: box.top - PAD,
+              left: box.left - PAD,
+              width: box.width + PAD * 2,
+              height: box.height + PAD * 2,
+            }}
+          />
+        </>
+      ) : (
+        <div className={`${SCRIM} inset-0`} onClick={onNext} />
+      )}
 
       <div
         className={`absolute left-1/2 w-[min(94vw,26rem)] -translate-x-1/2 rounded-2xl border border-white/15 bg-[#0d1117] p-4 shadow-2xl ${

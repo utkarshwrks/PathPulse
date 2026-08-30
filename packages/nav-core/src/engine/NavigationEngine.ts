@@ -340,6 +340,8 @@ export class NavigationEngine {
     mlError: string | null;
     /** Why we are still ACQUIRING, or null once navigating. */
     acquiringReason: string | null;
+    /** Why the engine is dead reckoning or degraded, for the HUD. */
+    modeReason: string | null;
     speedSource: SpeedSource;
   } {
     return {
@@ -364,6 +366,15 @@ export class NavigationEngine {
       mlLatencyMs: this.mlLastLatencyMs,
       mlError: this.mlFailure,
       acquiringReason: this.stateMachine.acquiringReason(this.lastFixAccuracyM),
+      modeReason: this.stateMachine.modeReason(
+        {
+          hasFix: this.lastGnssT !== null,
+          ...(this.lastFixAccuracyM !== null ? { accuracyM: this.lastFixAccuracyM } : {}),
+        },
+        this.lastGnssT === null || this.lastState === null
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, this.lastState.t - this.lastGnssT),
+      ),
       speedSource: this.speedSource,
     };
   }

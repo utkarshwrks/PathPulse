@@ -468,3 +468,67 @@ describe('NavigationEngine — the uncertainty ellipse over a full outage', () =
     expect(settled.covariance.crossM).toBeCloseTo(4, 6);
   });
 });
+
+describe('NavigationStateMachine — a poor fix is still information', () => {
+  /**
+   * ★ OBSERVED ON A REAL PHONE, INDOORS ★
+   * Fixes arriving every ten seconds at 35 m accuracy. The machine treated
+   * anything worse than 25 m as degraded and fell to DEAD_RECKONING after two
+   * seconds of it — so indoors, where every fix is worse than 25 m, it sat in
+   * dead reckoning permanently while fixes kept arriving, free-running on the
+   * IMU and accumulating hundreds of metres with the phone flat on a table.
+   *
+   * Unaided inertial dead reckoning is worse than a 35 m fix within seconds.
+   * Throwing the fix away to rely on it is a bad trade.
+   */
+  it('★ stays degraded while poor fixes keep arriving', () => {
+    const sm = new NavigationStateMachine();
+    let t = 0;
+    for (let i = 0; i < 5; i++, t += 1000) {
+      sm.update(t, { hasFix: true, accuracyM: 4, satCount: 9 });
+    }
+    expect(sm.current).toBe('GNSS');
+
+    // Now the indoor case: a fix every second, but 35 m accurate.
+    for (let i = 0; i < 30; i++) {
+      t += 1000;
+      sm.update(t, { hasFix: true, accuracyM: 35, satCount: 9 });
+    }
+    expect(sm.current).toBe('GNSS_DEGRADED');
+  });
+
+  it('still falls to dead reckoning when the fixes actually stop', () => {
+    const sm = new NavigationStateMachine();
+    let t = 0;
+    for (let i = 0; i < 5; i++, t += 1000) {
+      sm.update(t, { hasFix: true, accuracyM: 4, satCount: 9 });
+    }
+    for (let i = 0; i < 20; i++) {
+      t += 1000;
+      sm.update(t, { hasFix: false });
+    }
+    expect(sm.current).toBe('DEAD_RECKONING');
+  });
+
+  it('★ names the reason, rather than leaving the mode unexplained', () => {
+    const sm = new NavigationStateMachine();
+    let t = 0;
+    for (let i = 0; i < 5; i++, t += 1000) {
+      sm.update(t, { hasFix: true, accuracyM: 4, satCount: 9 });
+    }
+    t += 1000;
+    sm.update(t, { hasFix: true, accuracyM: 35, satCount: 9 });
+    const reason = sm.modeReason({ hasFix: true, accuracyM: 35, satCount: 9 }, 1000);
+    expect(reason).toMatch(/35 m/);
+    expect(reason).toMatch(/indoors/i);
+  });
+
+  it('reports no reason for a mode that needs none', () => {
+    const sm = new NavigationStateMachine();
+    let t = 0;
+    for (let i = 0; i < 5; i++, t += 1000) {
+      sm.update(t, { hasFix: true, accuracyM: 4, satCount: 9 });
+    }
+    expect(sm.modeReason({ hasFix: true, accuracyM: 4 }, 500)).toBeNull();
+  });
+});
