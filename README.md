@@ -15,9 +15,10 @@ return. No internet, no cloud API, no special hardware.
 
 ## Status
 
-**Phases 0-8 complete.** The dot
-survives a GNSS outage, and the six defects a real-phone field test exposed on
-2026-08-27 are fixed.
+**Phases 0-8 complete, Phase 9A in.** The dot
+survives a GNSS outage under an uncertainty ellipse that shows how wrong it
+might be, and the six defects a real-phone field test exposed on 2026-08-27 are
+fixed.
 
 Measured drift is **10.0% mean, 6.4% median, 22.6% p90** across 12 runs — four
 recorded logs × three outage windows. The mean sits right on the problem
@@ -315,7 +316,7 @@ exist, every file is `sim_*` and `docs/benchmarks.md` says so at the top.
 
 Phase 5 exists for one reason: a judge's default assumption is that the demo is
 playing back canned data, and nothing in a HUD can disprove that, because a
-scripted animation can display any numbers it likes. These five can.
+scripted animation can display any numbers it likes. These can.
 
 | Feature | Where | How to use it in the demo |
 | --- | --- | --- |
@@ -326,10 +327,10 @@ scripted animation can display any numbers it likes. These five can.
 | **Session stats** | Debug → STATS | Duration, distance, outage count and durations, best/worst/mean drift. The drift figures here are **measured against a real fix on recovery**, not the engine's own uncertainty model. |
 | **Walking Mode** | Debug → CONSTRAINTS | Clamps speed to 3 m/s so you can walk the corridor with the phone and watch the dot move. Live physics, no vehicle needed. |
 
+| **Confidence ellipse** | on the map | The shaded shape under the marker is the engine's own uncertainty, and it is an *ellipse, not a circle*: the long axis is along-track error, which grows every second of an outage, and the short axis is cross-track, which NHC bounds and road snapping caps outright. Watch it stretch forward during an outage and ease shut as the marker slews home. The same two numbers are printed in the HUD as `along/cross`, so the shape can be checked against them. |
+
 The debug panel states `n/a` for satellite count and C/N0 rather than inventing
-them — those need the native `GnssStatus` API in Phase 15. Road snapping has no
-toggle yet because it is not built; a switch that did nothing would be worse
-than its absence.
+them — those need the native `GnssStatus` API in Phase 15.
 
 ## AI/ML — the IO-VNBD speed model
 

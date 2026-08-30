@@ -7,6 +7,22 @@ export interface ShownPosition {
   fromEngine: boolean;
   /** Metres. Engine uncertainty when navigating, GNSS accuracy before that. */
   accuracyM: number;
+  /**
+   * Semi-axes of the uncertainty ellipse, metres.
+   *
+   * Same "which number do we actually trust" decision as `accuracyM`, kept
+   * here rather than in the renderer so it is decided once and tested. Before
+   * the engine is navigating there is no along/cross distinction to draw —
+   * a raw fix is a circle, and pretending otherwise would invent structure the
+   * receiver never reported.
+   */
+  alongM: number;
+  crossM: number;
+}
+
+/** Engine covariance is only worth drawing once it holds a real magnitude. */
+function usableAxis(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && (value as number) > 0 ? (value as number) : fallback;
 }
 
 /**
@@ -42,11 +58,15 @@ export function resolveShownPosition(
     !(navState.position.lat === 0 && navState.position.lon === 0);
 
   if (engineReady) {
+    const cov = navState!.covariance;
+    const fallback = Number.isFinite(lastFix?.accuracyM) ? lastFix!.accuracyM : 0;
     return {
       lat: navState!.position.lat,
       lon: navState!.position.lon,
       fromEngine: true,
-      accuracyM: navState!.covariance.alongM,
+      accuracyM: cov.alongM,
+      alongM: usableAxis(cov.alongM, fallback),
+      crossM: usableAxis(cov.crossM, fallback),
     };
   }
 
@@ -56,11 +76,14 @@ export function resolveShownPosition(
     Number.isFinite(lastFix.lon) &&
     !(lastFix.lat === 0 && lastFix.lon === 0)
   ) {
+    const accuracyM = Number.isFinite(lastFix.accuracyM) ? lastFix.accuracyM : 0;
     return {
       lat: lastFix.lat,
       lon: lastFix.lon,
       fromEngine: false,
-      accuracyM: Number.isFinite(lastFix.accuracyM) ? lastFix.accuracyM : 0,
+      accuracyM,
+      alongM: accuracyM,
+      crossM: accuracyM,
     };
   }
 

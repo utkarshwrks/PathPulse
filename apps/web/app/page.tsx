@@ -17,6 +17,7 @@ import DeviceInfo from '@/components/DeviceInfo';
 import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
+import ConfidenceEllipse from '@/components/ConfidenceEllipse';
 
 const MapView = dynamic(() => import('@/components/MapView'), {
   ssr: false,
@@ -122,6 +123,19 @@ export default function Home() {
   return (
     <main className="relative h-full w-full overflow-hidden">
       <MapView onReady={handleReady} onUserInteract={() => setFollowing(false)}>
+        {/* Mount order is z-order: layers are added to the map in the order
+            their effects run, so the ellipse goes down first and the trail
+            draws on top of it rather than being washed out by the fill. */}
+        {hasPosition ? (
+          <ConfidenceEllipse
+            lat={shownPosition!.lat}
+            lon={shownPosition!.lon}
+            alongM={shownPosition!.alongM}
+            crossM={shownPosition!.crossM}
+            headingDeg={navState?.headingDeg ?? 0}
+            mode={navState?.mode ?? 'INITIALIZING'}
+          />
+        ) : null}
         <TrailLayer trail={trail} />
         {hasPosition ? (
           <VehicleMarker
@@ -129,7 +143,6 @@ export default function Home() {
             lon={shownPosition!.lon}
             headingDeg={navState?.headingDeg ?? 0}
             mode={navState?.mode ?? 'INITIALIZING'}
-            accuracyM={shownPosition!.accuracyM}
           />
         ) : null}
       </MapView>

@@ -213,6 +213,12 @@ export class NavigationEngine {
   };
   private covarianceAlongM = 0;
   private covarianceCrossM = 0;
+  /**
+   * Covariance at the instant recovery began, so the ellipse can shrink along
+   * the same eased curve the marker slews along instead of holding at outage
+   * size and then popping.
+   */
+  private recoveryStartCovariance: { alongM: number; crossM: number } | null = null;
   /** Accumulated heading uncertainty during an outage, radians. */
   private headingSigmaRad = 0;
   /** Smoothed observed sample rate, Hz. Keeps the filters correctly tuned. */
@@ -773,6 +779,12 @@ export class NavigationEngine {
 
       this.estimatedDriftM = Math.hypot(this.covarianceAlongM, this.covarianceCrossM);
     } else if (mode === 'RECOVERING') {
+      if (modeBefore !== 'RECOVERING') {
+        this.recoveryStartCovariance = {
+          alongM: this.covarianceAlongM,
+          crossM: this.covarianceCrossM,
+        };
+      }
       if (modeBefore !== 'RECOVERING' && gnssEnu) {
         const drift = this.recovery.begin(sample.t, this.dr.current.enu, gnssEnu);
         this.log.push({
@@ -811,6 +823,21 @@ export class NavigationEngine {
       const blended = this.recovery.update(sample.t, target);
       shownEnu = blended.enu;
       this.estimatedDriftM = blended.driftM;
+
+      // ★ THE ELLIPSE SHRINKS WITH THE SLEW, NOT AFTER IT ★
+      // The covariance used to sit untouched through the whole recovery and
+      // then drop to 5 m on the frame the slew finished. On screen that is a
+      // large ellipse gliding across the map at constant size and vanishing —
+      // which reads as the shape being decorative rather than measured. Easing
+      // it down on the blender's own progress curve means the marker arriving
+      // and the uncertainty closing are visibly the same event.
+      const recoveredAccuracyM = sample.gnss?.accuracyM ?? 5;
+      const from = this.recoveryStartCovariance;
+      if (from) {
+        const p = Math.max(0, Math.min(1, blended.progress));
+        this.covarianceAlongM = from.alongM + (recoveredAccuracyM - from.alongM) * p;
+        this.covarianceCrossM = from.crossM + (recoveredAccuracyM - from.crossM) * p;
+      }
       if (blended.didReset) {
         // An explicit, logged jump. Never silent — a marker that moves a
         // kilometre with no explanation is indistinguishable from a bug.
@@ -836,8 +863,12 @@ export class NavigationEngine {
             accuracyM: sample.gnss?.accuracyM ?? 5,
           });
         }
-        this.covarianceAlongM = 5;
-        this.covarianceCrossM = 5;
+        // The receiver's own reported accuracy, not a flat 5 m — claiming 5 m
+        // while the handset is reporting 30 m is the kind of number a judge
+        // checks against the map and finds wanting.
+        this.covarianceAlongM = recoveredAccuracyM;
+        this.covarianceCrossM = recoveredAccuracyM;
+        this.recoveryStartCovariance = null;
         this.headingSigmaRad = 0;
         this.drStartedAtMs = null;
       }
@@ -1109,6 +1140,7 @@ export class NavigationEngine {
     this.roadMaxSpeedMps = undefined;
     this.snapAppliedCount = 0;
     this.snapAttemptCount = 0;
+    this.recoveryStartCovariance = null;
     this.covarianceAlongM = 0;
     this.covarianceCrossM = 0;
     this.headingSigmaRad = 0;

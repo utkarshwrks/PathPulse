@@ -139,3 +139,44 @@ describe('shouldJumpCamera', () => {
     expect(shouldJumpCamera({ lat: 23.18, lon: 79.98 }, { lat: 26.0, lon: 79.98 })).toBe(true);
   });
 });
+
+describe('resolveShownPosition — the ellipse axes', () => {
+  it('passes the engine covariance through as separate axes once navigating', () => {
+    const shown = resolveShownPosition(
+      state({ mode: 'DEAD_RECKONING', covariance: { alongM: 180, crossM: 12, headingDeg: 4 } }),
+      JABALPUR,
+    );
+    expect(shown!.alongM).toBe(180);
+    expect(shown!.crossM).toBe(12);
+  });
+
+  it('★ draws a raw fix as a circle, not an invented ellipse', () => {
+    // Before the engine is navigating there is no along/cross decomposition to
+    // show. A receiver reports one accuracy radius; splitting it into unequal
+    // axes would claim knowledge about the error's shape that nothing measured.
+    const shown = resolveShownPosition(state({ mode: 'INITIALIZING' }), JABALPUR);
+    expect(shown!.alongM).toBe(42);
+    expect(shown!.crossM).toBe(42);
+  });
+
+  it('★ falls back to the fix accuracy rather than drawing a 0 m ellipse', () => {
+    // A zero covariance is "not computed yet", not "we are certain". Drawing it
+    // literally would put a hairline ellipse under a marker that might be 42 m
+    // out — the exact overconfidence the ACQUIRING work existed to remove.
+    const shown = resolveShownPosition(
+      state({ mode: 'GNSS', covariance: { alongM: 0, crossM: 0, headingDeg: 0 } }),
+      JABALPUR,
+    );
+    expect(shown!.alongM).toBe(42);
+    expect(shown!.crossM).toBe(42);
+  });
+
+  it('survives a fix with no usable accuracy without emitting NaN axes', () => {
+    const shown = resolveShownPosition(
+      state({ mode: 'GNSS', covariance: { alongM: NaN, crossM: NaN, headingDeg: 0 } }),
+      { ...JABALPUR, accuracyM: NaN },
+    );
+    expect(Number.isFinite(shown!.alongM)).toBe(true);
+    expect(Number.isFinite(shown!.crossM)).toBe(true);
+  });
+});

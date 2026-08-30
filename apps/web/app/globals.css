@@ -42,17 +42,6 @@ body {
   height: 0;
 }
 
-.vehicle-marker__halo {
-  position: absolute;
-  border-radius: 9999px;
-  opacity: 0.14;
-  transition:
-    width 400ms ease-out,
-    height 400ms ease-out,
-    background-color 300ms linear;
-  pointer-events: none;
-}
-
 .vehicle-marker__arrow {
   position: absolute;
   display: grid;

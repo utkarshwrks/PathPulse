@@ -11,8 +11,6 @@ interface VehicleMarkerProps {
   lon: number;
   headingDeg: number | null;
   mode: NavMode;
-  /** Reported horizontal accuracy, drawn as a soft halo. */
-  accuracyM?: number | null;
 }
 
 /**
@@ -22,17 +20,10 @@ interface VehicleMarkerProps {
  * the smoothing. Golden Rule #6: the dot must never appear to teleport — a
  * jumping marker reads as a bug to a judge even when the math is right.
  */
-export default function VehicleMarker({
-  lat,
-  lon,
-  headingDeg,
-  mode,
-  accuracyM,
-}: VehicleMarkerProps) {
+export default function VehicleMarker({ lat, lon, headingDeg, mode }: VehicleMarkerProps) {
   const map = useMap();
   const markerRef = useRef<Marker | null>(null);
   const arrowRef = useRef<HTMLDivElement | null>(null);
-  const haloRef = useRef<HTMLDivElement | null>(null);
   // Heading is null when stationary; keep pointing the last known way
   // instead of snapping back to north.
   const lastHeadingRef = useRef(0);
@@ -42,11 +33,6 @@ export default function VehicleMarker({
 
     const el = document.createElement('div');
     el.className = 'vehicle-marker';
-
-    const halo = document.createElement('div');
-    halo.className = 'vehicle-marker__halo';
-    el.appendChild(halo);
-    haloRef.current = halo;
 
     const arrow = document.createElement('div');
     arrow.className = 'vehicle-marker__arrow';
@@ -87,27 +73,7 @@ export default function VehicleMarker({
       arrowRef.current.style.transform = `rotate(${lastHeadingRef.current}deg)`;
       arrowRef.current.style.color = MODE_COLORS[mode];
     }
-    if (haloRef.current) {
-      haloRef.current.style.background = MODE_COLORS[mode];
-    }
   }, [headingDeg, mode]);
-
-  // Accuracy halo. Phase 9 replaces this circle with a proper covariance
-  // ellipse — along-track and cross-track error are not the same size.
-  useEffect(() => {
-    if (!map || !haloRef.current) return;
-    const halo = haloRef.current;
-    if (!accuracyM || !Number.isFinite(accuracyM)) {
-      halo.style.width = '0px';
-      halo.style.height = '0px';
-      return;
-    }
-    const metresPerPixel =
-      (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
-    const px = Math.min(400, Math.max(0, (accuracyM / metresPerPixel) * 2));
-    halo.style.width = `${px}px`;
-    halo.style.height = `${px}px`;
-  }, [map, accuracyM, lat, mode]);
 
   return null;
 }
