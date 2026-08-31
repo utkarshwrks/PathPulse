@@ -275,6 +275,73 @@ describe('SimulationSource — GNSS outage', () => {
   });
 });
 
+/**
+ * ★ THE BUG THIS BLOCK EXISTS FOR ★
+ * `advance()` consumes whole IMU steps. The wall timer asks for 50 ms and the
+ * step is 20 ms, so it spent 40 and discarded 10 — every tick. Simulated time
+ * ran at 0.8x real time and nothing noticed, because every other caller here
+ * passes whole seconds and every assertion was written in simulated time.
+ *
+ * The scripted demo is the one thing that keeps real time. It fires the outage
+ * on a wall clock at 15 s, but the outage's 60 s is simulated, so GNSS came
+ * back at 90 s of wall clock while the banner announced the recovery at 75 s:
+ * the demo's closing five seconds narrated a fix return that had not happened,
+ * over a screen still reading DEAD RECKONING with no drift measured.
+ */
+describe('SimulationSource — simulated time tracks the time requested', () => {
+  it('spends a tick that is not a whole number of IMU steps', () => {
+    // 50 ms of wall clock, 20 ms per IMU sample. The leftover 10 ms has to
+    // survive into the next call rather than being dropped on the floor.
+    const sim = new SimulationSource({ route: city, seed: 21 });
+    for (let i = 0; i < 100; i++) sim.advance(50);
+    expect(sim.elapsedMs).toBe(5_000);
+  });
+
+  it('does not drift over the length of a demo', () => {
+    const sim = new SimulationSource({ route: city, seed: 22 });
+    for (let wall = 0; wall < 80_000; wall += 50) sim.advance(50);
+    // Within one IMU step of the 80 s asked for. It used to reach 64 s.
+    expect(Math.abs(sim.elapsedMs - 80_000)).toBeLessThanOrEqual(20);
+  });
+
+  it('★ returns GNSS on the demo script\u2019s mark, not fifteen seconds late', () => {
+    // The whole demo, ticked the way the page ticks it: useDemoMode fires the
+    // outage on a wall clock at 15 s, DEMO_SCRIPT announces recovery at 75 s.
+    const sim = new SimulationSource({ route: city, seed: 23 });
+    let fired = false;
+    let recoveredAtWallMs: number | null = null;
+    let wasOut = false;
+
+    for (let wall = 0; wall <= 120_000; wall += 50) {
+      sim.advance(50);
+      if (!fired && wall >= 15_000) {
+        fired = true;
+        sim.startOutageNow(60_000);
+      }
+      const out = sim.isInOutage();
+      if (wasOut && !out && recoveredAtWallMs === null) recoveredAtWallMs = wall;
+      wasOut = out;
+    }
+
+    expect(recoveredAtWallMs).not.toBeNull();
+    expect(Math.abs(recoveredAtWallMs! - 75_000)).toBeLessThanOrEqual(50);
+  });
+
+  it('emits one GNSS fix per second of wall clock at 1 Hz', () => {
+    // The visible symptom of the same defect: 0.8 fixes a second.
+    const sim = new SimulationSource({ route: city, seed: 24, gnssRateHz: 1 });
+    let fixes = 0;
+    sim.onSample((s) => {
+      if (s.gnss) fixes++;
+    });
+    for (let wall = 0; wall < 10_000; wall += 50) sim.advance(50);
+    // 10 or 11: the window is closed at both ends, so a fix due at exactly
+    // t=10000 lands inside it. The defect produced 9 or fewer.
+    expect(fixes).toBeGreaterThanOrEqual(10);
+    expect(fixes).toBeLessThanOrEqual(11);
+  });
+});
+
 describe('createGaussian', () => {
   it('has approximately zero mean and unit variance', () => {
     const g = createGaussian(99);

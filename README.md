@@ -55,7 +55,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (667) |
+| `pnpm test` | All workspace tests (1166) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -325,6 +325,7 @@ scripted animation can display any numbers it likes. These can.
 
 | Feature | Where | How to use it in the demo |
 | --- | --- | --- |
+| **Scripted demo** | ▶ Demo, bottom centre | One press sets the whole stage and runs the 80-second story on its own: 15 s of normal GNSS, a 60-second outage, recovery at 75 s, and five seconds to read the drift. The banner names each phase and states, unprompted, that **the outage is triggered by the script and not by a tunnel** — the physics and the estimate are real, the timing is ours. Golden Rule #8: a judge who works that out alone stops believing the rest of the screen. |
 | **HUD** | top-left | Big mode badge, speed, drift, drift %, distance, time since GNSS, confidence bar. The update rate is counted from real frames and turns amber below 10 Hz — the problem statement's floor. |
 | **Live raw sensors** | Debug → SENSORS | Put the phone flat on the table. The accelerometer still twitches by 0.01-0.05. Real sensor data is always slightly dirty; canned data is suspiciously smooth. Then hand the phone to the judge and let them rotate it — heading moves, gyro jumps. |
 | **Constraint toggles** | Debug → CONSTRAINTS | ★ The strongest one. Mid-outage, switch ZUPT or NHC off and the estimate visibly degrades; switch it back and it recovers. **A fake demo never breaks.** Anything you can break on request is real. Changes take effect on the next sample — no restart. |

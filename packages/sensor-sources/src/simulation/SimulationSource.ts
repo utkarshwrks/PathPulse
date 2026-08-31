@@ -54,6 +54,28 @@ export class SimulationSource implements SensorSource {
   private running = false;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private playbackRate = 1;
+  /**
+   * Simulated time asked for but not yet spent, carried between `advance()`
+   * calls.
+   *
+   * ★ THE DEMO DESYNC THIS EXISTS TO END ★
+   * `advance()` consumes whole IMU steps and used to discard the remainder.
+   * The wall timer asks for 50 ms and the step is 20 ms, so it spent 40 and
+   * threw 10 away — every tick, for ever. The simulation ran at 0.8× real
+   * time: 64 s of driving in 80 s of demo.
+   *
+   * That is invisible until something else keeps real time, and the scripted
+   * demo does. `useDemoMode` fires the outage on a wall clock at 15 s, but the
+   * outage's own 60 s is simulated time, so GNSS came back at 90 s of wall
+   * clock while the banner announced the recovery at 75 s. The last five
+   * seconds of every demo narrated a fix return that had not happened: the
+   * banner read "the marker slides back, the drift is measured" over a screen
+   * still saying DEAD RECKONING with no drift on it.
+   *
+   * Keeping the remainder costs one number and makes simulated time track the
+   * time actually requested.
+   */
+  private carryMs = 0;
 
   constructor(options: SimulationOptions) {
     this.opts = options;
@@ -157,7 +179,10 @@ export class SimulationSource implements SensorSource {
    */
   advance(simDtMs: number): SensorSample[] {
     const emitted: SensorSample[] = [];
-    let remaining = simDtMs;
+    // Whatever the last call could not spend is spent now. Callers that pass
+    // whole multiples of the IMU step — the tests and the eval harness — never
+    // accumulate a remainder, so this changes nothing for them.
+    let remaining = simDtMs + this.carryMs;
 
     while (remaining >= this.imuIntervalMs) {
       const step = this.imuIntervalMs;
@@ -171,6 +196,9 @@ export class SimulationSource implements SensorSource {
         emitted.push(sample);
         this.emit(sample);
         this.stop();
+        // The route is over; a carried remainder would only be spent by a
+        // caller that restarts, which resets this anyway.
+        remaining = 0;
         break;
       }
 
@@ -179,6 +207,7 @@ export class SimulationSource implements SensorSource {
       this.emit(sample);
     }
 
+    this.carryMs = remaining;
     return emitted;
   }
 
@@ -234,9 +263,27 @@ export class SimulationSource implements SensorSource {
   private scheduleTimer(): void {
     if (this.timerId !== null) clearInterval(this.timerId);
     const wallTickMs = 50;
+    /**
+     * ★ ADVANCE BY THE TIME THAT PASSED, NOT THE TIME WE ASKED FOR ★
+     * `setInterval(50)` is a request, not a promise. On a phone rendering a
+     * map it lands late, and assuming it landed on time slows simulated time
+     * against the wall clock the demo script is counting on. Measuring the gap
+     * means a late tick costs smoothness rather than sequence — the same
+     * reason `useDemoMode` reads elapsed time instead of counting ticks.
+     */
+    let last = Date.now();
     this.timerId = setInterval(() => {
       if (!this.running) return;
-      this.advance(wallTickMs * this.playbackRate);
+      const now = Date.now();
+      const wallDtMs = Math.max(0, now - last);
+      last = now;
+      // A backgrounded tab throttles this timer to a second or more, and a
+      // sleeping phone stops it entirely. Catching up on the whole gap would
+      // teleport the vehicle down the route on return, so a long freeze is
+      // treated as a pause. The cap is generous enough to absorb ordinary
+      // jank, which is what actually needs absorbing.
+      const maxCatchUpMs = wallTickMs * 5;
+      this.advance(Math.min(wallDtMs, maxCatchUpMs) * this.playbackRate);
     }, wallTickMs);
   }
 }

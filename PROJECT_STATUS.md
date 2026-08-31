@@ -1721,6 +1721,73 @@ anyone at a loading screen. `prefers-reduced-motion` stops the animation.
 
 **Tests:** 1130 passing.
 
+### The demo clock — the simulator ran at 0.8x real time ✅
+
+**The symptom:** the scripted demo told a story the map never performed. The
+banner announced *"Recovery — fix returns, the marker slides back, the drift is
+measured"* at 1:15, then *"Done — read the drift from the HUD"* at 1:20, over a
+screen still reading **DEAD RECKONING** with no drift on it. Every run. The
+closing fifteen seconds of the pitch — the part the whole outage exists to set
+up — narrated something that had not happened.
+
+**The cause was one discarded remainder.** `SimulationSource.advance()`
+consumes whole IMU steps and threw away what was left over:
+
+```
+let remaining = simDtMs;            // 50 ms asked for
+while (remaining >= this.imuIntervalMs) { ... }   // 20 ms per step
+return emitted;                     // 2 steps spent, 10 ms dropped
+```
+
+The wall timer asks for 50 ms, the IMU step is 20 ms, so it spent 40 and binned
+10 — every tick, for ever. Simulated time ran at **0.8x** real time. Measured
+against a real clock: 4680 ms of simulation in 6002 ms of wall clock, and five
+GNSS fixes where a 1 Hz receiver owes you six.
+
+**Why nothing caught it.** 1130 tests passed over it. Every other caller —
+the suite, the eval harness, `record.ts` — passes whole seconds, where the
+remainder is always zero, and every assertion was written in *simulated* time,
+which was self-consistently wrong. The defect only exists on the timer path,
+and only becomes visible when something else keeps real time.
+
+**The scripted demo is the one thing that keeps real time.** `useDemoMode`
+fires the outage on a wall clock at 15 s — deliberately, so a dropped frame
+costs smoothness rather than sequence. But the outage's own 60 s is *simulated*
+time. So GNSS came back at 90 s of wall clock while `DEMO_SCRIPT` announced the
+recovery at 75 s: a fifteen-second gap between the caption and the picture.
+
+Driven exactly as the page drives it — sim ticked on a 50 ms wall clock, outage
+fired at wall 15 s — through the real `NavigationEngine`:
+
+| wall clock | before | after |
+|---|---|---|
+| 19.5 s | `DEAD_RECKONING` | `DEAD_RECKONING` |
+| 77.0 s | — | `RECOVERING`, `DRIFT_MEASURED: 113.6m over 637m (17.84%)` |
+| 80.0 s (DONE banner) | **`DEAD_RECKONING`, no drift** | `RECOVERING`, drift on the HUD |
+
+**The fix** is the remainder, kept: `advance()` carries what it could not spend
+into the next call. Simulated time now tracks the time actually requested —
+80040 ms over an 80 s demo, against 64040 ms before.
+
+**And the timer no longer trusts its own interval.** `setInterval(50)` is a
+request, not a promise; on a phone rendering a map it lands late, and assuming
+it landed on time would slow simulated time against the wall clock all over
+again. It now advances by the gap it measures, capped at 250 ms so a
+backgrounded tab is a pause rather than a teleport down the route — the same
+reasoning `useDemoMode` already applies to its own clock.
+
+**Four regression tests**, each one failing against the old code: a tick that
+is not a whole number of IMU steps, no drift over the length of a demo, GNSS
+returning on the script's 75 s mark, and one fix per second of wall clock at
+1 Hz. The coupling under test is the real one — the sim ticked at the page's
+cadence, the outage fired at the demo's mark.
+
+**Not a retune.** The ablation is untouched; the eval harness never went
+through the timer. This is the simulator's clock, not the estimator.
+
+**Tests:** 1166 passing (was 1162; +4). Typecheck clean, `lint:core-purity`
+clean.
+
 ## NEXT PHASE
 
 **Phase 9 — Wow features** (confidence ellipse, turn detection, offline map)
