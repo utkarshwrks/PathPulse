@@ -81,7 +81,19 @@ export default function Welcome({ onTour, onSkip, buildId }: WelcomeProps) {
           <DownloadApk />
         </div>
 
-        <p className="pp-fade pp-delay-4 mt-8 text-[9.5px] uppercase tracking-[0.18em] text-neutral-700">
+        {/*
+          A way out to the written explanation, for the reader who wants the
+          numbers and the caveats before they touch a map they cannot yet
+          interpret. Deliberately quiet: it is a footnote, not a call to action.
+        */}
+        <a
+          href="about.html"
+          className="pp-press pp-fade pp-delay-4 mt-6 text-[11px] text-neutral-500 underline decoration-neutral-700 underline-offset-4 hover:text-neutral-300"
+        >
+          What is PathPulse?
+        </a>
+
+        <p className="pp-fade pp-delay-4 mt-7 text-[9.5px] uppercase tracking-[0.18em] text-neutral-700">
           SIH26168 · ISRO · Team Avinya
         </p>
         <p className="pp-fade pp-delay-4 mt-1.5 font-mono text-[9.5px] text-neutral-800">
