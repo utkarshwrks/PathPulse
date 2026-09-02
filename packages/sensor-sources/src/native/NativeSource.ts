@@ -75,6 +75,16 @@ export class NativeSource implements SensorSource {
         const acc = event.accelerationIncludingGravity;
         const rot = event.rotationRate;
         this.imuCount++;
+        // A gyro that is absent and a gyro reading exactly zero are the same
+        // number here, and they mean opposite things. Decide once, from
+        // whether the platform supplies the field at all.
+        if (this.capabilities.hasGyro === undefined) {
+          this.capabilities.hasGyro =
+            rot != null &&
+            (typeof rot.alpha === 'number' ||
+              typeof rot.beta === 'number' ||
+              typeof rot.gamma === 'number');
+        }
         this.latestImu = {
           ax: acc?.x ?? 0,
           ay: acc?.y ?? 0,

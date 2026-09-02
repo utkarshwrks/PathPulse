@@ -65,6 +65,16 @@ export class WebSource implements SensorSource {
           const rot = e.rotationRate;
           if (!acc) return;
           this.imuCount++;
+          // See SensorSourceCapabilities.hasGyro: a missing gyroscope reads as
+          // a yaw rate of zero, which is a valid number meaning the opposite
+          // thing, and dead reckoning then cannot turn at all.
+          if (this.capabilities.hasGyro === undefined) {
+            this.capabilities.hasGyro =
+              rot != null &&
+              (typeof rot.alpha === 'number' ||
+                typeof rot.beta === 'number' ||
+                typeof rot.gamma === 'number');
+          }
           this.latestImu = {
             ax: acc.x ?? 0,
             ay: acc.y ?? 0,

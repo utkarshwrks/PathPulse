@@ -1,5 +1,7 @@
 'use client';
 
+import DownloadApk from './DownloadApk';
+
 interface WelcomeProps {
   onTour: () => void;
   onSkip: () => void;
@@ -67,7 +69,19 @@ export default function Welcome({ onTour, onSkip, buildId }: WelcomeProps) {
           </button>
         </div>
 
-        <p className="pp-fade pp-delay-3 mt-9 text-[9.5px] uppercase tracking-[0.18em] text-neutral-700">
+        {/*
+          Offered on the landing screen because someone who reached this URL on
+          a phone browser is one tap from having the real app, and the browser
+          build cannot give them background sensors or native location. It sits
+          BELOW the tour rather than above it: the person already here came to
+          look, and a download prompt as the first thing on screen reads as a
+          wall rather than an offer.
+        */}
+        <div className="pp-fade pp-delay-3 mt-7 w-full border-t border-white/[0.07] pt-6">
+          <DownloadApk />
+        </div>
+
+        <p className="pp-fade pp-delay-4 mt-8 text-[9.5px] uppercase tracking-[0.18em] text-neutral-700">
           SIH26168 · ISRO · Team Avinya
         </p>
         <p className="pp-fade pp-delay-4 mt-1.5 font-mono text-[9.5px] text-neutral-800">

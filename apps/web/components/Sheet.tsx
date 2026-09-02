@@ -44,11 +44,11 @@ export default function Sheet({ title, subtitle, onClose, children }: SheetProps
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 cursor-default bg-black/65 backdrop-blur-[3px]"
       />
 
-      <div className="relative m-2 flex max-h-[88vh] flex-col rounded-2xl border border-white/15 bg-[#0d1117] shadow-2xl">
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-4 py-3">
+      <div className="pp-surface-raised pp-sheet-in relative m-2 flex max-h-[88vh] flex-col overflow-hidden">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/[0.08] px-4 py-3">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-neutral-50">{title}</h2>
             {subtitle ? (
@@ -59,7 +59,7 @@ export default function Sheet({ title, subtitle, onClose, children }: SheetProps
             type="button"
             onClick={onClose}
             aria-label={`Close ${title}`}
-            className="-mr-1 -mt-1 shrink-0 rounded-lg px-2.5 py-1.5 text-sm text-neutral-400 transition hover:bg-white/10 hover:text-neutral-100"
+            className="pp-press -mr-1 -mt-1 shrink-0 rounded-lg px-2.5 py-1.5 text-sm text-neutral-400 hover:bg-white/10 hover:text-neutral-100"
           >
             ✕
           </button>

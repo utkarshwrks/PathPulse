@@ -196,6 +196,24 @@ export interface EngineConfig extends ConstraintFlags {
    */
   gnssPositionGain: number;
   /**
+   * While confidently stationary, ignore fix movement inside this radius, m.
+   *
+   * ★ A PARKED VEHICLE MUST NOT WANDER ★
+   * ZUPT already forces velocity to zero when the vehicle is stopped, so dead
+   * reckoning contributes nothing. But in GNSS mode the shown position is
+   * still pulled a fraction of the way onto every incoming fix, and a
+   * stationary receiver keeps emitting fixes that disagree with each other by
+   * metres. The marker therefore crawls in a slow scribble while the vehicle
+   * is demonstrably parked — and every one of those metres is written into
+   * the trail permanently.
+   *
+   * Holding position while stopped is safe precisely because we know the
+   * truth: a stopped vehicle is where it already was. The radius exists so
+   * the hold cannot mask a genuine correction — a fix further away than this
+   * is a real error, not receiver noise, and is adopted normally.
+   */
+  stationaryHoldRadiusM: number;
+  /**
    * Below this the step is fix noise or hand tremor rather than travel, m/s,
    * and is not added to the distance total.
    */
@@ -230,6 +248,10 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   gnssSpeedHoldMaxMs: 12_000,
   gnssCourseMinBaselineS: 10,
   gnssPositionGain: 0.25,
+  // Wider than a good urban fix disagrees with itself (2-6 m) and than the
+  // 10 m a degraded one does, so ordinary noise is held; narrower than any
+  // movement worth following, so a real displacement still corrects.
+  stationaryHoldRadiusM: 12,
   distanceFloorMps: 0.3,
   roadSnapConfig: DEFAULT_ROAD_SNAP_CONFIG,
 };
@@ -1193,9 +1215,21 @@ export class NavigationEngine {
         // it corrects a real error within a few fixes while averaging the
         // noise away, which is the whole reason to run an estimator next to a
         // receiver instead of just drawing the receiver.
-        const gain = this.dr.isInitialised
+        let gain = this.dr.isInitialised
           ? Math.max(0, Math.min(1, this.config.gnssPositionGain))
           : 1;
+        // ★ HOLD STILL WHILE STOPPED ★
+        // ZUPT has already zeroed the velocity, so nothing is propagating the
+        // estimate; the only thing left moving the marker is the receiver
+        // disagreeing with itself. Inside the hold radius that disagreement is
+        // noise by definition — we know the vehicle is stopped — so adopting a
+        // quarter of it every fix just draws that noise into the trail. Beyond
+        // the radius the fix is asserting a real displacement and is adopted.
+        if (stationaryForZupt && this.dr.isInitialised) {
+          const de = gnssEnu.e - this.dr.current.enu.e;
+          const dn = gnssEnu.n - this.dr.current.enu.n;
+          if (Math.hypot(de, dn) < this.config.stationaryHoldRadiusM) gain = 0;
+        }
         const adopted: EnuPoint =
           gain >= 1
             ? gnssEnu
@@ -1390,6 +1424,18 @@ export class NavigationEngine {
             confidence,
             this.config.roadSnapConfig,
           );
+          // ★ THE SNAP IS DELIBERATELY NOT FED BACK INTO THE ESTIMATE ★
+          // Writing the correction into the dead-reckoning state so that it
+          // accumulates looks obviously right — a fractional snap recomputed
+          // from the same un-snapped point never converges — and it is wrong.
+          // Measured over 12 runs it took mean drift from 10.0% to 39.7% and
+          // p90 from 22.7% to 83.6%, because a cumulative cross-track pull
+          // onto a mis-matched road cannot be undone, and it corrects position
+          // while leaving the heading error that caused it untouched, so the
+          // estimate leaves the road again immediately and is dragged back
+          // harder each time. Snapping corrects what is shown; the estimator
+          // keeps its own honest opinion. Do not "fix" this without rerunning
+          // `pnpm ablation`.
           shownEnu = snapped.enu;
           this.lastMatch = match;
           if (this.lastMatchedWayId !== match.wayId) {

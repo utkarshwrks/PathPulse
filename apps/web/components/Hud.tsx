@@ -77,15 +77,15 @@ export default function Hud({
 
   return (
     <div className="pointer-events-none absolute left-3 right-16 top-3 z-10 max-w-[25rem]" data-tour="hud">
-      <div className="rounded-xl border border-white/10 bg-black/80 px-3 py-2.5 backdrop-blur-md">
+      <div className="pp-surface relative overflow-hidden px-3.5 py-3">
         {/* Mode badge — the single most-looked-at element in the demo. */}
         <div className="flex items-center gap-2">
           <span
-            className={`inline-block h-3 w-3 rounded-full ${isDr ? 'animate-pulse' : ''}`}
-            style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}` }}
+            className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${isDr ? 'pp-beacon' : ''}`}
+            style={{ backgroundColor: color, boxShadow: `0 0 12px ${color}, 0 0 3px ${color}` }}
           />
           <span
-            className="text-sm font-bold uppercase tracking-[0.12em]"
+            className="text-[13px] font-semibold uppercase tracking-[0.14em]"
             style={{ color }}
           >
             {MODE_LABELS[mode]}
@@ -127,9 +127,9 @@ export default function Hud({
         {navState ? (
           <>
             {/* Speed gets the largest type: it is the number people read first. */}
-            <div className="mt-2 flex items-end gap-3">
+            <div className="mt-3 flex items-end gap-3.5">
               <div className="flex items-baseline gap-1.5">
-                <span className="tabular font-mono text-[2rem] font-semibold leading-none text-neutral-50">
+                <span className="tabular font-mono text-[2.25rem] font-semibold leading-[0.9] tracking-tight text-white">
                   {(navState.velocityMps * 3.6).toFixed(0)}
                 </span>
                 <span className="text-[11px] font-medium text-neutral-500">km/h</span>
@@ -157,15 +157,15 @@ export default function Hud({
                 ) : null}
               </div>
               <div className="mb-0.5 flex items-baseline gap-1.5">
-                <span className="tabular font-mono text-lg leading-none text-neutral-200">
+                <span className="tabular font-mono text-[17px] leading-none text-neutral-300">
                   {navState.headingDeg.toFixed(0)}
                 </span>
                 <span className="text-[11px] text-neutral-500">°</span>
               </div>
               <div className="mb-0.5 ml-auto text-right">
                 <div
-                  className={`tabular font-mono text-lg leading-none ${
-                    isDr ? 'text-orange-300' : 'text-neutral-200'
+                  className={`tabular font-mono text-[17px] leading-none ${
+                    isDr ? 'text-orange-300' : 'text-neutral-300'
                   }`}
                 >
                   {navState.estimatedDriftM.toFixed(1)}
@@ -177,7 +177,7 @@ export default function Hud({
               </div>
             </div>
 
-            <div className="tabular mt-2 grid grid-cols-2 gap-x-4 font-mono text-[11px] leading-relaxed text-neutral-300">
+            <div className="tabular mt-3 grid grid-cols-2 gap-x-5 gap-y-0.5 border-t border-white/[0.07] pt-2.5 font-mono text-[11px] leading-relaxed text-neutral-300">
               <Cell label="drift %" value={`${driftPct.toFixed(1)} %`} accent={isDr} />
               <Cell label="distance" value={`${navState.distanceTravelledM.toFixed(0)} m`} />
               <Cell
@@ -198,10 +198,14 @@ export default function Hud({
                   {(navState.confidence * 100).toFixed(0)}%
                 </span>
               </div>
-              <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+              <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/[0.08]">
                 <div
-                  className="h-full transition-[width] duration-300"
-                  style={{ width: `${navState.confidence * 100}%`, backgroundColor: color }}
+                  className="h-full rounded-full transition-[width,background-color] duration-500 ease-out"
+                  style={{
+                    width: `${navState.confidence * 100}%`,
+                    backgroundColor: color,
+                    boxShadow: `0 0 8px ${color}`,
+                  }}
                 />
               </div>
             </div>
@@ -253,7 +257,7 @@ export default function Hud({
 
         {error ? <div className="mt-1 text-[11px] text-amber-400">{error}</div> : null}
 
-        <div className="tabular mt-2 border-t border-white/10 pt-1.5 font-mono text-[10px] text-neutral-500">
+        <div className="tabular mt-2.5 border-t border-white/[0.07] pt-2 font-mono text-[10px] leading-relaxed text-neutral-500">
           imu {imuHz.toFixed(1)} Hz · gnss {gnssHz.toFixed(2)} Hz
           {sourceName ? (
             <>

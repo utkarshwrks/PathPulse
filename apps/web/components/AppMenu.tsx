@@ -40,7 +40,7 @@ export default function AppMenu({ items, onClose }: AppMenuProps) {
   }, [onClose]);
 
   return (
-    <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/60 backdrop-blur-sm">
+    <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/65 backdrop-blur-[3px]">
       <button
         type="button"
         aria-label="Close menu"
@@ -48,7 +48,7 @@ export default function AppMenu({ items, onClose }: AppMenuProps) {
         onClick={onClose}
       />
 
-      <div className="relative m-2 rounded-2xl border border-white/15 bg-[#0d1117] p-2 shadow-2xl">
+      <div className="pp-surface-raised pp-sheet-in relative m-2 overflow-hidden p-2">
         <div className="flex items-center justify-between px-2 py-1.5">
           <span className="text-[11px] font-semibold uppercase tracking-widest text-neutral-500">
             PathPulse
@@ -71,7 +71,7 @@ export default function AppMenu({ items, onClose }: AppMenuProps) {
                 onClose();
                 item.onSelect();
               }}
-              className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/10 ${
+              className={`pp-press flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-white/[0.07] ${
                 item.primary ? 'bg-emerald-500/10' : ''
               }`}
             >

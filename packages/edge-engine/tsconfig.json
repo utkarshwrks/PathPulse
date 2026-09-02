@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    // A pure Node CLI. Unlike @pathpulse/eval this does NOT pull in
+    // sensor-sources, so there is no DOM lib here at all — the edge engine
+    // must never acquire a browser dependency, because the whole point of it
+    // is that the navigation core runs without one.
+    "types": ["node"],
+    "lib": ["ES2022"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

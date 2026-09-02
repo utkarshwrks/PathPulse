@@ -24,6 +24,7 @@ import DeviceInfo from '@/components/DeviceInfo';
 import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
+import MatchedRoadLayer from '@/components/MatchedRoadLayer';
 import ConfidenceEllipse from '@/components/ConfidenceEllipse';
 import OfflinePanel from '@/components/OfflinePanel';
 import DemoBar from '@/components/DemoBar';
@@ -37,6 +38,7 @@ import ErrorBoundary from '@/components/ErrorBoundary';
 import { useDemoMode } from '@/hooks/useDemoMode';
 import { DEMO_CONTROLS, DEMO_OUTAGE_MS } from '@/lib/demoScript';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
+import { useKeepAlive } from '@/hooks/useKeepAlive';
 import type { LatLonBounds } from '@/lib/tileCache';
 
 const MapView = dynamic(() => import('@/components/MapView'), {
@@ -59,6 +61,10 @@ type Panel =
   | 'device';
 
 export default function Home() {
+  // Keeps a free-tier host awake while the page is open. Inert on a static
+  // host, which never sleeps — see lib/keepAlive.ts for what it cannot do.
+  useKeepAlive();
+
   const [kind, setKind] = useState<SourceKind>('simulation');
   const [routeKey, setRouteKey] = useState<RouteKey>('city');
 
@@ -311,6 +317,16 @@ export default function Home() {
           />
         ) : null}
         </ErrorBoundary>
+        {/*
+          Under the trail and the marker on purpose: the highlighted road is
+          context for where the estimate sits, not the subject of the screen.
+        */}
+        <ErrorBoundary area="Matched road" fallback={null}>
+          <MatchedRoadLayer
+            graph={nav.roadGraph}
+            wayId={navState?.matchedRoad?.wayId ?? null}
+          />
+        </ErrorBoundary>
         <ErrorBoundary area="Trail" fallback={null}>
           <TrailLayer trail={trail} />
         </ErrorBoundary>
@@ -361,6 +377,7 @@ export default function Home() {
         imuHz={source.imuHz}
         gnssHz={source.gnssHz}
         updateHz={nav.updateHz}
+        hasGyro={kind === 'live' ? source.hasGyro : undefined}
       />
       </Sheet>
       </ErrorBoundary>

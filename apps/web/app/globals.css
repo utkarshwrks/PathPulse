@@ -2,21 +2,163 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------ tokens
+ *
+ * ★ ONE PLACE THE SURFACES ARE DECIDED ★
+ * Before this, every panel wrote its own `bg-black/80 border-white/10`, and
+ * they had drifted: the HUD, the sheets and the debug tabs each used a
+ * slightly different black and a slightly different hairline, which reads as
+ * carelessness long before anyone can say why. Depth is a language — a panel
+ * floating over a map should sit visibly above it — and a language needs a
+ * vocabulary rather than a value retyped at forty call sites.
+ *
+ * Mode colours deliberately stay in config/modes.ts: they are shared with the
+ * marker, the trail and tailwind.config.ts, and duplicating them here is
+ * exactly the disagreement that file exists to prevent.
+ */
 :root {
   color-scheme: dark;
+
+  /* Ground and ink. */
+  --pp-bg: #0a0e14;
+  --pp-ink: #e6edf3;
+
+  /* Elevation. Panels over a moving map need real separation from it. */
+  --pp-surface-1: rgba(11, 15, 22, 0.82);
+  --pp-surface-2: rgba(14, 19, 28, 0.92);
+  --pp-hairline: rgba(255, 255, 255, 0.09);
+  --pp-hairline-strong: rgba(255, 255, 255, 0.14);
+
+  /* A single shadow ramp, so "higher" always looks the same kind of higher. */
+  --pp-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --pp-shadow-2: 0 2px 4px rgba(0, 0, 0, 0.45), 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  --pp-accent: #38bdf8;
+
+  /*
+   * Type scale. The HUD had reached 9, 10, 10.5, 11, 12 and 32 px chosen one
+   * at a time, which is the difference between a dense interface and a untidy
+   * one. Five steps, and nothing between them.
+   */
+  --pp-text-micro: 9.5px;
+  --pp-text-tiny: 11px;
+  --pp-text-small: 13px;
+  --pp-text-body: 15px;
+  --pp-text-display: 2.25rem;
+
+  --pp-radius: 14px;
+  --pp-radius-sm: 9px;
 }
 
 html,
 body {
   height: 100%;
-  background: #0a0e14;
-  color: #e6edf3;
+  background: var(--pp-bg);
+  color: var(--pp-ink);
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 /* Numbers in the HUD must not reflow as digits change width. */
 .tabular {
   font-variant-numeric: tabular-nums;
+  /* Slightly tightened, because tabular figures are drawn on a wide advance
+   * and a long row of them otherwise reads as loose beside the labels. */
+  letter-spacing: -0.01em;
+}
+
+/* ----------------------------------------------------------- glass surfaces
+ *
+ * The frosted panel used by the HUD and every sheet. Backdrop blur is doing
+ * real work here rather than decoration: the map underneath is high-contrast
+ * and in motion, and unblurred text over a moving basemap is genuinely hard
+ * to read while a vehicle is moving.
+ */
+.pp-surface {
+  background: var(--pp-surface-1);
+  border: 1px solid var(--pp-hairline);
+  border-radius: var(--pp-radius);
+  box-shadow: var(--pp-shadow-1);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+}
+
+.pp-surface-raised {
+  background: var(--pp-surface-2);
+  border: 1px solid var(--pp-hairline-strong);
+  border-radius: var(--pp-radius);
+  box-shadow: var(--pp-shadow-2);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+}
+
+/*
+ * A one-pixel highlight along the top edge. It is the cheapest possible cue
+ * that a surface is lit from above, and it is most of why a flat rectangle
+ * starts reading as a physical panel.
+ */
+.pp-surface::before,
+.pp-surface-raised::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: var(--pp-radius) var(--pp-radius) 0 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.14) 22%,
+    rgba(255, 255, 255, 0.14) 78%,
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------- micro-interactions
+ *
+ * Every control answers the finger within one frame. On a phone held up in
+ * front of somebody, a button that does not visibly acknowledge a press reads
+ * as "it did not register" and gets pressed again — which in this app can mean
+ * restarting a demo mid-sentence.
+ */
+.pp-press {
+  transition:
+    transform 120ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 160ms ease,
+    border-color 160ms ease,
+    opacity 160ms ease;
+}
+
+.pp-press:active {
+  transform: scale(0.97);
+}
+
+/* Keyboard focus stays visible; pointer focus does not draw a ring. */
+:focus-visible {
+  outline: 2px solid var(--pp-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/*
+ * The mode dot while dead reckoning. Tailwind's `animate-pulse` fades opacity
+ * on a square timing curve, which on the single most-watched element in the
+ * demo looks like a rendering glitch rather than a deliberate alarm. This
+ * breathes the halo instead, which reads as "actively estimating".
+ */
+.pp-beacon {
+  animation: pp-beacon 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pp-beacon {
+  0%, 100% { opacity: 1; filter: brightness(1); }
+  50%      { opacity: 0.72; filter: brightness(1.35); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-beacon { animation: none; }
+  .pp-press:active { transform: none; }
 }
 
 /* MapLibre fills its container; the container is absolutely positioned. */
@@ -47,9 +189,14 @@ body {
   display: grid;
   place-items: center;
   /*
-   * Golden Rule #6: the dot must never look like it teleported. Position is
-   * eased by the map's own camera; this smooths the heading change so turns
-   * read as turns instead of snaps.
+   * Golden Rule #6: the dot must never look like it teleported. This smooths
+   * the heading change so turns read as turns instead of snaps.
+   *
+   * Position is NOT eased here — a MapLibre marker's position is not a CSS
+   * property, so `setLngLat` moves it instantly and no transition applies.
+   * VehicleMarker eases it on a rAF loop instead. This comment used to claim
+   * the map's camera did that job, which was only ever true while the camera
+   * was following, and left the marker visibly stepping once per fix.
    */
   transition:
     transform 220ms ease-out,
@@ -136,4 +283,25 @@ body {
   .pp-ring, .pp-splash-glow, .pp-bar { animation: none; }
   .pp-ring { opacity: 0.18; }
   .pp-fade, .pp-mark { animation-duration: 1ms; }
+}
+
+/*
+ * Sheets arrive from below rather than appearing.
+ *
+ * A panel that materialises gives no clue where it came from or how to get rid
+ * of it; one that rises from the bottom edge says "this slid up over the map,
+ * and it can slide back down". 190 ms is under the threshold where a
+ * transition starts to feel like waiting.
+ */
+.pp-sheet-in {
+  animation: pp-sheet-in 190ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes pp-sheet-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-sheet-in { animation-duration: 1ms; }
 }

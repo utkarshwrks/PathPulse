@@ -9,6 +9,7 @@ import {
   type NavEvent,
   type MotionContext,
   type NavigationState,
+  type RoadGraph,
   type SensorSample,
   type SessionSummary,
   type SpeedSource,
@@ -175,6 +176,15 @@ export interface NavEngineOutput {
   gnssTrail: () => Array<{ lat: number; lon: number; t: number }>;
   /** Which road graph is loaded, if any. Null means snapping cannot engage. */
   roadGraphEntry: RoadGraphEntry | null;
+  /**
+   * The loaded road graph itself, so the map can draw the road we matched.
+   *
+   * The engine already knows which way it snapped to and reports the id on
+   * every state; without the geometry the UI could name the road but not show
+   * it, which is the difference between claiming map matching works and
+   * letting someone watch it work.
+   */
+  roadGraph: RoadGraph | null;
   diagnostics: EngineDiagnostics;
   /** Phase 8: what happened when we tried to load the speed model. */
   modelInfo: ModelInfo;
@@ -198,6 +208,7 @@ export function useNavigationEngine(): NavEngineOutput {
   const [lastSample, setLastSample] = useState<SensorSample | null>(null);
   const [lastGnss, setLastGnss] = useState<LastGnss | null>(null);
   const [roadGraphEntry, setRoadGraphEntry] = useState<RoadGraphEntry | null>(null);
+  const [roadGraph, setRoadGraph] = useState<RoadGraph | null>(null);
   const graphRequestedRef = useRef(false);
   const [diagnostics, setDiagnostics] = useState<EngineDiagnostics>(EMPTY_DIAGNOSTICS);
   const [modelInfo, setModelInfo] = useState<ModelInfo>(EMPTY_MODEL_INFO);
@@ -258,6 +269,7 @@ export function useNavigationEngine(): NavEngineOutput {
         if (!found) return;
         engineRef.current?.setRoadGraph(found.graph);
         setRoadGraphEntry(found.entry);
+        setRoadGraph(found.graph);
       });
     }
 
@@ -349,6 +361,7 @@ export function useNavigationEngine(): NavEngineOutput {
     setLastGnss(null);
     gnssTrailRef.current = [];
     setRoadGraphEntry(null);
+    setRoadGraph(null);
     graphRequestedRef.current = false;
     lastGnssRef.current = null;
     lastSampleTRef.current = null;
@@ -372,6 +385,7 @@ export function useNavigationEngine(): NavEngineOutput {
       lastSample,
       lastGnss,
       roadGraphEntry,
+      roadGraph,
       diagnostics,
       modelInfo,
       stats,
@@ -389,6 +403,7 @@ export function useNavigationEngine(): NavEngineOutput {
       lastSample,
       lastGnss,
       roadGraphEntry,
+      roadGraph,
       diagnostics,
       modelInfo,
       stats,

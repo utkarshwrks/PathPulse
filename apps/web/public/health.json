@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "service": "pathpulse-web",
+  "note": "Static health document. An uptime pinger hitting this every 5 minutes keeps a free-tier web service awake; a Render Static Site never sleeps and does not need it.",
+  "generated": "2026-09-02T21:58:55.790Z"
+}

@@ -1,0 +1,36 @@
+# Render deployment for the PathPulse web app.
+#
+# ★ USE THE STATIC SITE. IT NEVER SLEEPS. ★
+# The app is `output: 'export'` — a folder of static files — so it belongs on
+# Render's Static Site plan, which has no idle suspension at all. The 15-minute
+# spin-down that makes the first visitor wait ~50 s for a cold start applies to
+# free *Web Services*, and choosing the right plan removes the problem instead
+# of managing it.
+#
+# The `pathpulse-web-service` block below is the fallback for a host that only
+# offers web services. It serves the same `out/` folder through server.mjs and
+# answers /health, so an uptime pinger can keep it warm.
+services:
+  - type: web
+    name: pathpulse
+    runtime: static
+    # Publish the APK into public/ BEFORE the site build, or the download
+    # button ships pointing at nothing. See scripts/publish-apk.mjs for why
+    # the ordering is the way it is.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: apps/web/out
+    headers:
+      # The health document must never be cached, or a pinger gets a 304 from
+      # the edge and the origin is never touched — a keep-alive that looks
+      # alive in the network panel and does nothing where it matters.
+      - path: /health.json
+        name: Cache-Control
+        value: no-store, max-age=0
+      # Let the APK be fetched from anywhere, so a QR code on a slide works.
+      - path: /downloads/*
+        name: Access-Control-Allow-Origin
+        value: '*'
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -67,3 +67,12 @@ data/maps/*.osm.pbf
 npm-debug.log*
 pnpm-debug.log*
 coverage/
+
+# ...except the one published to the website. Render builds the site but has
+# no Android SDK, so it cannot produce an APK — if the download button is to
+# work on the deployed site, that one file has to be committed.
+#
+# Tradeoff, stated: git keeps every version, so this grows the repo by ~6 MB
+# per published build. If that becomes a problem the right home is GitHub
+# Releases, and only components/DownloadApk.tsx needs to change.
+!apps/web/public/downloads/*.apk

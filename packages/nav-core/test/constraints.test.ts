@@ -410,3 +410,93 @@ function imuMoving(i: number) {
   const [sx, sy, sz] = shake(i);
   return { ax: sx, ay: sy, az: G + sz, gx: 0, gy: 0, gz: 0 };
 }
+
+describe('a parked vehicle under a jittering receiver', () => {
+  /**
+   * ★ FIELD DEFECT ★ Stopped at a light with GNSS healthy, the marker crawled
+   * a slow scribble across the map and wrote every metre of it into the trail.
+   * ZUPT was working — velocity really was zero — but the shown position is
+   * pulled a fraction of the way onto every incoming fix, and a stationary
+   * receiver disagrees with itself by metres. The motion on screen was the
+   * receiver's noise, adopted at 25% a fix and then kept for ever.
+   */
+  const G_ = 9.80665;
+  const LAT = 23.1686;
+  const LON = 79.9339;
+
+  /** A parked vehicle: sensor noise floor, plus fixes that disagree by metres. */
+  function parked(durationS: number, jitterM: number): SensorSample[] {
+    const out: SensorSample[] = [];
+    const mPerDegLat = 111_320;
+    const mPerDegLon = 111_320 * Math.cos((LAT * Math.PI) / 180);
+    for (let i = 0; i * 20 <= durationS * 1000; i++) {
+      const n = 0.004 * Math.sin(i * 0.7);
+      const s: SensorSample = {
+        t: i * 20,
+        imu: { ax: n, ay: n * 0.6, az: G_ + n, gx: n * 0.01, gy: 0, gz: n * 0.01 },
+      };
+      // One fix a second, each landing somewhere else inside the noise circle.
+      if (i % 50 === 0) {
+        const k = i / 50;
+        s.gnss = {
+          lat: LAT + (jitterM * Math.sin(k * 2.399)) / mPerDegLat,
+          lon: LON + (jitterM * Math.cos(k * 1.777)) / mPerDegLon,
+          accuracyM: 5,
+          speedMps: 0,
+          satCount: 9,
+        };
+      }
+      out.push(s);
+    }
+    return out;
+  }
+
+  it('holds position instead of crawling on receiver noise', () => {
+    const engine = new NavigationEngine();
+    const samples = parked(120, 4);
+
+    // Let it acquire and settle before measuring.
+    for (const s of samples.slice(0, 500)) engine.update(s);
+    const settled = engine.update(samples[500]!).position;
+
+    let worst = 0;
+    for (const s of samples.slice(501)) {
+      const p = engine.update(s).position;
+      const de = (p.lon - settled.lon) * 111_320 * Math.cos((LAT * Math.PI) / 180);
+      const dn = (p.lat - settled.lat) * 111_320;
+      worst = Math.max(worst, Math.hypot(de, dn));
+    }
+
+    // The fixes wander over a 4 m circle for two minutes. The marker must not
+    // follow them: it is parked, and we know it.
+    expect(worst).toBeLessThan(1);
+  });
+
+  it('still adopts a fix that asserts a real displacement', () => {
+    // The hold must not become a freeze. A fix beyond the hold radius is not
+    // noise — it is the receiver reporting that we are somewhere else — and
+    // refusing it would strand the marker at a stale position for ever.
+    const engine = new NavigationEngine();
+    for (const s of parked(30, 3)) engine.update(s);
+
+    const mPerDegLat = 111_320;
+    let last = engine.update({
+      t: 30_100,
+      imu: { ax: 0, ay: 0, az: G_, gx: 0, gy: 0, gz: 0 },
+      gnss: { lat: LAT + 60 / mPerDegLat, lon: LON, accuracyM: 5, satCount: 9 },
+    });
+    for (let i = 1; i < 200; i++) {
+      const s: SensorSample = {
+        t: 30_100 + i * 20,
+        imu: { ax: 0, ay: 0, az: G_, gx: 0, gy: 0, gz: 0 },
+      };
+      if (i % 50 === 0) {
+        s.gnss = { lat: LAT + 60 / mPerDegLat, lon: LON, accuracyM: 5, satCount: 9 };
+      }
+      last = engine.update(s);
+    }
+
+    // 60 m away is a real move; the estimate must close on it, not sit still.
+    expect((last.position.lat - LAT) * mPerDegLat).toBeGreaterThan(20);
+  });
+});

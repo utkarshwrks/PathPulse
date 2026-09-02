@@ -14,9 +14,13 @@
     "dev:lan": "pnpm --filter @pathpulse/web dev:lan",
     "dev:https": "pnpm --filter @pathpulse/web dev:https",
     "build:android": "pnpm --filter @pathpulse/web build:android && node scripts/apk-path.mjs",
+    "publish:apk": "node scripts/publish-apk.mjs",
+    "build:site": "pnpm build:android && node scripts/publish-apk.mjs && pnpm build",
     "cap:sync": "pnpm --filter @pathpulse/web cap:sync",
     "eval": "pnpm --filter @pathpulse/eval eval",
     "ablation": "pnpm --filter @pathpulse/eval ablation",
+    "edge": "pnpm --filter @pathpulse/edge-engine edge",
+    "edge:bench": "pnpm --filter @pathpulse/edge-engine bench",
     "eval:record": "pnpm --filter @pathpulse/eval record",
     "demo:log": "node scripts/make-demo-log.mjs",
     "demo:brief": "node scripts/make-offline-brief.mjs"

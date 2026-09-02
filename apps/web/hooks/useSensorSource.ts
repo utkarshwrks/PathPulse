@@ -75,6 +75,13 @@ export interface SensorSourceState {
    * and simply never found you.
    */
   gnssAvailable: boolean;
+  /**
+   * Whether the live source is delivering rotation rate. Undefined until the
+   * first motion event settles it. See SensorSourceCapabilities.hasGyro — a
+   * missing gyroscope reads as a yaw rate of zero, which is a valid number
+   * meaning the opposite thing, and dead reckoning then cannot turn at all.
+   */
+  hasGyro?: boolean;
   sourceName: string;
   recordedCount: number;
 }
@@ -193,6 +200,9 @@ export function useSensorSource(
       mode: inOutage ? 'DEAD_RECKONING' : s.gnss ? deriveGnssMode(s.gnss.accuracyM) : prev.mode,
       imuHz: rate(imuTimes.current),
       gnssHz: rate(gnssTimes.current),
+      // Read on the tick rather than at start: the platform only reveals
+      // whether it has a gyroscope once the first motion event arrives.
+      hasGyro: webRef.current?.capabilities.hasGyro,
       inOutage,
       // Whichever source is driving. Reading only the simulator left the
       // progress bar at zero for an entire replay, so a stalled backup and a

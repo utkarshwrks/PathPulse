@@ -24,6 +24,8 @@ interface TrustPanelProps {
   imuHz: number;
   gnssHz: number;
   updateHz: number;
+  /** Whether the live source is delivering rotation rate. Undefined = unknown. */
+  hasGyro?: boolean;
   /** Phase 8 — what happened when the speed model was loaded. */
   modelInfo: ModelInfo;
   /**
@@ -75,6 +77,7 @@ export default function TrustPanel({
   imuHz,
   gnssHz,
   updateHz,
+  hasGyro,
   modelInfo,
   simulated,
 }: TrustPanelProps) {
@@ -140,6 +143,7 @@ export default function TrustPanel({
                 imuHz={imuHz}
                 gnssHz={gnssHz}
                 updateHz={updateHz}
+                hasGyro={hasGyro}
                 simulated={simulated}
               />
             ) : null}
@@ -173,6 +177,7 @@ function SensorsTab({
   imuHz,
   gnssHz,
   updateHz,
+  hasGyro,
   simulated,
 }: {
   sample: SensorSample | null;
@@ -183,6 +188,7 @@ function SensorsTab({
   imuHz: number;
   gnssHz: number;
   updateHz: number;
+  hasGyro?: boolean;
   simulated: boolean;
 }) {
   const imu = sample?.imu;
@@ -195,6 +201,16 @@ function SensorsTab({
       <Group title="raw imu">
         <Axis label="ACCEL" x={imu?.ax} y={imu?.ay} z={imu?.az} unit="m/s²" digits={2} />
         <Axis label="GYRO" x={imu?.gx} y={imu?.gy} z={imu?.gz} unit="rad/s" digits={4} />
+        {/*
+          A gyroscope the platform never supplies reads as an unbroken column
+          of 0.0000, which looks like a vehicle driving perfectly straight
+          rather than like a missing sensor. Dead reckoning cannot turn without
+          it, so this says so outright instead of leaving the straight line to
+          be blamed on the estimator.
+        */}
+        {hasGyro === false && (
+          <Row k="GYRO" v="UNAVAILABLE — DR cannot track turns" warn />
+        )}
       </Group>
 
       <Group title="rates (measured)">
