@@ -2,8 +2,9 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MODE_COLORS, MODE_LABELS } from '@/config/modes';
+import DownloadCta from './DownloadCta';
 import type { SceneConstraints, SceneStatus } from './EngineScene';
 
 /**
@@ -61,6 +62,31 @@ export default function LiveHero() {
   const onStatus = useCallback((next: SceneStatus) => setS(next), []);
   const anyOff = Object.values(constraints).some((v) => !v);
 
+  /*
+   * Hero scroll progress, 0 at the top and 1 once the hero has left.
+   *
+   * Kept in a ref and never in state: this updates every scroll frame, and
+   * re-rendering the hero at 60 Hz to move a camera would be the single
+   * heaviest thing on the page. The render loop reads it directly.
+   */
+  const scrollRef = useRef(0);
+  useEffect(() => {
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        scrollRef.current = Math.min(1, window.scrollY / Math.max(window.innerHeight, 1));
+      });
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
   const mode = s?.mode ?? 'INITIALIZING';
   const color = MODE_COLORS[mode];
   const caption = CAPTIONS[s?.phase ?? 'GNSS'];
@@ -86,8 +112,12 @@ export default function LiveHero() {
 
         {/* --------------------------------------------------- the live view */}
         <div className="pp-fade pp-delay-3 mt-10 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#070a10]">
-          <div className="relative h-[340px] w-full sm:h-[440px]">
-            <EngineScene onStatus={onStatus} constraints={constraints} />
+          <div className="relative h-[420px] w-full sm:h-[560px]">
+            <EngineScene
+              onStatus={onStatus}
+              constraints={constraints}
+              scrollRef={scrollRef}
+            />
 
             {/* HUD, over the canvas, reading the same state the app's does. */}
             <div className="pointer-events-none absolute left-3 top-3 sm:left-4 sm:top-4">
@@ -202,19 +232,16 @@ export default function LiveHero() {
           is real drift. The outage is scripted; the physics is not.
         </p>
 
-        <div className="pp-fade pp-delay-4 mt-8 flex flex-wrap gap-3">
+        <div className="pp-fade pp-delay-4 mt-9 flex flex-col items-start gap-4 sm:flex-row sm:items-center">
+          <div className="w-full sm:w-[340px]">
+            <DownloadCta variant="compact" />
+          </div>
           <Link
             href="/"
-            className="pp-press rounded-xl bg-sky-500 px-5 py-3 text-[14px] font-semibold text-white shadow-lg shadow-sky-500/20 hover:bg-sky-400"
+            className="pp-press shrink-0 rounded-xl border border-white/12 px-5 py-3.5 text-[14px] text-neutral-300 hover:bg-white/5"
           >
-            Open the interactive demo
+            Open the browser demo
           </Link>
-          <a
-            href="#get"
-            className="pp-press rounded-xl border border-white/12 px-5 py-3 text-[14px] text-neutral-300 hover:bg-white/5"
-          >
-            Install on Android
-          </a>
         </div>
       </div>
     </header>

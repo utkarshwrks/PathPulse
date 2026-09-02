@@ -19,6 +19,12 @@ services:
     # the ordering is the way it is.
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
     staticPublishPath: apps/web/out
+    envVars:
+      # Pinned rather than inherited: the build runs `next build`, and a
+      # runtime that drifts under us is the classic works-locally-fails-on-
+      # deploy. package.json already declares >=20.
+      - key: NODE_VERSION
+        value: '22'
     headers:
       # The health document must never be cached, or a pinger gets a 304 from
       # the edge and the origin is never touched — a keep-alive that looks
@@ -30,7 +36,14 @@ services:
       - path: /downloads/*
         name: Access-Control-Allow-Origin
         value: '*'
+    # ★ NO CATCH-ALL REWRITE ★
+    # The single-page pattern (`/*` -> /index.html) is wrong here and would
+    # have been a silent, deploy-only bug: this is a Next static export with
+    # several real HTML files, so routing everything to index.html would have
+    # served the app at /about.html and made the landing page unreachable in
+    # production while working perfectly on localhost. Render serves the files
+    # that exist; only the not-found case needs a rule.
     routes:
       - type: rewrite
-        source: /*
-        destination: /index.html
+        source: /404
+        destination: /404.html

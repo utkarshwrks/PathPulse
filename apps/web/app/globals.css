@@ -327,3 +327,114 @@ body {
 [id] {
   scroll-margin-top: 72px;
 }
+
+/* ------------------------------------------------------------ ambient glow
+ *
+ * Slow-drifting colour behind the whole page.
+ *
+ * ★ WHY IT IS CSS AND NOT A SECOND CANVAS ★
+ * The hero already owns a WebGL context running the navigation engine. A
+ * second animated canvas for decoration would compete with it for the main
+ * thread on exactly the mid-range phones this project is about. These are
+ * three blurred radial gradients moved by transform only — compositor work,
+ * no layout, no paint, and it costs effectively nothing.
+ *
+ * Three hues rather than one, because a page built from a single blue reads
+ * as a template. Cyan carries the brand, violet gives the dark end depth, and
+ * amber is the outage colour the estimator itself uses.
+ */
+.pp-aurora {
+  position: fixed;
+  inset: -20vh -20vw;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  filter: blur(90px) saturate(130%);
+}
+
+.pp-aurora span {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  opacity: 0.5;
+  will-change: transform;
+}
+
+.pp-aurora span:nth-child(1) {
+  width: 46vw; height: 46vw; left: -6vw; top: 2vh;
+  background: radial-gradient(circle, rgba(56,189,248,0.42), transparent 68%);
+  animation: pp-drift-a 26s ease-in-out infinite;
+}
+.pp-aurora span:nth-child(2) {
+  width: 40vw; height: 40vw; right: -4vw; top: 22vh;
+  background: radial-gradient(circle, rgba(129,72,255,0.34), transparent 68%);
+  animation: pp-drift-b 32s ease-in-out infinite;
+}
+.pp-aurora span:nth-child(3) {
+  width: 34vw; height: 34vw; left: 32vw; top: 52vh;
+  background: radial-gradient(circle, rgba(249,115,22,0.22), transparent 70%);
+  animation: pp-drift-c 38s ease-in-out infinite;
+}
+
+@keyframes pp-drift-a {
+  0%,100% { transform: translate3d(0,0,0) scale(1); }
+  50%     { transform: translate3d(9vw,7vh,0) scale(1.18); }
+}
+@keyframes pp-drift-b {
+  0%,100% { transform: translate3d(0,0,0) scale(1.1); }
+  50%     { transform: translate3d(-11vw,10vh,0) scale(0.92); }
+}
+@keyframes pp-drift-c {
+  0%,100% { transform: translate3d(0,0,0) scale(0.95); }
+  50%     { transform: translate3d(7vw,-9vh,0) scale(1.22); }
+}
+
+/* --------------------------------------------------------------- the CTA
+ *
+ * The download button is the page's single conversion, so it gets the only
+ * continuously animated affordance on the site. A sheen that sweeps across it
+ * every few seconds, and a ring that breathes — enough to catch the eye in
+ * peripheral vision, slow enough not to nag.
+ */
+.pp-cta {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.pp-cta::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    105deg,
+    transparent 38%,
+    rgba(255, 255, 255, 0.28) 50%,
+    transparent 62%
+  );
+  transform: translateX(-120%);
+  animation: pp-sheen 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes pp-sheen {
+  0%, 62% { transform: translateX(-120%); }
+  92%,100% { transform: translateX(120%); }
+}
+
+.pp-cta-ring {
+  animation: pp-cta-ring 2.8s ease-out infinite;
+}
+
+@keyframes pp-cta-ring {
+  0%   { transform: scale(1);    opacity: 0.5; }
+  70%  { opacity: 0; }
+  100% { transform: scale(1.14); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-aurora span,
+  .pp-cta::after,
+  .pp-cta-ring { animation: none; }
+}

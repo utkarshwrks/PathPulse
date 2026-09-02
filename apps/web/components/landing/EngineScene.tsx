@@ -61,9 +61,12 @@ export interface SceneConstraints {
 export default function EngineScene({
   onStatus,
   constraints,
+  scrollRef,
 }: {
   onStatus?: (s: SceneStatus) => void;
   constraints?: SceneConstraints;
+  /** 0 at the top of the hero, 1 once it has scrolled away. Flies the drone. */
+  scrollRef?: React.MutableRefObject<number>;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [failed, setFailed] = useState(false);
@@ -82,13 +85,29 @@ export default function EngineScene({
     // Somebody who asked for less motion gets a still frame, not a loop.
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+    /*
+     * ★ WebGLRenderer LOGS, IT DOES NOT THROW ★
+     * When a context cannot be created three prints an error and returns a
+     * renderer whose GL calls then fail. A try/catch around the constructor
+     * therefore never fires, `failed` stays false, and the first render blows
+     * up inside requestAnimationFrame — which React surfaces as "Application
+     * error: a client-side exception has occurred" and a blank page. This was
+     * a real crash on the deployed site.
+     *
+     * So probe for a context first, and verify one actually came back.
+     */
+    const probe = document.createElement('canvas');
+    const supported = !!(probe.getContext('webgl2') || probe.getContext('webgl'));
+    if (!supported) {
+      setFailed(true);
+      return;
+    }
+
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      if (!renderer.getContext()) throw new Error('no GL context');
     } catch {
-      // WebGL is unavailable often enough on older Android browsers that a
-      // blank rectangle here would be a real first impression. Fail to the
-      // static fallback instead.
       setFailed(true);
       return;
     }
@@ -102,6 +121,9 @@ export default function EngineScene({
     renderer.domElement.style.display = 'block';
 
     const scene = new THREE.Scene();
+    // Depth grading. Near roads read bright, far ones dissolve into the page
+    // background — without it the network ends at a visible horizon line.
+    scene.fog = new THREE.Fog(0x05070b, 700, 2600);
     const camera = new THREE.PerspectiveCamera(
       42,
       host.clientWidth / Math.max(host.clientHeight, 1),
@@ -111,15 +133,58 @@ export default function EngineScene({
 
     /* ---------------------------------------------------------- the world */
 
-    const grid = new THREE.GridHelper(3000, 60, 0x1b2534, 0x121a26);
-    (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.55;
-    scene.add(grid);
-
-    // The route itself, in local metres, drawn as the road the vehicle is on.
     const route = cityRoute as unknown as RouteGeoJson;
     const coords = route.geometry.coordinates as Array<[number, number]>;
     const ref = { lat: coords[0]![1], lon: coords[0]![0] };
+
+    /*
+     * ★ THE ROADS ARE THE REAL GRAPH, NOT SCENERY ★
+     * The first version drew the vehicle on an empty grid, which read as a
+     * tech demo of a moving dot. These are the 725 OpenStreetMap ways the
+     * estimator actually snaps against, so the picture and the mechanism are
+     * the same thing.
+     *
+     * Merged into two LineSegments by weight class: 725 ways cost two draw
+     * calls instead of 725, which on a mid-range phone is the whole
+     * difference between smooth and not.
+     */
+    const MAJOR = new Set([
+      'primary', 'secondary', 'tertiary', 'trunk', 'motorway',
+      'secondary_link', 'primary_link',
+    ]);
+    const buildNetwork = (ways: Array<{ highway?: string; coords: Array<[number, number]> }>) => {
+      const major: number[] = [];
+      const minor: number[] = [];
+      for (const w of ways) {
+        if (!w.coords || w.coords.length < 2) continue;
+        const bucket = MAJOR.has(w.highway ?? '') ? major : minor;
+        for (let i = 0; i < w.coords.length - 1; i++) {
+          const a = latLonToEnu(w.coords[i]![1], w.coords[i]![0], ref.lat, ref.lon);
+          const b = latLonToEnu(w.coords[i + 1]![1], w.coords[i + 1]![0], ref.lat, ref.lon);
+          bucket.push(a.e, 0, -a.n, b.e, 0, -b.n);
+        }
+      }
+      const mk = (arr: number[], color: number, opacity: number) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+        return new THREE.LineSegments(
+          g,
+          new THREE.LineBasicMaterial({ color, transparent: true, opacity }),
+        );
+      };
+      scene.add(mk(minor, 0x1b2942, 0.7));
+      scene.add(mk(major, 0x2f4a6b, 0.95));
+    };
+    // The bundled asset, same file the app reads. If it is missing the scene
+    // still runs — the vehicle and the story matter more than the scenery.
+    void fetch('maps/road_graph_city.json')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((g: { ways: Array<{ highway?: string; coords: Array<[number, number]> }> } | null) => {
+        if (g) buildNetwork(g.ways);
+      })
+      .catch(() => undefined);
+
+    // The route itself, in local metres, drawn as the road the vehicle is on.
     const routePts = coords.map(([lon, lat]) => {
       const e = latLonToEnu(lat, lon, ref.lat, ref.lon);
       return new THREE.Vector3(e.e, 0, -e.n);
@@ -243,6 +308,8 @@ export default function EngineScene({
 
     let raf = 0;
     let last = performance.now();
+    const camPos = new THREE.Vector3(0, 320, 420);
+    const camLook = new THREE.Vector3();
     let visible = true;
     let onScreen = true;
 
@@ -270,7 +337,21 @@ export default function EngineScene({
     ro.observe(host);
     resize();
 
+    /*
+     * Context loss is routine on mobile under memory pressure, and the default
+     * behaviour makes every later GL call throw. Cancelling the event lets the
+     * scene stop cleanly and show its fallback rather than take the page down.
+     */
+    let contextLost = false;
+    const onLost = (e: Event) => {
+      e.preventDefault();
+      contextLost = true;
+      setFailed(true);
+    };
+    renderer.domElement.addEventListener('webglcontextlost', onLost);
+
     const tick = (now: number) => {
+      if (contextLost) return;
       raf = requestAnimationFrame(tick);
       const dtReal = Math.min(now - last, 100);
       last = now;
@@ -351,13 +432,35 @@ export default function EngineScene({
       ellipse.rotation.z = -(state.headingDeg * Math.PI) / 180;
       (ellipse.material as THREE.MeshBasicMaterial).color.set(col);
 
-      // Camera trails the vehicle with a slow lag, so the eye follows motion
-      // rather than being locked rigidly to it.
-      const want = new THREE.Vector3(p.e - 150, 320, -p.n + 330);
-      camera.position.lerp(want, 0.045);
-      camera.lookAt(p.e, 0, -p.n);
+      /* ------------------------------------------------------ drone camera */
+      // Scroll flies the drone up and back, so the network opens out beneath
+      // the vehicle as the reader leaves the hero — the page's motion and the
+      // camera's are the same gesture. A slow orbit keeps the frame alive on
+      // straights, and a whisper of roll reads as flying rather than sliding.
+      const k = scrollRef ? Math.max(0, Math.min(1, scrollRef.current)) : 0;
+      const orbit = now / 14000;
+      const yawC = -(state.headingDeg * Math.PI) / 180;
+      const dist = 400 + k * 760;
+      const want = new THREE.Vector3(
+        p.e - Math.sin(yawC + Math.sin(orbit) * 0.45) * dist,
+        290 + k * 880,
+        -p.n + Math.cos(yawC + Math.sin(orbit) * 0.45) * dist,
+      );
+      camPos.lerp(want, 0.035);
+      camera.position.copy(camPos);
+      // Lerping the look-at target too stops the frame snapping on every turn.
+      camLook.lerp(new THREE.Vector3(p.e, 0, -p.n), 0.09);
+      camera.lookAt(camLook);
+      camera.rotation.z += Math.sin(orbit * 2.1) * 0.014;
 
-      renderer.render(scene, camera);
+      try {
+        renderer.render(scene, camera);
+      } catch {
+        // A decorative hero is never worth taking the whole page down for.
+        contextLost = true;
+        setFailed(true);
+        return;
+      }
 
       const phase: Phase =
         simT < OUTAGE_START_MS ? 'GNSS' : simT < OUTAGE_END_MS ? 'OUTAGE' : 'RECOVERY';
@@ -382,13 +485,14 @@ export default function EngineScene({
       io.disconnect();
       ro.disconnect();
       document.removeEventListener('visibilitychange', onVis);
+      renderer.domElement.removeEventListener('webglcontextlost', onLost);
       renderer.dispose();
       roadGeom.dispose();
       trailGeom.dispose();
       truthGeom.dispose();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [scrollRef]);
 
   if (failed) {
     return (
