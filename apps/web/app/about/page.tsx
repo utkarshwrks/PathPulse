@@ -2,6 +2,18 @@
 
 import Link from 'next/link';
 import DownloadApk from '@/components/DownloadApk';
+import dynamic from 'next/dynamic';
+import LiveHero from '@/components/landing/LiveHero';
+import Reveal from '@/components/landing/Reveal';
+import AblationTable from '@/components/landing/AblationTable';
+import SiteNav from '@/components/landing/SiteNav';
+
+// MapLibre needs a real DOM and pulls its own CSS, so it never renders on the
+// server and is not paid for until this section is reached.
+const RoadGraphMap = dynamic(() => import('@/components/landing/RoadGraphMap'), {
+  ssr: false,
+  loading: () => <div className="h-[300px] animate-pulse rounded-xl bg-white/[0.03] sm:h-[380px]" />,
+});
 
 /**
  * The public landing page.
@@ -25,13 +37,18 @@ import DownloadApk from '@/components/DownloadApk';
  */
 export default function About() {
   return (
-    <main className="min-h-screen bg-[#05070b] text-neutral-300">
-      <Hero />
+    <main id="top" className="min-h-screen bg-[#05070b] text-neutral-300">
+      <SiteNav />
+      <LiveHero />
       <Problem />
       <HowItWorks />
       <Results />
+      <Ablation />
+      <Maps />
       <Ai />
       <Deliverables />
+      <EdgeEngine />
+      <Stack />
       <Honest />
       <Get />
       <Footer />
@@ -39,58 +56,11 @@ export default function About() {
   );
 }
 
-/* ------------------------------------------------------------------- hero */
-
-function Hero() {
-  return (
-    <header className="relative overflow-hidden border-b border-white/[0.06]">
-      {/* The same motif the splash uses: a position broadcast, and lost. */}
-      <div className="pp-splash-glow pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/3" />
-      <div className="relative mx-auto max-w-3xl px-6 py-20 sm:py-28">
-        <p className="pp-fade text-[10.5px] font-medium uppercase tracking-[0.2em] text-sky-400/80">
-          Smart India Hackathon 2026 · SIH26168 · ISRO
-        </p>
-        <h1 className="pp-fade pp-delay-1 mt-5 text-[2.6rem] font-bold leading-[1.05] tracking-tight text-white sm:text-[3.4rem]">
-          Navigation that does not stop
-          <br />
-          <span className="text-sky-400">when the satellites do.</span>
-        </h1>
-        <p className="pp-fade pp-delay-2 mt-6 max-w-xl text-[15px] leading-relaxed text-neutral-400">
-          In a tunnel, a basement car park, or between tall buildings, GNSS
-          disappears and the blue dot freezes or scatters. PathPulse keeps it
-          moving — estimating vehicle motion from the phone&rsquo;s own inertial
-          sensors, constraining it with vehicle physics and road geometry, and
-          sliding it back onto truth when satellites return.
-        </p>
-        <p className="pp-fade pp-delay-3 mt-5 text-[13px] leading-relaxed text-neutral-500">
-          No internet. No cloud API. No hardware in the vehicle. An ordinary
-          Android phone.
-        </p>
-
-        <div className="pp-fade pp-delay-4 mt-9 flex flex-wrap gap-3">
-          <Link
-            href="/"
-            className="pp-press rounded-xl bg-sky-500 px-5 py-3 text-[14px] font-semibold text-white shadow-lg shadow-sky-500/20 hover:bg-sky-400"
-          >
-            Open the live demo
-          </Link>
-          <a
-            href="#get"
-            className="pp-press rounded-xl border border-white/12 px-5 py-3 text-[14px] text-neutral-300 hover:bg-white/5"
-          >
-            Install the app
-          </a>
-        </div>
-      </div>
-    </header>
-  );
-}
-
 /* ---------------------------------------------------------------- problem */
 
 function Problem() {
   return (
-    <Section eyebrow="The problem" title="Satellite signals cannot pass through concrete.">
+    <Section id="problem" eyebrow="The problem" title="Satellite signals cannot pass through concrete.">
       <p className="max-w-2xl text-[15px] leading-relaxed text-neutral-400">
         GNSS signals arrive about as faint as a 20-watt bulb seen from
         20,000&nbsp;km. They do not survive a tunnel, a basement, or an urban
@@ -124,7 +94,7 @@ function Problem() {
 
 function HowItWorks() {
   return (
-    <Section eyebrow="How it works" title="Dead reckoning, and five rules that stop it drifting.">
+    <Section id="how" eyebrow="How it works" title="Dead reckoning, and five rules that stop it drifting.">
       <p className="max-w-2xl text-[15px] leading-relaxed text-neutral-400">
         Dead reckoning is older than electricity: if you know where you started,
         how fast you have gone and which way you were pointing, you can compute
@@ -177,7 +147,7 @@ function HowItWorks() {
 
 function Results() {
   return (
-    <Section eyebrow="Measured" title="10.0% mean drift — and the tail we do not hide.">
+    <Section id="results" eyebrow="Measured" title="10.0% mean drift — and the tail we do not hide.">
       <div className="grid gap-px overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.06] sm:grid-cols-4">
         {[
           ['10.0%', 'mean drift'],
@@ -237,7 +207,7 @@ function Results() {
 
 function Ai() {
   return (
-    <Section eyebrow="The AI" title="The one thing physics alone cannot answer.">
+    <Section id="ai" eyebrow="The AI" title="The one thing physics alone cannot answer.">
       <p className="max-w-2xl text-[15px] leading-relaxed text-neutral-400">
         An accelerometer measures <em className="not-italic text-neutral-200">changes</em>{' '}
         in speed. At a steady 50&nbsp;km/h on a smooth road it reads the same as
@@ -283,6 +253,39 @@ function Ai() {
         exact place this app exists to serve there is none — which is not a
         limitation but a disqualification.
       </p>
+
+      {/*
+        ★ THE SCREENING ARTEFACT ★
+        The problem statement requires the position plot inferred from IO-VNBD
+        as part of the proposal — it is an entry ticket, not a bonus. This is
+        that file, produced by ml/evaluate_position.py, not a redrawing of it.
+      */}
+      <figure className="mt-9 overflow-hidden rounded-xl border border-white/[0.08] bg-[#080b11]">
+        <div className="border-b border-white/[0.07] px-5 py-3">
+          <span className="rounded bg-sky-500/15 px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-sky-300">
+            Required screening artefact
+          </span>
+          <p className="mt-2 text-[12.5px] text-neutral-400">
+            Position plot inferred from a held-out IO-VNBD sequence — predicted
+            trajectory against known truth.
+          </p>
+        </div>
+        {/* Plain <img>: next/image's optimiser is disabled under static export
+            anyway, so it would add an abstraction and no benefit. */}
+        <img
+          src="ml/position_plot.png"
+          alt="Predicted vehicle trajectory against ground truth, speed over time, and position error, from the IO-VNBD held-out sequence."
+          className="w-full bg-white"
+          loading="lazy"
+          decoding="async"
+        />
+        <figcaption className="border-t border-white/[0.07] px-5 py-3 text-[11.5px] leading-relaxed text-neutral-500">
+          Generated by <code className="text-neutral-400">ml/evaluate_position.py</code>{' '}
+          on sequence <code className="text-neutral-400">Vw02</code>, held out
+          entirely from training. Dead reckoning driven by the model&rsquo;s own
+          speed predictions, scored against the recorded path.
+        </figcaption>
+      </figure>
     </Section>
   );
 }
@@ -291,7 +294,7 @@ function Ai() {
 
 function Deliverables() {
   return (
-    <Section eyebrow="Architecture" title="One navigation core, two deployment targets.">
+    <Section id="arch" eyebrow="Architecture" title="One navigation core, two deployment targets.">
       <p className="max-w-2xl text-[15px] leading-relaxed text-neutral-400">
         Every line of navigation mathematics lives in one pure TypeScript
         package that may not touch the screen, the network, the file system or
@@ -320,6 +323,133 @@ function Deliverables() {
   );
 }
 
+/* --------------------------------------------------------------- ablation */
+
+function Ablation() {
+  return (
+    <Section
+      id="ablation"
+      eyebrow="Ablation"
+      title="Every constraint, measured one at a time."
+    >
+      <p className="mb-7 max-w-2xl text-[15px] leading-relaxed text-neutral-400">
+        Each row differs from the one above it by exactly one component, so
+        every improvement is attributable to something specific rather than to
+        the system as a whole. This is the difference between an engineering
+        result and a claim.
+      </p>
+      <AblationTable />
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------------- maps */
+
+function Maps() {
+  return (
+    <Section
+      id="maps"
+      eyebrow="Offline maps"
+      title="The road network ships inside the app."
+    >
+      <p className="mb-7 max-w-2xl text-[15px] leading-relaxed text-neutral-400">
+        Road snapping needs geometry, and a tunnel has no network to fetch it
+        from. So the graph is generated once from OpenStreetMap and bundled —
+        every way below is in the APK, read by the estimator at 10&nbsp;Hz
+        through a grid spatial index. Nothing here touches the network at
+        runtime.
+      </p>
+      <RoadGraphMap />
+      <p className="mt-4 max-w-2xl text-[12.5px] leading-relaxed text-neutral-500">
+        The dashed rectangle is the coverage boundary. Outside it the app
+        reports that it has no graph rather than pretending to match — an
+        unmatched position is a real state, and inventing a road for it would be
+        the one lie map matching must never tell.
+      </p>
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------ edge engine */
+
+function EdgeEngine() {
+  return (
+    <Section
+      id="edge"
+      eyebrow="Edge engine"
+      title="The same estimator, off the phone, at 200 Hz."
+    >
+      <p className="max-w-2xl text-[15px] leading-relaxed text-neutral-400">
+        The problem statement asks for models that work with external inertial
+        sensors, not only a handset&rsquo;s. Because the core has no
+        phone-specific dependencies, that was a porting exercise: a Node CLI
+        that consumes an external IMU stream and emits the same navigation
+        state.
+      </p>
+      <div className="mt-7 grid gap-px overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.06] sm:grid-cols-3">
+        {[
+          ['0.013 ms', 'mean update latency', 'the budget at 200 Hz is 5 ms'],
+          ['370\u00d7', 'faster than real time', 'so the rate is not the bottleneck'],
+          ['3', 'sensor grades', 'phone MEMS, tactical, fibre-optic'],
+        ].map(([n, l, sub]) => (
+          <div key={l} className="bg-[#080b11] p-5">
+            <div className="tabular font-mono text-[1.5rem] font-semibold leading-none text-white">
+              {n}
+            </div>
+            <div className="mt-2 text-[11px] text-neutral-300">{l}</div>
+            <div className="mt-1 text-[11px] leading-snug text-neutral-600">{sub}</div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-5 max-w-2xl rounded-lg border border-amber-400/20 bg-amber-500/[0.05] px-4 py-3 text-[12.5px] leading-relaxed text-neutral-400">
+        <span className="font-semibold text-amber-300">Stated plainly:</span> we
+        do not own a fibre-optic or tactical IMU — they cost several lakh rupees,
+        and the requirement is to support that class of <em className="not-italic">data</em>,
+        not to possess the hardware. Those grades are datasheet noise models
+        driving a simulator, and every figure from them is a simulation result.
+      </p>
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------------ stack */
+
+function Stack() {
+  const rows: Array<[string, string, string]> = [
+    ['Navigation core', 'Pure TypeScript', 'Zero dependencies, zero I/O. Enforced on every build.'],
+    ['Mobile app', 'Next.js 14 + Capacitor 6', 'Static export wrapped into a ~6 MB APK.'],
+    ['Maps', 'MapLibre GL + OpenStreetMap', 'Free, offline-capable, no proprietary tiles.'],
+    ['Model training', 'PyTorch', '1D-CNN on IO-VNBD; exported to ONNX.'],
+    ['On-device inference', 'Hand-written TypeScript', 'No ONNX Runtime — it would have cost 14 MB of WebAssembly for a 26k-parameter model.'],
+    ['Edge engine', 'Node.js', 'Same core, external IMU adapters.'],
+    ['Testing', 'Vitest', '1,191 tests across five packages.'],
+  ];
+  return (
+    <Section id="stack" eyebrow="Built with" title="Free tools, and one deliberate omission.">
+      <div className="space-y-px overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.06]">
+        {rows.map(([area, tech, why]) => (
+          <div key={area} className="bg-[#080b11] px-5 py-3.5 sm:flex sm:gap-5">
+            <span className="block text-[12.5px] font-medium text-neutral-500 sm:w-44 sm:shrink-0">
+              {area}
+            </span>
+            <span className="mt-1 block text-[13px] font-semibold text-neutral-200 sm:mt-0 sm:w-56 sm:shrink-0">
+              {tech}
+            </span>
+            <span className="mt-1 block text-[12px] leading-relaxed text-neutral-500 sm:mt-0">
+              {why}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-5 max-w-2xl text-[13px] leading-relaxed text-neutral-500">
+        Total spend: <span className="text-neutral-300">&#8377;0</span>. No paid
+        APIs, no IoT hardware, no cloud inference. The dataset, the map data and
+        every library are open.
+      </p>
+    </Section>
+  );
+}
+
 /* ------------------------------------------------------------- limitations */
 
 function Honest() {
@@ -336,6 +466,7 @@ function Honest() {
   ];
   return (
     <Section
+      id="honest"
       eyebrow="Honest position"
       title="What is built, and what is not."
     >
@@ -445,16 +576,18 @@ function Footer() {
 /* ------------------------------------------------------------- primitives */
 
 function Section({
+  id,
   eyebrow,
   title,
   children,
 }: {
+  id?: string;
   eyebrow: string;
   title: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-t border-white/[0.06]">
+    <section id={id} className="border-t border-white/[0.06]">
       <div className="mx-auto max-w-3xl px-6 py-16">
         <p className="text-[10.5px] font-medium uppercase tracking-[0.2em] text-sky-400/70">
           {eyebrow}
@@ -462,7 +595,7 @@ function Section({
         <h2 className="mt-3 max-w-2xl text-[1.6rem] font-bold leading-tight tracking-tight text-white sm:text-[1.9rem]">
           {title}
         </h2>
-        <div className="mt-7">{children}</div>
+        <Reveal className="mt-7">{children}</Reveal>
       </div>
     </section>
   );

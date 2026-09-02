@@ -53,10 +53,12 @@
 html,
 body {
   height: 100%;
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
   background: var(--pp-bg);
   color: var(--pp-ink);
   overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
   text-rendering: optimizeLegibility;
 }
 
@@ -304,4 +306,24 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .pp-sheet-in { animation-duration: 1ms; }
+}
+
+/*
+ * The sticky nav gains a surface only once the page has scrolled.
+ *
+ * Over the hero it should be invisible — a bar drawn across a full-bleed WebGL
+ * scene cuts the one image the page is built around in half. Once content is
+ * behind it, it needs to separate from that content or the two sets of text
+ * interleave while scrolling.
+ */
+.pp-nav-solid {
+  background: rgba(5, 7, 11, 0.72);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Anchored sections must not slide under the sticky bar when jumped to. */
+[id] {
+  scroll-margin-top: 72px;
 }

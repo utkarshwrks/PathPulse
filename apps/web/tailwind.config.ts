@@ -18,7 +18,17 @@ const config: Config = {
         },
       },
       fontFamily: {
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        // next/font sets these variables in layout.tsx; the stacks after them
+        // are what renders if the webfont is unavailable — which matters,
+        // because the APK runs with every radio off.
+        sans: ['var(--font-sans)', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: [
+          'var(--font-mono)',
+          'ui-monospace',
+          'SFMono-Regular',
+          'Menlo',
+          'monospace',
+        ],
       },
     },
   },
