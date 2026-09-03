@@ -228,10 +228,8 @@ describe('applyRoadSnap — cross-track only', () => {
     expect(after.enu.n).toBeCloseTo(before.n, 9);
   });
 
-  it('leaves along-track alone even when the nearest point is far along', () => {
-    // Standing past the end of a road: the nearest point is the endpoint, so a
-    // naive lerp toward it would drag the marker 100 m backwards down the road.
-    const short = indexOf(
+  const shortRoad = () =>
+    indexOf(
       graphOf(
         wayFromEnu('s', [
           [0, 0],
@@ -239,11 +237,51 @@ describe('applyRoadSnap — cross-track only', () => {
         ]),
       ),
     );
+
+  it('BOUNDS the along-track correction past the end of a road, rather than forbidding it', () => {
+    // ★ THE ONE EXCEPTION, AND WHY IT EXISTS ★
+    //
+    // Standing 40 m past the end of a 100 m road, the nearest point on it is
+    // the endpoint, so the offset to that point is almost entirely ALONG the
+    // road. The strict rule discarded that component — and therefore moved the
+    // marker almost nowhere, leaving it drawn in a field off the end of a road
+    // while the panel named the road it was not on. In the field measurement
+    // that geometry accounted for every remaining off-road excursion.
+    //
+    // So the correction is capped, not banned: the map may nudge the marker
+    // onto the end of a road, it may never carry it down one. The cap is what
+    // preserves the original rule's purpose.
     const before = { e: 10, n: 140 };
-    const match = findRoadMatch(before, 0, short, null)!;
+    const match = findRoadMatch(before, 0, shortRoad(), null)!;
     const after = applyRoadSnap(before, match, 0);
-    expect(after.enu.n).toBeCloseTo(140, 6);
+
+    const alongMoved = Math.abs(after.enu.n - before.n);
+    expect(alongMoved).toBeGreaterThan(0);
+    expect(alongMoved).toBeLessThanOrEqual(DEFAULT_ROAD_SNAP_CONFIG.maxAlongCorrectionM + 1e-6);
+    // And it moves TOWARD the road, never away down it.
+    expect(after.enu.n).toBeLessThan(before.n);
     expect(Math.abs(after.enu.e)).toBeLessThan(10);
+  });
+
+  it('restores the strict cross-track-only rule when the cap is zero', () => {
+    // The old behaviour is still expressible, and still tested, so the change
+    // is a deliberate bound rather than a quietly abandoned invariant.
+    const before = { e: 10, n: 140 };
+    const match = findRoadMatch(before, 0, shortRoad(), null)!;
+    const after = applyRoadSnap(before, match, 0, {
+      ...DEFAULT_ROAD_SNAP_CONFIG,
+      maxAlongCorrectionM: 0,
+    });
+    expect(after.enu.n).toBeCloseTo(140, 9);
+  });
+
+  it('never moves along-track at all for an ordinary interior match', () => {
+    // The common case, which is the whole point: alongside a road, the
+    // perpendicular foot has no along component and none is invented.
+    const before = { e: 30, n: 250 };
+    const match = findRoadMatch(before, 0, idx, null)!;
+    const after = applyRoadSnap(before, match, 0.5);
+    expect(after.enu.n).toBeCloseTo(before.n, 9);
   });
 
   it('snaps harder when confidence is low', () => {
@@ -357,5 +395,107 @@ describe('canTrustSpeedLimit — matching a road and trusting its limit differ',
     const m = findRoadMatch({ e: 3, n: 0 }, 0, untagged, null)!;
     expect(m.maxspeedKph).toBeUndefined();
     expect(canTrustSpeedLimit(m, 0, false)).toBe(false);
+  });
+});
+
+describe('road snapping — staying on the road during an outage', () => {
+  /**
+   * ★ THE FIELD BUG ★
+   * "When it goes to dead reckoning it goes off the road, into the plots."
+   *
+   * Measured over the committed logs before these tests existed: 27 % of
+   * dead-reckoning samples were DRAWN more than 10 m from any road, the worst
+   * 106 m out. Three causes, one test each.
+   */
+  const road = () =>
+    indexOf(
+      graphOf(
+        wayFromEnu('main', [
+          [0, -1000],
+          [0, 1000],
+        ]),
+      ),
+    );
+
+  it('a full-strength snap puts the marker ON the road, not most of the way there', () => {
+    // Cause 1: strength was `1 - confidence` clamped to [0.1, 0.7]. On the
+    // first second of an outage confidence is still 1, so it applied a TENTH
+    // of the correction — and it could never exceed 70 %, so a permanent 30 %
+    // of a growing error was always on screen.
+    const before = { e: 40, n: 0 };
+    const match = findRoadMatch(before, 0, road(), null)!;
+
+    const old = applyRoadSnap(before, match, 1); // the old confidence rule
+    expect(Math.abs(old.enu.e)).toBeGreaterThan(30); // still 36 m off the road
+
+    const full = applyRoadSnap(before, match, 1, DEFAULT_ROAD_SNAP_CONFIG, 1);
+    expect(Math.abs(full.enu.e)).toBeLessThan(0.001); // on it
+    expect(full.enu.n).toBeCloseTo(0, 9); // and no along-track invention
+  });
+
+  it('the widened radius still finds the road when the estimate has wandered', () => {
+    // Cause 2: with one fixed 50 m radius, snapping switches itself off at the
+    // exact moment it becomes the only evidence left — and the marker is then
+    // free to wander open ground for the rest of the outage.
+    const idx = road();
+    const far = { e: 120, n: 0 };
+
+    expect(findRoadMatch(far, 0, idx, null)).toBeNull();
+
+    const wide = findRoadMatch(
+      far,
+      0,
+      idx,
+      null,
+      DEFAULT_ROAD_SNAP_CONFIG,
+      DEFAULT_ROAD_SNAP_CONFIG.wideSearchRadiusM,
+    );
+    expect(wide).not.toBeNull();
+    expect(wide!.distanceM).toBeCloseTo(120, 0);
+  });
+
+  it('continuity does not survive running off the end of the held way', () => {
+    // Cause 3, and the subtlest. Past the end of a way the correction to it is
+    // almost entirely ALONG the road, which the snap discards — so it computed
+    // a 23 m error and moved the marker zero metres, leaving it in a field at
+    // the end of a road while the panel named the road it was not on. The
+    // continuity bonus was what held it there.
+    const idx = indexOf(
+      graphOf(
+        wayFromEnu('ending', [
+          [0, 0],
+          [0, 100],
+        ]),
+        wayFromEnu('continuing', [
+          [12, 100],
+          [12, 400],
+        ]),
+      ),
+    );
+
+    // Sitting past the end of 'ending', beside 'continuing'.
+    const here = { e: 6, n: 200 };
+    const match = findRoadMatch(here, 0, idx, 'ending')!;
+    expect(match.wayId).toBe('continuing');
+  });
+
+  it('keeps continuity for an ordinary interior match', () => {
+    // The bonus still does its job where it belongs — telling parallel roads
+    // apart while we are genuinely alongside one.
+    const idx = indexOf(
+      graphOf(
+        wayFromEnu('a', [
+          [0, -500],
+          [0, 500],
+        ]),
+        wayFromEnu('b', [
+          [24, -500],
+          [24, 500],
+        ]),
+      ),
+    );
+    const here = { e: 13, n: 0 };
+    expect(findRoadMatch(here, 0, idx, 'a')!.wayId).toBe('a');
+    expect(findRoadMatch(here, 0, idx, 'b')!.wayId).toBe('b');
   });
 });

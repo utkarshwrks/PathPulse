@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   NavigationEngine,
+  enuToLatLon,
   haversineDistance,
   type NavigationState,
+  type RoadGraph,
   type SensorSample,
 } from '../src/index.js';
 
@@ -85,8 +87,41 @@ function run(samples: SensorSample[], config = {}): NavigationState[] {
  * A reset is a declared, explained jump — the honest response to an estimate
  * that is kilometres out. Silent jumps are the thing the rule forbids.
  */
-function maxUnexplainedJumpM(samples: SensorSample[], config = {}): number {
+/**
+ * A road network along the drive, deliberately built to make the matcher
+ * change its mind.
+ *
+ * ★ WHY THE JUMP TESTS NEEDED THIS ★
+ * `maxUnexplainedJumpM` used to run without a road graph at all, so road
+ * snapping never engaged and the entire snap path was outside the reach of
+ * Golden Rule #6. A change that raised the snap to full strength then
+ * introduced a 158.6 metre single-sample teleport — on a way change, where the
+ * snap target moves to a different line — and every test in the repository
+ * still passed.
+ *
+ * So: a main road the vehicle follows, which ENDS partway along, with an
+ * offset parallel road continuing past it. That is exactly the geometry that
+ * forces a way switch mid-outage.
+ */
+function roadNetwork(): RoadGraph {
+  const toLonLat = (e: number, n: number): [number, number] => {
+    const p = enuToLatLon(e, n, START.lat, START.lon);
+    return [p.lon, p.lat];
+  };
+  return {
+    bbox: [0, 0, 0, 0],
+    ways: [
+      { id: 'main', coords: [toLonLat(-200, 0), toLonLat(600, 0)], name: 'Main', maxspeed: 60 },
+      { id: 'continuing', coords: [toLonLat(600, 18), toLonLat(2000, 18)], name: 'Continuing' },
+      { id: 'parallel', coords: [toLonLat(-200, 45), toLonLat(2000, 45)], name: 'Parallel' },
+      { id: 'cross', coords: [toLonLat(400, -300), toLonLat(400, 300)], name: 'Cross' },
+    ],
+  };
+}
+
+function maxUnexplainedJumpM(samples: SensorSample[], config = {}, graph?: RoadGraph): number {
   const engine = new NavigationEngine(config);
+  if (graph) engine.setRoadGraph(graph);
   let prev: NavigationState | null = null;
   let seenResets = 0;
   let max = 0;
@@ -210,6 +245,21 @@ describe('Golden Rule #6 — the dot never teleports', () => {
   it.each(CONFIGS)('holds through a full outage cycle — %s', (_name, config) => {
     const samples = drive({ durationS: 90, outageStartS: 20, outageEndS: 70 });
     expect(maxUnexplainedJumpM(samples, config)).toBeLessThan(5);
+  });
+
+  it.each(CONFIGS)('holds with a road graph loaded and snapping live — %s', (_name, config) => {
+    // ★ THE SAME RULE, ON THE PATH THAT ACTUALLY BREAKS IT ★
+    // Road snapping moves the drawn marker independently of the estimator, so
+    // it is the one component that can teleport the dot without the estimate
+    // going anywhere. This drive runs off the end of one way and onto another
+    // mid-outage, which is the case that broke it.
+    const samples = drive({ durationS: 90, outageStartS: 20, outageEndS: 70 });
+    expect(maxUnexplainedJumpM(samples, config, roadNetwork())).toBeLessThan(5);
+  });
+
+  it('holds when the matched way changes during a long outage', () => {
+    const samples = drive({ durationS: 140, outageStartS: 15, outageEndS: 120 });
+    expect(maxUnexplainedJumpM(samples, {}, roadNetwork())).toBeLessThan(5);
   });
 
   it('holds across repeated outage cycles', () => {

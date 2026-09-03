@@ -9,6 +9,7 @@
     "eval": "tsx src/cli.ts",
     "ablation": "tsx src/ablation.ts",
     "alignment": "tsx src/alignment.ts",
+    "offroad": "tsx src/offroad.ts",
     "record": "tsx src/record.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

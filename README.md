@@ -56,8 +56,9 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1255) |
+| `pnpm test` | All workspace tests (1279) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
+| `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -512,6 +513,68 @@ that is not present, on a phone at 10 Hz and an edge engine at 200 Hz. The
 comparison is worth running and neither implementation is wasted — but that is
 the argument, and it is why this one exists first.
 
+### Is the marker on a road? — the metric drift cannot see
+
+**Reported from a real drive:** *"when it goes to dead reckoning it goes off the
+road, into the plots."* The build it was reported against measured 10 % mean
+drift, comfortably inside target. Both statements were true at the same time.
+
+Drift is the distance between the estimate and the truth, and it is blind to
+which **side** of the truth the error is on. Thirty metres along a road is
+invisible to anyone watching. Thirty metres across it is a vehicle in
+somebody's field. Nothing in the repository measured the second thing, so
+nothing caught it.
+
+`pnpm eval:offroad` measures it now — ground truth is the road network itself,
+counting only samples the engine actually **drew** while dead reckoning
+([docs/offroad.md](docs/offroad.md)):
+
+| | mean | median | p90 | max | >10 m | >25 m |
+| --- | --- | --- | --- | --- | --- | --- |
+| before | 12.5 m | 3.6 m | 46.6 m | 106.5 m | 26.9 % | 12.5 % |
+| **after** | **0.8 m** | **0.0 m** | **0.0 m** | 71.1 m | **2.8 %** | **0.8 %** |
+| snapping off | 15.7 m | 5.6 m | 49.9 m | 106.5 m | 35.2 % | 21.9 % |
+
+Four causes, all in road snapping, none of them visible in the drift figure:
+
+1. **The snap was deliberately partial.** Strength was `1 - confidence`,
+   clamped to `[0.1, 0.7]`. On the first second of an outage confidence is
+   still 1, so it applied a *tenth* of the correction — at the exact moment the
+   badge flips and everyone is watching — and it could never exceed 70 %, so a
+   permanent 30 % of a growing error was always on screen. While GNSS is
+   healthy that gentleness is right: position is measured and the road is the
+   weaker claim. The instant GNSS is gone it reverses, and "the vehicle is on a
+   road" becomes the strongest true statement available. It is now full
+   strength during `DEAD_RECKONING` only.
+2. **One fixed 50 m search radius.** Drift past it and `findRoadMatch` returns
+   null, so snapping switched itself off precisely when it was the only
+   evidence left, and the marker was then free to wander open ground for the
+   rest of the outage. A widened search now runs when the ordinary one finds
+   nothing.
+3. **Continuity survived running off the end of a way.** Past a way's end the
+   correction to it is almost entirely *along* the road, which the snap
+   discards by design — so it computed a 23 m error and moved the marker zero
+   metres, leaving it in a field at the end of a road while the panel named the
+   road it was not on. The continuity bonus was what held it there.
+4. **"Cross-track only" had no escape hatch.** At an endpoint, refusing to move
+   along-track is not neutrality; it is choosing to draw the vehicle off the
+   end of a road. The correction is now *bounded* rather than forbidden — the
+   map may nudge the marker onto the end of a road, it may never carry it down
+   one — and `maxAlongCorrectionM: 0` restores the strict old rule exactly.
+
+Fixing it also improved the headline, because a marker held on the road is
+closer to the truth: **mean drift 10.3 % → 9.2 %**, median 7.6 % → 5.3 %.
+
+**And it cost one self-inflicted teleport.** Raising the snap to full strength
+introduced a **158.6 m single-sample jump** when the matched way changed —
+Golden Rule #6, broken by the fix for something else, and invisible because
+`maxUnexplainedJumpM` had never installed a road graph and so had never
+exercised the snap path at all. The correction is now a rate-limited vector
+capped at 60 m/s (the same bound the recovery blender uses), the invariant
+tests run with a graph that forces a way change mid-outage, and the worst
+unexplained step is 8 m — better than the 45.6 m the code had before any of
+this.
+
 ### Phase 12 — the phone does not have to be straight any more
 
 Half of alignment was already solved: `AttitudeEstimator` tracks measured
@@ -537,13 +600,13 @@ logs by a known angle and re-runs the same harness ([docs/alignment.md](docs/ali
 
 | Mount offset | alignment OFF | alignment ON | estimate error |
 | --- | --- | --- | --- |
-| 0° | 10.0 % | 10.3 % | 3.1° |
-| 30° | 12.6 % | 10.5 % | 4.0° |
-| 60° | 24.5 % | 10.4 % | 4.1° |
-| 90° | 37.0 % | 10.3 % | 4.1° |
+| 0° | 9.0 % | 9.2 % | 3.1° |
+| 30° | 12.7 % | 9.2 % | 4.0° |
+| 60° | 25.4 % | 9.4 % | 4.1° |
+| 90° | 37.1 % | 9.1 % | 4.1° |
 
 The claim is not "better" — it is **independent**. With alignment on, drift no
-longer depends on how the phone was mounted. The 0.3 % at 0° is the price of
+longer depends on how the phone was mounted. The 0.2 % at 0° is the price of
 measuring something instead of assuming it, and the assumption is free and
 correct exactly once: when it happens to be true.
 

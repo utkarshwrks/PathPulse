@@ -22,6 +22,7 @@
     "eval": "pnpm --filter @pathpulse/eval eval",
     "ablation": "pnpm --filter @pathpulse/eval ablation",
     "eval:alignment": "pnpm --filter @pathpulse/eval alignment",
+    "eval:offroad": "pnpm --filter @pathpulse/eval offroad",
     "edge": "pnpm --filter @pathpulse/edge-engine edge",
     "edge:bench": "pnpm --filter @pathpulse/edge-engine bench",
     "eval:record": "pnpm --filter @pathpulse/eval record",

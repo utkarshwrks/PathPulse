@@ -41,6 +41,24 @@ import { ErrorStateKalmanFilter } from '../eskf/ErrorStateKalmanFilter.js';
 import { DEFAULT_ESKF_CONFIG } from '../eskf/noise.js';
 import type { RoadGraph, RoadPosition } from '../mapmatch/types.js';
 
+/** Move a 2-D offset toward a target by at most `maxStepM`. */
+function approach(from: EnuPoint, to: EnuPoint, maxStepM: number): EnuPoint {
+  const de = to.e - from.e;
+  const dn = to.n - from.n;
+  const mag = Math.hypot(de, dn);
+  if (!Number.isFinite(mag)) return { e: 0, n: 0 };
+  if (mag <= maxStepM || mag === 0) return { e: to.e, n: to.n };
+  const k = maxStepM / mag;
+  return { e: from.e + de * k, n: from.n + dn * k };
+}
+
+/** Move `from` toward `to`, taking `rampMs` to cross the full 0..1 range. */
+function rampTo(from: number, to: number, dtMs: number, rampMs: number): number {
+  if (!Number.isFinite(from)) return to;
+  const step = rampMs > 0 ? Math.max(0, Math.min(1, dtMs / rampMs)) : 1;
+  return from + (to - from) * step;
+}
+
 /**
  * Where the speed the engine is reporting came from.
  *
@@ -429,6 +447,12 @@ export class NavigationEngine {
   private readonly autoAlign = new AutoAlignment();
   /** Last alignment status logged, so the event fires on change only. */
   private lastAlignStatus: string | null = null;
+  /** Applied snap strength, ramped rather than switched. See step 8. */
+  private snapStrength = 0;
+  /** The correction snapping is currently applying, rate-limited. See step 8. */
+  private snapOffset: EnuPoint = { e: 0, n: 0 };
+  /** Samples rescued by the widened search — surfaced, never silent. */
+  private wideSnapCount = 0;
   /** Slow mean of horizontal acceleration, in the PLANE frame. See its use. */
   private planeAccelDcF = 0;
   private planeAccelDcR = 0;
@@ -1475,6 +1499,19 @@ export class NavigationEngine {
         };
       }
       if (modeBefore !== 'RECOVERING' && gnssEnu) {
+        // ★ THE BLENDER WORKS IN UNSNAPPED SPACE, AND MUST ★
+        //
+        // Road snapping is display-only, and step 8 applies its correction on
+        // top of whatever step 7 produces. So the marker's position is always
+        // `step7 + snapOffset`. Handing the blender the already-snapped
+        // position looks more correct — slew from where the marker actually is
+        // — and is a double-count: step 8 then adds the same offset a second
+        // time, and the marker jumps by the whole snap correction on the frame
+        // GNSS returns. Measured while writing this: a 108.9 m step.
+        //
+        // Starting from the unsnapped estimate makes the first blended frame
+        // `dr.current.enu + snapOffset`, which is exactly where the marker
+        // already was. Continuous by construction.
         const drift = this.recovery.begin(sample.t, this.dr.current.enu, gnssEnu);
         this.log.push({
           t: sample.t,
@@ -1583,20 +1620,90 @@ export class NavigationEngine {
       }
       if (this.roadIndex) {
         this.snapAttemptCount++;
-        const match = findRoadMatch(
+        const cfg = this.config.roadSnapConfig;
+        let match = findRoadMatch(
           shownEnu,
           this.dr.current.headingDeg,
           this.roadIndex,
           this.lastMatchedWayId,
-          this.config.roadSnapConfig,
+          cfg,
         );
+
+        // ★ DO NOT GIVE UP AT THE POINT OF MAXIMUM NEED ★
+        //
+        // With one fixed radius, snapping switches itself off exactly when it
+        // is the only thing left: the estimate drifts past 50 m from any road,
+        // the match comes back null, and from then on nothing pulls the marker
+        // back — it wanders open ground for the rest of the outage. That is
+        // the reported field failure, "it goes off the road into the plots",
+        // and it measured as 27 % of dead-reckoning samples drawn more than
+        // 10 m from any road, worst case 106 m.
+        //
+        // A vehicle 200 m from the nearest road is not off-road. It is a bad
+        // estimate of a vehicle that is on one, and the correct response to a
+        // bad estimate is not to stop correcting it. The widened search is
+        // only used when the ordinary one found nothing, and the score still
+        // prefers near roads pointing the right way.
+        if (!match && mode === 'DEAD_RECKONING') {
+          match = findRoadMatch(
+            shownEnu,
+            this.dr.current.headingDeg,
+            this.roadIndex,
+            this.lastMatchedWayId,
+            cfg,
+            cfg.wideSearchRadiusM,
+          );
+          if (match) this.wideSnapCount++;
+        }
+
         if (match) {
           const confidence = this.currentConfidence(sample.t, mode);
+
+          // ★ THE ROAD IS THE WEAKEST EVIDENCE UNDER GNSS AND THE STRONGEST
+          //   WITHOUT IT ★
+          //
+          // While the receiver is fixing, position is MEASURED and the road is
+          // a weaker claim than the measurement, so the snap stays gentle and
+          // lets the fix win — unchanged from Phase 6D. The instant GNSS is
+          // gone that reverses: nothing is measuring position any more, and
+          // "the vehicle is on a road" becomes the strongest true statement
+          // available about where it is.
+          //
+          // The old rule, `1 - confidence` clamped to [0.1, 0.7], had it
+          // backwards in both directions. On the first second of an outage
+          // confidence is still 1, so it applied 10 % of the correction and
+          // drew the marker 90 % of the way into the field — at the exact
+          // moment the badge flips and everyone is looking. And it could never
+          // exceed 70 %, so a permanent 30 % of a growing error was always on
+          // screen.
+          //
+          // Ramped rather than switched, so the change of regime at the mode
+          // boundary is a slide and not a step. See `strengthRampMs`.
+          const targetStrength =
+            mode === 'DEAD_RECKONING'
+              ? cfg.deadReckoningStrength
+              : Math.max(cfg.minSnapStrength, Math.min(cfg.maxSnapStrength, 1 - confidence));
+          this.snapStrength = rampTo(
+            this.snapStrength,
+            targetStrength,
+            dtMs,
+            cfg.strengthRampMs,
+          );
+
           const snapped = applyRoadSnap(
             shownEnu,
             match,
             confidence,
-            this.config.roadSnapConfig,
+            cfg,
+            this.snapStrength,
+          );
+          // See `maxSnapRateMps`. The correction is carried as a rate-limited
+          // vector, so a change of matched way slides the marker instead of
+          // teleporting it onto the new road.
+          this.snapOffset = approach(
+            this.snapOffset,
+            { e: snapped.enu.e - shownEnu.e, n: snapped.enu.n - shownEnu.n },
+            cfg.maxSnapRateMps * (dtMs / 1000),
           );
           // ★ THE SNAP IS DELIBERATELY NOT FED BACK INTO THE ESTIMATE ★
           // Writing the correction into the dead-reckoning state so that it
@@ -1610,7 +1717,7 @@ export class NavigationEngine {
           // harder each time. Snapping corrects what is shown; the estimator
           // keeps its own honest opinion. Do not "fix" this without rerunning
           // `pnpm ablation`.
-          shownEnu = snapped.enu;
+          shownEnu = { e: shownEnu.e + this.snapOffset.e, n: shownEnu.n + this.snapOffset.n };
           this.lastMatch = match;
           if (this.lastMatchedWayId !== match.wayId) {
             this.log.push({
@@ -1645,6 +1752,17 @@ export class NavigationEngine {
           this.lastMatch = null;
           this.lastMatchedWayId = null;
           this.roadMaxSpeedMps = undefined;
+          // Nothing to snap to. Bleed both the strength and the correction away
+          // at the bounded rate, so that losing a match releases the marker as
+          // smoothly as finding one captured it.
+          const cfgNoMatch = this.config.roadSnapConfig;
+          this.snapStrength = rampTo(this.snapStrength, 0, dtMs, cfgNoMatch.strengthRampMs);
+          this.snapOffset = approach(
+            this.snapOffset,
+            { e: 0, n: 0 },
+            cfgNoMatch.maxSnapRateMps * (dtMs / 1000),
+          );
+          shownEnu = { e: shownEnu.e + this.snapOffset.e, n: shownEnu.n + this.snapOffset.n };
         }
       }
     }
@@ -2072,6 +2190,9 @@ export class NavigationEngine {
     this.lastAlignStatus = null;
     this.planeAccelDcF = 0;
     this.planeAccelDcR = 0;
+    this.snapStrength = 0;
+    this.snapOffset = { e: 0, n: 0 };
+    this.wideSnapCount = 0;
     this.zupt.reset();
     this.zaru.reset();
     this.forwardBias.reset();

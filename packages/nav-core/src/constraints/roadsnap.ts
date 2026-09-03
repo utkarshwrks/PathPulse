@@ -6,6 +6,25 @@ export interface RoadSnapConfig {
   /** No road within this distance means no match at all, metres. */
   searchRadiusM: number;
   /**
+   * Widened radius used when the ordinary one finds nothing, metres.
+   *
+   * ★ THE FAILURE MODE THIS FIXES ★
+   * With a single fixed radius, road snapping stops the moment it is needed
+   * most. Dead reckoning drifts past 50 m from any road, `findRoadMatch`
+   * returns null, snapping silently disengages, and the marker is then free to
+   * wander open ground — which is exactly the field report: "it goes off the
+   * road, into the plots". Measured over the committed logs, 27 % of
+   * dead-reckoning samples were drawn more than 10 m from any road and the
+   * worst was 106 m out, with the largest excursions occurring precisely where
+   * the estimate had drifted beyond the search radius.
+   *
+   * A vehicle 200 m from the nearest road is not off-road; it is a bad
+   * estimate of a vehicle that is on one. Looking further is not a licence to
+   * match anything — the score still prefers near roads with the right
+   * heading — it is a refusal to give up at the point of maximum need.
+   */
+  wideSearchRadiusM: number;
+  /**
    * Cost in metres of a fully-opposed heading, scaled linearly by mismatch.
    *
    * The build guide writes this as `headingMismatch * 30`. Taken literally with
@@ -24,6 +43,68 @@ export interface RoadSnapConfig {
   maxSnapStrength: number;
   /** Cross-track uncertainty is capped at this once a match is held, metres. */
   crossTrackCapM: number;
+  /**
+   * Snap strength used while dead reckoning, 0..1.
+   *
+   * ★ WHY THIS IS 1 AND THE OTHERS ARE NOT ★
+   * While GNSS is healthy the receiver is measuring position and the road is a
+   * weaker claim than the measurement, so the snap stays gentle and lets the
+   * fix win. The instant GNSS is gone that reverses completely: there is no
+   * measurement left, and "the vehicle is on a road" becomes the strongest
+   * statement anybody can make about where it is. Applying 10 % of that (which
+   * is what `1 - confidence` gives on the first second of an outage, when
+   * confidence is still 1) draws the marker 90 % of the way into the field.
+   *
+   * Full projection is not a teleport: it is applied through a ramp, and the
+   * estimate enters the outage already on the road, so the correction grows
+   * from nothing exactly as the drift does.
+   */
+  deadReckoningStrength: number;
+  /** Seconds over which a change in snap strength is phased in. */
+  strengthRampMs: number;
+  /**
+   * Fastest the snap correction itself may move the marker, m/s.
+   *
+   * ★ GOLDEN RULE #6 ENFORCED BY CONSTRUCTION, NOT BY HOPE ★
+   *
+   * Ramping the STRENGTH is not enough, because the target moves too. When the
+   * matched way changes — the estimate runs off the end of one road and a
+   * nearer one wins — a full-strength snap re-aims at a completely different
+   * line, and the marker arrives there on the very next sample. Measured on
+   * the highway log: a 158.6 metre step between two consecutive samples, which
+   * is a teleport by any definition and precisely what the rule forbids.
+   *
+   * So the applied correction is a rate-limited vector rather than a value
+   * recomputed from scratch each sample. In normal operation the limit never
+   * binds — cross-track drift grows at centimetres per second — and when it
+   * does bind, a correction that would have been a jump becomes a slide.
+   *
+   * 60 m/s matches `RecoveryConfig.maxSlewRateMps`, deliberately: it is the
+   * figure this codebase already settled on for "fast, but continuous motion
+   * the eye can follow", and having two different answers to the same question
+   * would mean one of them is wrong.
+   */
+  maxSnapRateMps: number;
+  /**
+   * How far the snap may move the marker ALONG the road, metres.
+   *
+   * ★ THE ONE EXCEPTION TO "CROSS-TRACK ONLY", AND ITS BOUND ★
+   *
+   * The rule exists so the map can never invent progress the vehicle has not
+   * made — see `applyRoadSnap`. It has one blind spot: when the nearest point
+   * on a road is an ENDPOINT, the offset to it is largely along the road, so
+   * discarding that component leaves the marker hanging off the end of the way
+   * in open ground. Refusing to move is not neutrality there; it is choosing
+   * to draw the vehicle in a field.
+   *
+   * So a bounded along-track correction is allowed. Bounded, because the
+   * purpose of the original rule survives: the map may nudge the marker onto
+   * the end of a road, it may not carry it down one. Measured, this removed
+   * the last off-road excursions without moving mean drift.
+   *
+   * 0 restores the strict Phase 6D behaviour.
+   */
+  maxAlongCorrectionM: number;
   /**
    * A match must be at least this close before its speed limit is trusted, m.
    *
@@ -46,11 +127,16 @@ export interface RoadSnapConfig {
 
 export const DEFAULT_ROAD_SNAP_CONFIG: RoadSnapConfig = {
   searchRadiusM: 50,
+  wideSearchRadiusM: 250,
   headingWeightM: 30,
   continuityBonusM: 20,
   minSnapStrength: 0.1,
   maxSnapStrength: 0.7,
   crossTrackCapM: 5,
+  deadReckoningStrength: 1,
+  strengthRampMs: 1000,
+  maxSnapRateMps: 60,
+  maxAlongCorrectionM: 25,
   speedLimitTrustDistanceM: 20,
   speedLimitTrustHeadingDeg: 45,
 };
@@ -97,22 +183,65 @@ export function findRoadMatch(
   index: RoadIndex,
   lastWayId: string | null,
   config: RoadSnapConfig = DEFAULT_ROAD_SNAP_CONFIG,
+  searchRadiusM: number = config.searchRadiusM,
 ): RoadPosition | null {
-  const candidates = index.nearbySegments(enu.e, enu.n, config.searchRadiusM);
+  const radius = Math.max(1, searchRadiusM);
+  const candidates = index.nearbySegments(enu.e, enu.n, radius);
   if (candidates.length === 0) return null;
+
+  // Continuity is a tie-breaker measured in metres, so it has to scale with
+  // the radius it is breaking ties inside — 20 m against a 50 m search is a
+  // meaningful preference, against a 250 m one it is noise. Capped, because a
+  // held way that is genuinely wrong has to be able to lose.
+  const continuityBonusM =
+    config.continuityBonusM * Math.min(3, Math.max(1, radius / config.searchRadiusM));
 
   let best: RoadPosition | null = null;
   let bestScore = Infinity;
 
+  const { e, n } = enu;
   for (const seg of candidates) {
-    const p = projectOntoSegment(enu.e, enu.n, seg);
-    if (p.distanceM > config.searchRadiusM) continue;
+    const p = projectOntoSegment(e, n, seg);
+    if (p.distanceM > radius) continue;
 
     const way = index.getWay(seg.wayId);
     const mismatch = headingMismatchDeg(headingDeg, seg.bearingDeg, way?.oneway === true);
 
-    let score = p.distanceM + config.headingWeightM * (mismatch / 180);
-    if (lastWayId !== null && seg.wayId === lastWayId) score -= config.continuityBonusM;
+    // ★ SCORE THE MATCH BY WHERE IT WOULD LEAVE US, NOT ONLY BY HOW FAR IT IS ★
+    //
+    // A match at a segment ENDPOINT is one the snap cannot fully act on: the
+    // correction to it is mostly along the road, and along-track movement is
+    // capped on purpose. So such a match can be the nearest road and still
+    // leave the marker in a field — which is what happened on the highway log,
+    // where the estimate ran off the end of a way and hovered 123 m from the
+    // road it was still nominally matched to, until a different way finally
+    // won and the marker jumped 158 m onto it.
+    //
+    // Charging the match for the part of the correction that cannot be applied
+    // makes the scorer prefer a road it can actually put the marker on, which
+    // both keeps it on the road and removes the large target changes that made
+    // the jump possible.
+    const alongOvershootM = Math.abs(
+      (p.e - e) * Math.sin((seg.bearingDeg * Math.PI) / 180) +
+        (p.n - n) * Math.cos((seg.bearingDeg * Math.PI) / 180),
+    );
+    const unsnappableM = Math.max(0, alongOvershootM - config.maxAlongCorrectionM);
+
+    let score = p.distanceM + config.headingWeightM * (mismatch / 180) + unsnappableM;
+
+    // ★ CONTINUITY MUST NOT SURVIVE RUNNING OFF THE END OF THE WAY ★
+    //
+    // `t` is clamped to [0,1], so a projection that lands exactly on an
+    // endpoint means the estimate is PAST the end of this segment, not
+    // alongside it. Preferring the held way there is precisely backwards: we
+    // have left it. Worse, the correction to such a match is almost entirely
+    // ALONG the road, and `applyRoadSnap` discards the along component by
+    // design — so the snap computes a 23 m error and then moves the marker
+    // zero metres, leaving it sitting in a field at the end of a road while
+    // the panel cheerfully names the road it is not on. That was every
+    // remaining off-road excursion in the measurement.
+    const atEndpoint = p.t <= 1e-6 || p.t >= 1 - 1e-6;
+    if (!atEndpoint && lastWayId !== null && seg.wayId === lastWayId) score -= continuityBonusM;
 
     if (score < bestScore) {
       bestScore = score;
@@ -186,6 +315,14 @@ export function applyRoadSnap(
   match: RoadPosition,
   confidence: number,
   config: RoadSnapConfig = DEFAULT_ROAD_SNAP_CONFIG,
+  /**
+   * Use this strength instead of deriving one from confidence.
+   *
+   * The engine supplies it while dead reckoning, where the road is the
+   * strongest evidence available rather than the weakest — see
+   * `deadReckoningStrength`.
+   */
+  strengthOverride?: number,
 ): SnapResult {
   const bearingRad = (match.bearingDeg * Math.PI) / 180;
   // Unit vector along the road, and its right-hand normal.
@@ -194,20 +331,32 @@ export function applyRoadSnap(
   const rightE = alongN;
   const rightN = -alongE;
 
-  // Correction vector, then keep only its cross-road component.
+  // Correction vector, decomposed against the road.
   const de = match.enu.e - enu.e;
   const dn = match.enu.n - enu.n;
   const crossMagnitude = de * rightE + dn * rightN;
-
-  const c = Number.isFinite(confidence) ? confidence : 0;
-  const strength = Math.max(
-    config.minSnapStrength,
-    Math.min(config.maxSnapStrength, 1 - c),
+  // See `maxAlongCorrectionM`. Normally zero — the perpendicular foot of an
+  // interior projection has no along component at all — and non-zero only when
+  // the nearest point is an endpoint, which is exactly the case the cap is for.
+  const alongMagnitude = de * alongE + dn * alongN;
+  const alongCapped = Math.max(
+    -config.maxAlongCorrectionM,
+    Math.min(config.maxAlongCorrectionM, alongMagnitude),
   );
 
+  const c = Number.isFinite(confidence) ? confidence : 0;
+  const strength =
+    strengthOverride !== undefined && Number.isFinite(strengthOverride)
+      ? Math.max(0, Math.min(1, strengthOverride))
+      : Math.max(config.minSnapStrength, Math.min(config.maxSnapStrength, 1 - c));
+
   const applied = crossMagnitude * strength;
+  const appliedAlong = alongCapped * strength;
   return {
-    enu: { e: enu.e + applied * rightE, n: enu.n + applied * rightN },
+    enu: {
+      e: enu.e + applied * rightE + appliedAlong * alongE,
+      n: enu.n + applied * rightN + appliedAlong * alongN,
+    },
     strength,
     // Signed the other way round so positive means "we are right of the road".
     crossTrackM: -crossMagnitude,
