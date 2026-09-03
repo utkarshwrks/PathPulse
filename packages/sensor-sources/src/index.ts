@@ -8,3 +8,4 @@ export * from './replay/ReplaySource.js';
 export * from './recording/RecordingWrapper.js';
 export * from './web/WebSource.js';
 export * from './native/NativeSource.js';
+export * from './native/ForegroundSource.js';

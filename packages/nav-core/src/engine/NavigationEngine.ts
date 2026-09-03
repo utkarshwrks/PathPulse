@@ -258,10 +258,11 @@ export interface ConstraintFlags {
    * whether it ships is a measurement, not a preference. See docs/benchmarks.md.
    */
   hmmMatch: boolean;
-  hmmConfig: Partial<HmmConfig>;
 }
 
 export interface EngineConfig extends ConstraintFlags {
+  /** Phase 14's matcher settings. A shape, not a switch — see residualConfig. */
+  hmmConfig: Partial<HmmConfig>;
   /**
    * Bounds on Phase 13 Model 3's correction. Not in ConstraintFlags, which is
    * the set of on/off toggles the UI renders — this is a shape, not a switch.

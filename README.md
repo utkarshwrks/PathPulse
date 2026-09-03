@@ -56,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1359) |
+| `pnpm test` | All workspace tests (1372) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
@@ -121,7 +121,7 @@ adb install -r apps/web/android/app/build/outputs/apk/debug/app-debug.apk
 | | |
 | --- | --- |
 | Package | `in.avinya.pathpulse` |
-| Size | ~12.8 MB (the landing page's assets dominate it) |
+| Size | ~12.7 MB |
 | Output | `apps/web/android/app/build/outputs/apk/debug/app-debug.apk` |
 
 **`apps/web/android/` is committed on purpose.** `AndroidManifest.xml` carries
@@ -554,6 +554,74 @@ it backwards.
 
 **Before a demo, in the actual room: open Offline, tap Download, then go into
 aeroplane mode.** That is now a complete preparation rather than a partial one.
+
+### Phase 15 — the sensor loop that survives the screen going off
+
+Android throttles a backgrounded WebView. With the screen off, the
+DeviceMotion callbacks the web sensor source depends on fall from 10 Hz to
+roughly 1 Hz and then stop. Dead reckoning integrates what it is given, so a
+tenth of the samples is a tenth of the evidence for every turn — and a real
+drive through a tunnel is not done with the phone awake and unlocked in front
+of you.
+
+**The architecture is not the one the guide recommends, and the reason is a
+property this codebase already has.**
+
+The guide offers three options and suggests the third: run the estimator itself
+inside an embedded JavaScript engine on the native side, so that both the
+sensors and the maths escape the throttling. That answers the problem as
+stated, and costs an embedded runtime, a second execution environment to debug,
+and a bridge to keep in step.
+
+It is unnecessary here, because **nav-core is deterministic and driven by
+`sample.t`, not by wall clock** — asserted in `invariants.test.ts`. Feeding it
+ten buffered samples in one burst produces *exactly* the estimate that ten
+samples at 10 Hz would; the arithmetic cannot tell the difference. So the
+WebView does not need to **run** at 10 Hz, it needs to **consume** 10 Hz, and
+it can do that in bursts whenever Android lets it wake.
+
+What is lost while the screen is off is the marker's refresh rate. The screen
+is off.
+
+```
+SensorLoopService (foreground service, partial wake lock, own HandlerThread)
+   SensorManager  accel + gyro at 100 Hz requested
+   LocationManager + GnssStatus.Callback
+   ring buffer (2000 samples ≈ 20 s, oldest dropped and COUNTED)
+        │ batch every 100 ms
+        ▼
+PathPulseSensorsPlugin ──► ForegroundSource ──► NavigationEngine
+```
+
+**One monotonic clock.** `SensorEvent.timestamp` and
+`Location.getElapsedRealtimeNanos()` are both elapsed-realtime nanoseconds;
+`System.currentTimeMillis()` is a different clock that jumps when the network
+corrects the time. Mixing them is how a stream acquires a negative `dt` and
+sends the position flying. Everything crosses the bridge as elapsed-realtime
+milliseconds; the wall-clock offset is recorded once, only so a recording can
+be dated.
+
+**And it finally makes the NavIC breakdown honest.** `GnssStatus` reports the
+constellation of every tracked satellite, so `ForegroundSource` is the only
+source in the project that can set `constellationsSimulated: false`. Everything
+else must label its breakdown simulated, because the WebView reports a count
+and nothing more — and inventing a NavIC number for an ISRO-sponsored problem
+statement is the worst thing this app could be caught doing.
+
+**On the language.** The guide's phase is titled *native Kotlin*. This is Java.
+The substance is the native collection loop and the foreground service; adding
+a Kotlin toolchain to a Gradle build that currently works is risk with no
+corresponding benefit, and porting the two files is mechanical if a reason
+appears.
+
+**What is verified, and what is not.** `pnpm android:gradle assembleDebug`
+proves it compiles; thirteen tests cover the bridge, which is where the quiet
+failures live — a Java `Float` that missed its overload arrives as the *string*
+`"9.81"`, and a `NaN` reaching the estimator is a position that flies off the
+map ten seconds later with nothing to point at. **The screen-off sample rate
+needs a phone and a drive.** The service measures its own rate and reports it
+through `status.nativeImuHz`, because if the WebView is asleep then so is any
+code on this side that would count.
 
 ### Phase 14 — Newson-Krumm HMM map matching
 

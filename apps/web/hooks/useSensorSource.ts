@@ -5,6 +5,7 @@ import type { NavMode, SensorSample } from '@pathpulse/nav-core';
 import {
   CITY_VEHICLE,
   HIGHWAY_VEHICLE,
+  ForegroundSource,
   NativeSource,
   RecordingWrapper,
   ReplaySource,
@@ -309,9 +310,34 @@ export function useSensorSource(
       };
     } else {
       let cancelled = false;
-      void NativeSource.isAvailable().then((native) => {
+      /**
+       * ★ PHASE 15 — THREE SOURCES, MOST CAPABLE FIRST ★
+       *
+       * ForegroundSource is the native SensorManager loop inside a foreground
+       * service: full rate, and it keeps running with the screen off, which is
+       * what a real drive through a tunnel actually looks like.
+       *
+       * NativeSource is the same APK without that plugin — an older build, or
+       * a device where the service could not start. It reads the WebView's own
+       * DeviceMotion, which Android throttles to about 1 Hz in the background.
+       *
+       * WebSource is the browser.
+       *
+       * Each is CHECKED rather than assumed. An APK updated from a build
+       * without the plugin would otherwise start a source that receives
+       * nothing, and the app would look broken with nothing to point at.
+       */
+      void (async () => {
+        const foreground = await ForegroundSource.isAvailable();
+        if (cancelled) return { foreground, native: false };
+        return { foreground, native: foreground ? false : await NativeSource.isAvailable() };
+      })().then(({ foreground, native }) => {
         if (cancelled) return;
-        const src: SensorSource = native ? new NativeSource() : new WebSource();
+        const src: SensorSource = foreground
+          ? new ForegroundSource()
+          : native
+            ? new NativeSource()
+            : new WebSource();
         src.onSample(handleSample);
         webRef.current = src;
         setState((p) => ({ ...p, sourceName: src.capabilities.name }));

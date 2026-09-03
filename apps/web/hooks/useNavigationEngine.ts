@@ -183,6 +183,13 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // Phase 14. OFF: measured 10.5% mean drift against the greedy matcher's
+  // 9.2%, and a flat parameter sweep saying these routes contain no geometry
+  // its transition term can discriminate. The capability is real and is
+  // demonstrated in nav-core/test/hmm.test.ts — a parallel service road, a
+  // divided carriageway and a flyover, each of which greedy matching gets
+  // wrong. Kept as a toggle so that can be shown rather than described.
+  hmmMatch: false,
   // Phase 13, Model 3. OFF, and it stays off: measured with a route-disjoint
   // split it makes along-track error three to eight times worse, because city
   // and highway feature distributions barely overlap and the network

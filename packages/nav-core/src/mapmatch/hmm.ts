@@ -197,7 +197,15 @@ function logTransition(routeM: number | null, straightM: number, betaM: number):
 
 export class HmmMapMatcher {
   private readonly config: HmmConfig;
-  private readonly window: HmmObservation[] = [];
+  /**
+   * The Viterbi window. Named `observations`, not `window`: `lint:core-purity`
+   * scans nav-core for the browser global by identifier, and it is right to —
+   * a local or field that shadows it is exactly how browser code creeps into a
+   * package that must not have any. Third time the rule has caught a
+   * shadowing name in this codebase, and the third time the clearer name was
+   * the better one anyway.
+   */
+  private readonly observations: HmmObservation[] = [];
   private lastWayId: string | null = null;
   private lastMatch: HmmMatch | null = null;
   private pendingTravelM = 0;
@@ -215,7 +223,7 @@ export class HmmMapMatcher {
   }
 
   reset(): void {
-    this.window.length = 0;
+    this.observations.length = 0;
     this.lastWayId = null;
     this.lastMatch = null;
     this.pendingTravelM = 0;
@@ -233,7 +241,7 @@ export class HmmMapMatcher {
     if (!Number.isFinite(observation.e) || !Number.isFinite(observation.n)) return null;
 
     this.pendingTravelM += Number.isFinite(observation.travelledM) ? observation.travelledM : 0;
-    if (this.window.length > 0 && this.pendingTravelM < this.config.minTravelM) {
+    if (this.observations.length > 0 && this.pendingTravelM < this.config.minTravelM) {
       // ★ HOLD THE ROAD, NOT THE POINT ★
       //
       // Returning the previous match verbatim returns a position up to
@@ -246,11 +254,11 @@ export class HmmMapMatcher {
       return this.reprojectOnto(this.lastMatch, observation);
     }
 
-    this.window.push({ ...observation, travelledM: this.pendingTravelM });
+    this.observations.push({ ...observation, travelledM: this.pendingTravelM });
     this.pendingTravelM = 0;
-    if (this.window.length > this.config.windowSize) this.window.shift();
+    if (this.observations.length > this.config.windowSize) this.observations.shift();
 
-    const columns = this.window.map((o) => this.candidatesFor(o));
+    const columns = this.observations.map((o) => this.candidatesFor(o));
     // An observation with no road anywhere near it is not a gap in the
     // trellis, it is the end of one: keeping it would force every path through
     // a column with no states.
@@ -419,13 +427,13 @@ export class HmmMapMatcher {
   private straightLineM(fromIndex: number, toIndex: number): number {
     let travelled = 0;
     for (let i = fromIndex + 1; i <= toIndex; i++) {
-      const step = this.window[i]?.travelledM;
+      const step = this.observations[i]?.travelledM;
       travelled += Number.isFinite(step) ? (step as number) : 0;
     }
     if (travelled > 0) return travelled;
 
-    const a = this.window[fromIndex];
-    const b = this.window[toIndex];
+    const a = this.observations[fromIndex];
+    const b = this.observations[toIndex];
     if (!a || !b) return 0;
     return Math.hypot(b.e - a.e, b.n - a.n);
   }

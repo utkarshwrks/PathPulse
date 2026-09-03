@@ -24,6 +24,15 @@
 
         </activity>
 
+        <!-- Phase 15. The type must be declared here AND passed to
+             startForeground() from Android 14; mismatching the two is a crash
+             on launch rather than a warning. -->
+        <service
+            android:name=".SensorLoopService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

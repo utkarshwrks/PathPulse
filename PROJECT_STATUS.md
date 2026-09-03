@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 14 — Newson-Krumm HMM map matching ✅
+**CURRENT PHASE:** Phase 15 — native sensor loop and foreground service ✅
 **LAST UPDATED:** 2026-09-04
-**NEXT PHASE:** Phase 15 — native Kotlin sensor loop and foreground service
+**NEXT PHASE:** Phase 17 (particle filter) or Phase 18 (real-drive validation). Phase 16 is already done.
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -2175,6 +2175,68 @@ TWO INTEGRATION BUGS, BOTH FOUND BY MEASURING
    the marker backwards down the road it is driving up: 9.9% -> 16.0%.
 
 **Tests:** 1359 passing (was 1340; +19).
+
+### Phase 15 — the sensor loop that survives the screen going off ✅
+
+Android throttles a backgrounded WebView: with the screen off, DeviceMotion
+falls from 10 Hz to about 1 Hz and then stops. Dead reckoning integrates what
+it is given, so a tenth of the samples is a tenth of the evidence for every
+turn — and a real drive through a tunnel is not done with the phone awake and
+unlocked in front of you. This was the last unresolved item from Part A.
+
+★ THE ARCHITECTURE IS NOT THE GUIDE'S, AND THE REASON IS ALREADY IN THE REPO ★
+
+The guide offers three options and recommends the third: port the estimator
+into an embedded JavaScript engine on the native side so both the sensors and
+the maths escape throttling. That answers the problem and costs an embedded
+runtime, a second execution environment, and a bridge to keep in step.
+
+It is unnecessary, because nav-core is DETERMINISTIC AND DRIVEN BY sample.t —
+asserted in invariants.test.ts. Ten buffered samples delivered in one burst
+produce exactly the estimate ten samples at 10 Hz would; the arithmetic cannot
+tell the difference. The WebView does not need to RUN at 10 Hz, it needs to
+CONSUME 10 Hz, and it can do that in bursts whenever Android lets it wake.
+What is lost while the screen is off is the marker's refresh rate, and the
+screen is off.
+
+    SensorLoopService (foreground service, PARTIAL wake lock, own thread)
+      SensorManager accel+gyro at 100 Hz requested
+      LocationManager + GnssStatus.Callback
+      ring buffer, 2000 samples, oldest dropped AND COUNTED
+         | batch every 100 ms
+      PathPulseSensorsPlugin -> ForegroundSource -> NavigationEngine
+
+ONE MONOTONIC CLOCK. SensorEvent.timestamp and
+Location.getElapsedRealtimeNanos() are both elapsed-realtime; currentTimeMillis
+is a different clock that jumps on network time correction, and mixing them is
+how a stream acquires a negative dt.
+
+AND IT MAKES THE NavIC BREAKDOWN HONEST. GnssStatus reports the constellation
+of every tracked satellite, so ForegroundSource is the ONLY source that can set
+constellationsSimulated: false. Everything else must label its breakdown
+simulated, because the WebView reports a count and nothing more.
+
+ON THE LANGUAGE: the phase is titled "native Kotlin"; this is Java. The
+substance is the loop and the service. Adding a Kotlin toolchain to a working
+Gradle build is risk without benefit, and porting two files is mechanical.
+
+VERIFIED / NOT VERIFIED: `pnpm android:gradle assembleDebug` proves it
+compiles, and 13 tests cover the bridge — where the quiet failures live, since
+a Java Float that missed its overload arrives as the STRING "9.81". The
+screen-off rate needs a phone and a drive. The service measures its own rate
+and reports it, because if the WebView is asleep so is any code here that would
+count.
+
+★ AND A BUG FOUND BY WATCHING A NUMBER ★
+
+The APK went from 12.8 MB to 25.1 MB in one build. `publish:apk` copies the APK
+into public/downloads/, `next build` copies public/ into out/, and `cap sync`
+copies out/ into the Android assets — so each APK contained the previous one,
+and would have kept doubling. The symptom is a size, not an error, which is why
+it survived several builds. `strip-apk-from-assets.mjs` drops it after sync: an
+installed app has no use for a copy of its own installer. Back to 12.7 MB.
+
+**Tests:** 1372 passing (was 1359; +13).
 
 ## NEXT PHASE
 
