@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 11 — error-state Kalman filter ✅ (Part B begins)
+**CURRENT PHASE:** Phase 12 — automatic in-vehicle alignment ✅
 **LAST UPDATED:** 2026-09-04
-**NEXT PHASE:** Phase 12 — automatic in-vehicle alignment engine
+**NEXT PHASE:** Phase 13 — AI models 2, 3 and 4 (motion classifier, fusion residual, GNSS quality)
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -1840,6 +1840,68 @@ never teleports" is not for sale. Asserted by three engine tests.
 **Tests:** 1227 passing (was 1166; +61). Typecheck clean, `lint:core-purity`
 clean — the whole filter is pure math, so it already runs unchanged in the
 edge engine.
+
+### Phase 12 — Automatic in-vehicle alignment ✅
+
+Half of this was already done and had been since Phase 4: `AttitudeEstimator`
+tracks measured gravity, so pitch and roll are continuous and free. What was
+missing is the last degree of freedom — which way in the horizontal plane the
+bonnet points. Gravity cannot tell you; every yaw about the vertical looks the
+same to an accelerometer at rest. So the shipped default was a GUESS: "the
+phone's +Y axis points along the bonnet". `SimpleAlignment` could refine it,
+needed somebody to press a button, and was never called by anything.
+
+`alignment/autoAlign.ts` measures it. While driving straight all acceleration
+is longitudinal, so the horizontal samples form a cigar whose long axis is the
+vehicle's forward axis; PCA finds it in closed form from a 2x2 covariance. PCA
+returns a LINE, so the sign is resolved against the derivative of speed —
+while speeding up, the acceleration points forward. Without that, one hard
+brake outvotes ten gentle accelerations and the answer is 180 degrees out,
+which drives the estimate down the road in reverse.
+
+**Measured** — `pnpm eval:alignment` rotates the raw IMU of the same logs by a
+known angle and re-runs the same harness. docs/alignment.md:
+
+| mount | OFF | ON | estimate error |
+|---|---|---|---|
+| 0° | 10.0 % | 10.3 % | 3.1° |
+| 30° | 12.6 % | 10.5 % | 4.0° |
+| 60° | 24.5 % | 10.4 % | 4.1° |
+| 90° | 37.0 % | 10.3 % | 4.1° |
+
+The claim is not "better", it is INDEPENDENT: drift stops depending on how the
+phone was mounted. Deliberately not an ablation row — every recorded log was
+made with the phone square, so there the feature can only cost, and a row
+showing that alone would invite the wrong conclusion.
+
+**The 0.3 % at 0° moves the published headline from 10.0 % to 10.3 %.** That is
+the price of measuring something rather than assuming it, and the assumption is
+free and correct exactly once: when it happens to be true.
+
+**Two bugs, both caught by the new harness.**
+
+1. `forwardAccelDc` — a 40 s running mean subtracted from every sample as a
+   tilt estimate — was tracked in the VEHICLE frame, i.e. after the alignment
+   rotation. So when the alignment settled mid-drive the mean still described
+   the old rotation, and the difference was injected as an acceleration that
+   was not there, right through the outage window. With a 30° mount and a
+   4°-accurate alignment that scored 17.3 % — WORSE than not aligning at all
+   (12.6 %). Re-seeding the mean on every change was worse still (56 %). Fixed
+   by tracking it in the plane frame, where it is invariant to the mount.
+2. Quality blended toward each window's own quality, so a stretch of motorway
+   cruise — weak evidence, contradicting nothing — pulled confidence DOWN in an
+   alignment six windows had agreed on. Confidence in a constant quantity
+   should only grow with evidence; contradiction is handled by discarding.
+
+**And it keeps checking.** The engine watches the gravity direction it aligned
+against; when that has moved AND stayed moved it throws the alignment away,
+logs `ALIGNMENT`, shows REALIGNING on the panel and halves the confidence bar.
+A pothole is not a re-mount, so only a sustained change counts. There is a
+manual "Re-calibrate" button too — automatic is not the same as infallible.
+
+**Tests:** 1255 passing (was 1227; +28), including an eval guard that asserts
+both halves: that a crooked phone genuinely wrecks dead reckoning, and that
+alignment makes drift independent of the mount.
 
 ## NEXT PHASE
 

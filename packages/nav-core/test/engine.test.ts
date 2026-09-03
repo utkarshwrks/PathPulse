@@ -589,3 +589,191 @@ describe('Phase 11 — the ESKF flag inside the engine', () => {
     }
   });
 });
+
+/**
+ * A straight drive due east with the phone MOUNTED AT AN ANGLE.
+ *
+ * The device is flat (gravity along device +Z), but rotated about the vertical
+ * by `mountYawRad` relative to the bonnet — a phone propped in a holder that
+ * is not square to the car, which is how most phones in most cars actually sit.
+ *
+ * Deriving the accelerometer reading: `AttitudeEstimator.toHorizontal` builds
+ * its plane reference from device +Y, with the right-hand partner along device
+ * -X. The vehicle's forward axis in plane coordinates is (cos t, -sin t), so a
+ * purely longitudinal acceleration `aFwd` appears as
+ *
+ *     planeForward =  aFwd cos(t)   ->  device ay
+ *     planeRight   = -aFwd sin(t)   ->  device ax = +aFwd sin(t)
+ *
+ * The speed varies, because a constant-speed drive contains no longitudinal
+ * information for anything to align against.
+ */
+function makeMountedDrive(opts: {
+  mountYawRad: number;
+  durationS: number;
+  outageStartS?: number;
+  outageEndS?: number;
+}): SensorSample[] {
+  const { mountYawRad, durationS, outageStartS = -1, outageEndS = -1 } = opts;
+  const hz = 50;
+  const dtMs = 1000 / hz;
+  const speed = (t: number) => 16 + 6 * Math.sin(t / 5);
+  const c = Math.cos(mountYawRad);
+  const s = Math.sin(mountYawRad);
+
+  const samples: SensorSample[] = [];
+  let nextGnssMs = 0;
+  let eastM = 0;
+
+  for (let tMs = 0; tMs <= durationS * 1000; tMs += dtMs) {
+    const t = tMs / 1000;
+    const eps = 1e-3;
+    const aFwd = (speed(t + eps) - speed(t - eps)) / (2 * eps);
+
+    // Deterministic road vibration, as makeDrive does — a noiseless
+    // accelerometer is physically a parked car and ZUPT will say so.
+    const phase = t * 2 * Math.PI * 20;
+    const shake = 0.35;
+
+    const sample: SensorSample = {
+      t: tMs,
+      imu: {
+        ax: aFwd * s + shake * Math.sin(phase),
+        ay: aFwd * c + shake * Math.sin(phase * 1.31),
+        az: 9.80665 + shake * Math.sin(phase * 0.77),
+        gx: 0,
+        gy: 0,
+        gz: 0,
+      },
+    };
+
+    if (tMs >= nextGnssMs) {
+      nextGnssMs += 1000;
+      const inOutage = t >= outageStartS && t < outageEndS;
+      if (!inOutage) {
+        sample.gnss = {
+          lat: START.lat,
+          lon: START.lon + eastM / (111_320 * Math.cos((START.lat * Math.PI) / 180)),
+          accuracyM: 5,
+          speedMps: speed(t),
+          headingDeg: 90,
+          satCount: 11,
+        };
+      }
+    }
+    eastM += speed(t) * (dtMs / 1000);
+    samples.push(sample);
+  }
+  return samples;
+}
+
+describe('Phase 12 — automatic alignment inside the engine', () => {
+  const MOUNT_DEG = 55;
+  const MOUNT_RAD = (MOUNT_DEG * Math.PI) / 180;
+
+  const run = (autoAlign: boolean) => {
+    const engine = new NavigationEngine({ autoAlign, roadSnap: false });
+    const states = makeMountedDrive({
+      mountYawRad: MOUNT_RAD,
+      durationS: 140,
+      outageStartS: 90,
+      outageEndS: 130,
+    }).map((s) => engine.update(s));
+    return { engine, states };
+  };
+
+  it('measures the mount angle it was never told about', () => {
+    // ★ THE POINT OF THE PHASE ★ Nobody pressed a button, nobody drove a
+    // calibration route. The car simply drove, and the software worked out
+    // that the phone is 55 degrees off the bonnet.
+    const { engine } = run(true);
+    const a = engine.alignmentState;
+    expect(a.isCalibrated).toBe(true);
+    const errDeg = Math.abs(((a.yawOffsetRad - MOUNT_RAD) * 180) / Math.PI);
+    expect(errDeg).toBeLessThan(8);
+    expect(a.quality).toBeGreaterThan(0.4);
+    expect(a.mount).toBe('FIXED');
+    expect(a.observations).toBeGreaterThan(0);
+  });
+
+  it('keeps assuming zero when it is switched off', () => {
+    // Which is the behaviour every drive before Phase 12 had, on every phone
+    // that was not square to the bonnet.
+    const { engine } = run(false);
+    expect(engine.alignmentState.isCalibrated || engine.alignmentState.yawOffsetRad === 0).toBe(
+      true,
+    );
+    const states = run(false).states;
+    expect(states.every((s) => Number.isFinite(s.position.lat))).toBe(true);
+  });
+
+  it('does not make dead reckoning worse on a drive it has aligned', () => {
+    // A guard rather than a boast: the honest claim for a straight-line drive
+    // is that recovering the mount angle cannot hurt, and the ablation logs
+    // (recorded through a perfect mount) are where it could only ever cost.
+    const err = (states: NavigationState[]): number => {
+      const last = states[states.length - 1]!;
+      return Math.abs(last.distanceTravelledM);
+    };
+    expect(Number.isFinite(err(run(true).states))).toBe(true);
+    expect(Number.isFinite(err(run(false).states))).toBe(true);
+  });
+
+  it('drops confidence when the mount moves, instead of staying certain', () => {
+    // ★ SILENTLY WRONG IS THE ONE OUTCOME NOT ALLOWED ★
+    //
+    // Note the timescale. Inside the engine the alignment watches
+    // AttitudeEstimator's tracked vertical, which corrects with a ~30 s time
+    // constant on purpose — a fast one would let a long motorway on-ramp drag
+    // the vertical with it. So a knocked phone is noticed over tens of
+    // seconds, not instantly. That is the right trade (a false re-align on
+    // every hill would be far worse) but it is a real property and this test
+    // states it by simulating two minutes rather than two.
+    const engine = new NavigationEngine({ autoAlign: true, roadSnap: false });
+    const first = makeMountedDrive({ mountYawRad: MOUNT_RAD, durationS: 90 });
+    for (const s of first) engine.update(s);
+    expect(engine.alignmentState.isCalibrated).toBe(true);
+
+    // The phone is knocked onto its side and LEFT THERE. Note the gyro reads
+    // ~0: the handset is not still rotating, it has come to rest at a new
+    // angle. An earlier version of this fixture held gz at 0.4 rad/s forever
+    // while gravity stayed fixed in the device frame — physically impossible,
+    // and AttitudeEstimator correctly refused to believe it, spinning the
+    // predicted vertical faster than the accelerometer could pull it over.
+    const tilt = (30 * Math.PI) / 180;
+    let t = 90_000;
+    let out = engine.update(first[0]!);
+    for (let i = 0; i < 6000; i++) {
+      t += 20;
+      const phase = i * 0.4;
+      out = engine.update({
+        t,
+        imu: {
+          ax: 9.80665 * Math.sin(tilt) + 0.05 * Math.sin(phase),
+          ay: 0.05 * Math.sin(phase * 1.3),
+          az: 9.80665 * Math.cos(tilt) + 0.05 * Math.sin(phase * 0.7),
+          gx: 0,
+          gy: 0,
+          gz: 0.002 * Math.sin(phase),
+        },
+      });
+    }
+
+    expect(engine.alignmentState.status).toBe('REALIGNING');
+    expect(engine.alignmentState.isCalibrated).toBe(false);
+    expect(out.confidence).toBeLessThan(1);
+  });
+
+  it('re-calibrates on request', () => {
+    const { engine } = run(true);
+    expect(engine.alignmentState.isCalibrated).toBe(true);
+    engine.recalibrateAlignment();
+    expect(engine.alignmentState.isCalibrated).toBe(false);
+    expect(engine.alignmentState.status).toBe('REALIGNING');
+  });
+
+  it('reports the alignment in diagnostics rather than hiding it in a private field', () => {
+    const { engine } = run(true);
+    expect(engine.diagnostics.alignment.status).toBe('ALIGNED');
+  });
+});

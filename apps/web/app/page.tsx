@@ -366,6 +366,7 @@ export default function Home() {
         lastGnss={nav.lastGnss}
         roadGraphEntry={nav.roadGraphEntry}
         diagnostics={nav.diagnostics}
+        onRecalibrateAlignment={nav.recalibrateAlignment}
         stats={nav.stats}
         events={nav.events}
         controls={nav.controls}

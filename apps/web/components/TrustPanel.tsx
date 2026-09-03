@@ -17,6 +17,8 @@ interface TrustPanelProps {
   controls: EngineControls;
   onControlsChange: (patch: Partial<EngineControls>) => void;
   onExportEvents: () => void;
+  /** Phase 12 — the "Re-calibrate" button on the CONSTRAINTS tab. */
+  onRecalibrateAlignment: () => void;
   /** Phase 9F — the whole trip, as a file a judge can open later. */
   onExportTrip: (format: 'gpx' | 'geojson') => void;
   /** Points in the estimated track, so the buttons can refuse an empty trip. */
@@ -72,6 +74,7 @@ export default function TrustPanel({
   controls,
   onControlsChange,
   onExportEvents,
+  onRecalibrateAlignment,
   onExportTrip,
   tripPointCount,
   imuHz,
@@ -148,7 +151,12 @@ export default function TrustPanel({
               />
             ) : null}
             {tab === 'constraints' ? (
-              <ConstraintsTab controls={controls} onChange={onControlsChange} />
+              <ConstraintsTab
+                controls={controls}
+                onChange={onControlsChange}
+                alignment={diagnostics.alignment}
+                onRecalibrate={onRecalibrateAlignment}
+              />
             ) : null}
             {tab === 'events' ? (
               <EventsTab
@@ -430,6 +438,11 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
   { key: 'medianFilter', label: 'Median filter', hint: 'Rejects pothole spikes.' },
   { key: 'adaptiveTimeout', label: 'Adaptive GNSS timeout', hint: 'Track the receiver’s real fix rate instead of assuming 1 Hz.' },
   {
+    key: 'autoAlign',
+    label: 'Automatic alignment',
+    hint: 'Works out which way the phone is pointing relative to the car, from straight-line driving. Off assumes the phone’s +Y axis points along the bonnet — true of a demo cradle and of nothing else.',
+  },
+  {
     key: 'eskf',
     label: 'ESKF (off — better tail, worse mean)',
     hint: '15-state error-state Kalman filter for position during an outage. Measured: 10.8% mean vs 10.0%, but 17.8% p90 vs 22.7%. On is not simply better, and that is the point.',
@@ -499,9 +512,13 @@ function ConstellationGroup({
 function ConstraintsTab({
   controls,
   onChange,
+  alignment,
+  onRecalibrate,
 }: {
   controls: EngineControls;
   onChange: (patch: Partial<EngineControls>) => void;
+  alignment: EngineDiagnostics['alignment'];
+  onRecalibrate: () => void;
 }) {
   return (
     <div className="space-y-1">
@@ -509,6 +526,8 @@ function ConstraintsTab({
         Live — effective on the next sample, no restart. Switch one off during an
         outage and watch the estimate degrade.
       </p>
+
+      <AlignmentCard alignment={alignment} onRecalibrate={onRecalibrate} enabled={controls.autoAlign} />
 
       {TOGGLES.map((t) => (
         <Toggle
@@ -533,6 +552,76 @@ function ConstraintsTab({
         Road snapping only engages where a road graph covers the area — check
         GRAPH on the SENSORS tab.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Phase 12's alignment readout.
+ *
+ * ★ THE STATUS IS THE POINT, NOT THE NUMBER ★
+ * An alignment engine that quietly keeps reporting a stale answer after the
+ * phone has been knocked is worse than none, because the failure is invisible.
+ * So this shows what the engine currently believes AND how sure it is, and it
+ * says REALIGNING in amber when it has thrown an answer away — at the same
+ * moment the confidence bar drops. A judge who knocks the phone should be able
+ * to watch the system notice.
+ */
+function AlignmentCard({
+  alignment,
+  onRecalibrate,
+  enabled,
+}: {
+  alignment: EngineDiagnostics['alignment'];
+  onRecalibrate: () => void;
+  enabled: boolean;
+}) {
+  const { status, yawOffsetRad, quality, mount, pitchDeg, rollDeg, observations } = alignment;
+  const tone =
+    !enabled
+      ? 'text-neutral-500'
+      : status === 'ALIGNED'
+        ? 'text-emerald-400'
+        : status === 'REALIGNING'
+          ? 'text-amber-400'
+          : 'text-neutral-400';
+
+  const offsetDeg = (yawOffsetRad * 180) / Math.PI;
+
+  return (
+    <div className="mb-2 rounded border border-white/10 bg-white/[0.02] p-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[9.5px] tracking-wider text-neutral-500">PHONE → VEHICLE</span>
+        <span className={`text-[10px] font-medium ${tone}`}>
+          {enabled ? status : 'OFF — ASSUMING 0°'}
+        </span>
+      </div>
+
+      <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
+        <Row k="MOUNT OFFSET" v={enabled && status === 'ALIGNED' ? `${offsetDeg.toFixed(1)}°` : '—'} />
+        <Row k="CONFIDENCE" v={enabled && status === 'ALIGNED' ? `${(quality * 100).toFixed(0)}%` : '—'} />
+        <Row k="PITCH / ROLL" v={`${pitchDeg.toFixed(0)}° / ${rollDeg.toFixed(0)}°`} />
+        <Row k="HOLDER" v={mount} />
+      </div>
+
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <p className="text-[9px] leading-snug text-neutral-500">
+          {!enabled
+            ? 'Switched off — the estimator assumes the phone points along the bonnet.'
+            : status === 'ALIGNED'
+              ? `Learned from ${observations} straight stretch${observations === 1 ? '' : 'es'}. Pitch and roll come from gravity, continuously.`
+              : status === 'REALIGNING'
+                ? 'The phone moved. Confidence is reduced until a straight stretch re-establishes the mount.'
+                : 'Needs a straight stretch above 18 km/h with some accelerating and braking in it.'}
+        </p>
+        <button
+          type="button"
+          onClick={onRecalibrate}
+          className="shrink-0 rounded border border-white/15 px-2 py-1 text-[9.5px] text-neutral-300 transition hover:border-white/30 hover:text-white"
+        >
+          Re-calibrate
+        </button>
+      </div>
     </div>
   );
 }

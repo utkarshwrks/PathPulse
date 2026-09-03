@@ -31,6 +31,12 @@ export type NavEventType =
    * needed rescuing is a fact about the run, not an implementation detail.
    */
   | 'ESKF_RESET'
+  /**
+   * The automatic alignment engine changed its mind about the mount. Phase 12.
+   * Logged on every transition, because "we no longer know which way the phone
+   * is pointing" is exactly the sort of thing that must not be silent.
+   */
+  | 'ALIGNMENT'
   | 'WARNING';
 
 export interface NavEvent {

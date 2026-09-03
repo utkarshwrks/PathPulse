@@ -3,6 +3,7 @@ import { enuToLatLon, latLonToEnu } from '../geo/enu.js';
 import { haversineDistance } from '../geo/distance.js';
 import { AttitudeEstimator } from '../alignment/attitude.js';
 import { SimpleAlignment } from '../alignment/simpleAlignment.js';
+import { AutoAlignment, type AutoAlignState } from '../alignment/autoAlign.js';
 import { StationarityDetector, type StationarityResult } from '../filters/stationarity.js';
 import { Vec3LowPassFilter, Vec3MedianFilter } from '../filters/index.js';
 import { DeadReckoningEngine } from '../deadreckoning/DeadReckoningEngine.js';
@@ -136,6 +137,23 @@ export interface ConstraintFlags {
    * docs/benchmarks.md is the only thing entitled to decide that.
    */
   eskf: boolean;
+  /**
+   * ★ PHASE 12 ★ Estimate the phone-to-vehicle yaw offset automatically,
+   * instead of assuming the phone's +Y axis points along the bonnet.
+   *
+   * ON by default, unlike Phase 11's filter, because the thing it replaces is
+   * not a tuned alternative — it is a GUESS. `SimpleAlignment` needed somebody
+   * to press a button and drive straight, and nothing in the app ever called
+   * it, so every drive to date has run on "the mount is at zero degrees". That
+   * is true of the demo cradle and of nothing else. A 20 degree error turns a
+   * fifth of every braking event into phantom sideways motion.
+   *
+   * It is still a toggle, because being able to switch it off and watch the
+   * estimate degrade is worth more than the assurance that it works — and
+   * because the ablation logs were recorded through a perfect mount, where by
+   * construction it can only cost and never gain.
+   */
+  autoAlign: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -256,6 +274,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
   eskf: false,
+  autoAlign: true,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
@@ -406,6 +425,13 @@ export class NavigationEngine {
   private readonly eskf = new ErrorStateKalmanFilter();
   /** Consecutive trusted fixes the filter has rejected. See updateEskf. */
   private eskfGatedFixes = 0;
+  /** Phase 12. Runs always; consulted only when `config.autoAlign` is on. */
+  private readonly autoAlign = new AutoAlignment();
+  /** Last alignment status logged, so the event fires on change only. */
+  private lastAlignStatus: string | null = null;
+  /** Slow mean of horizontal acceleration, in the PLANE frame. See its use. */
+  private planeAccelDcF = 0;
+  private planeAccelDcR = 0;
 
   constructor(config: Partial<EngineConfig> = {}) {
     this.config = { ...DEFAULT_ENGINE_CONFIG, ...config };
@@ -517,8 +543,11 @@ export class NavigationEngine {
     /** Why the engine is dead reckoning or degraded, for the HUD. */
     modeReason: string | null;
     speedSource: SpeedSource;
+    /** Phase 12: where the alignment engine thinks the phone is pointing. */
+    alignment: AutoAlignState;
   } {
     return {
+      alignment: this.autoAlign.state,
       zuptTriggers: this.zupt.triggerCount,
       zaruTriggers: this.zaru.triggerCount,
       accelBias: this.zupt.accelBias,
@@ -621,6 +650,23 @@ export class NavigationEngine {
     this.alignment.startCalibration(nowMs);
   }
 
+  /** Phase 12's live alignment readout, for the UI. */
+  get alignmentState(): AutoAlignState {
+    return this.autoAlign.state;
+  }
+
+  /**
+   * Throw the alignment away and learn it again.
+   *
+   * Behind the "Re-calibrate" button. Automatic is not the same as infallible:
+   * if the driver can see the alignment is wrong, they should not have to
+   * argue with the software about it.
+   */
+  recalibrateAlignment(): void {
+    this.autoAlign.recalibrate();
+    this.alignment.reset();
+  }
+
   /** Feed one sensor sample and get the resulting navigation state. */
   update(sample: SensorSample): NavigationState {
     // 1. Reject stale or duplicate samples. A clock that jumps backwards would
@@ -721,22 +767,105 @@ export class NavigationEngine {
       // Split into forward/lateral in a genuinely horizontal plane. The old
       // code used device X/Y directly, which is only horizontal when the phone
       // happens to be lying flat.
-      const h = this.attitude.toHorizontal(linear, this.alignment.state.yawOffsetRad);
+      //
+      // ★ TAKEN IN THE PLANE'S OWN FRAME FIRST ★ Phase 12's alignment engine
+      // has to see the acceleration BEFORE the mount rotation is applied —
+      // the offset is precisely what it is trying to measure, and feeding it
+      // already-rotated values would close the loop and pin it at zero.
+      const plane = this.attitude.toHorizontal(linear, 0);
+
+      // ★ Yaw about the true vertical, not about device Z. ★ This is the fix
+      // for the marker setting off in a direction unrelated to the road.
+      // Computed here rather than further down because the alignment engine
+      // needs it to decide whether the vehicle is going straight.
+      yawRate = this.attitude.yawRate(
+        gx,
+        gy,
+        gz,
+        this.config.zaru ? (this.zaru.gyroBias as [number, number, number]) : [0, 0, 0],
+      );
+
+      this.autoAlign.push({
+        t: sample.t,
+        planeForward: plane.forward,
+        planeRight: plane.lateral,
+        yawRateRadPerSec: yawRate,
+        // One sample of lag — the DR has not propagated yet. At 10-50 Hz that
+        // is irrelevant to a five-second straightness test.
+        speedMps: this.dr.current.speedMps,
+        up: this.attitude.upVector as [number, number, number],
+      });
+
+      // Which offset to believe. The automatic estimate when it has one; the
+      // manual one otherwise, which is zero unless somebody calibrated by hand.
+      const auto = this.autoAlign.state;
+      const yawOffsetRad =
+        this.config.autoAlign && auto.isCalibrated
+          ? auto.yawOffsetRad
+          : this.alignment.state.yawOffsetRad;
+      const cy = Math.cos(yawOffsetRad);
+      const sy = Math.sin(yawOffsetRad);
+      const h = {
+        forward: plane.forward * cy - plane.lateral * sy,
+        lateral: plane.lateral * cy + plane.forward * sy,
+        vertical: plane.vertical,
+      };
       lateralAccel = h.lateral;
+
+      if (this.config.autoAlign && auto.status !== this.lastAlignStatus) {
+        this.lastAlignStatus = auto.status;
+        this.log.push({
+          t: sample.t,
+          type: 'ALIGNMENT',
+          message:
+            auto.status === 'ALIGNED'
+              ? `aligned: mount is ${((auto.yawOffsetRad * 180) / Math.PI).toFixed(0)}° off the bonnet (${auto.mount.toLowerCase()}, quality ${(auto.quality * 100).toFixed(0)}%)`
+              : auto.status === 'REALIGNING'
+                ? 'mount moved — alignment discarded, confidence reduced until it re-converges'
+                : auto.status === 'COLLECTING'
+                  ? 'straight stretch detected — collecting alignment samples'
+                  : 'waiting for a straight stretch above 18 km/h',
+          data: { status: auto.status, quality: Number(auto.quality.toFixed(2)) },
+        });
+      }
 
       // Feed the raw measurement to the estimator, then apply what it has
       // learned. Feeding the corrected value back in would close a loop and
       // drive the estimate to zero.
       this.forwardBias.pushAccel(h.forward);
 
-      // Track the slow-moving mean of forward acceleration.
+      // Track the slow-moving mean of horizontal acceleration.
+      //
+      // ★ TRACKED IN THE PLANE FRAME, NOT THE VEHICLE FRAME ★
+      //
+      // This is a forty-second running mean, and it is subtracted from every
+      // sample as an estimate of tilt error. Track it AFTER the alignment
+      // rotation and it becomes a statement about a signal whose definition
+      // moves whenever the alignment does: the offset settles mid-drive, the
+      // mean still describes the old rotation, and the difference is injected
+      // as an acceleration that is not there for as long as the time constant
+      // takes to unwind — straight through the outage window.
+      //
+      // Measured, with a 30 degree mount and an alignment accurate to 4
+      // degrees: tracked in the vehicle frame it scored 17.3 % drift, WORSE
+      // than not aligning at all (12.6 %). Re-seeding the mean on every
+      // alignment change was worse still (56 %), because it throws away the
+      // very history that stops the acceleration runaway.
+      //
+      // Kept in the plane frame the mean is invariant to the mount rotation —
+      // the same physical quantity however the phone is turned — and the
+      // forward component is recovered by rotating it, below.
       if (dtMs > 0 && dtMs < 1000) {
         const a = Math.min(0.2, dtMs / this.config.accelHighPassTauMs);
-        this.forwardAccelDc = this.hasAccelDc
-          ? this.forwardAccelDc + a * (h.forward - this.forwardAccelDc)
-          : h.forward;
+        this.planeAccelDcF = this.hasAccelDc
+          ? this.planeAccelDcF + a * (plane.forward - this.planeAccelDcF)
+          : plane.forward;
+        this.planeAccelDcR = this.hasAccelDc
+          ? this.planeAccelDcR + a * (plane.lateral - this.planeAccelDcR)
+          : plane.lateral;
         this.hasAccelDc = true;
       }
+      this.forwardAccelDc = this.planeAccelDcF * cy - this.planeAccelDcR * sy;
 
       // ★ TWO WAYS TO KILL THE SAME RUNAWAY, IN ORDER OF PREFERENCE ★
       //
@@ -764,14 +893,6 @@ export class NavigationEngine {
         forwardAccel = h.forward;
       }
 
-      // ★ Yaw about the true vertical, not about device Z. ★ This is the fix
-      // for the marker setting off in a direction unrelated to the road.
-      yawRate = this.attitude.yawRate(
-        gx,
-        gy,
-        gz,
-        this.config.zaru ? (this.zaru.gyroBias as [number, number, number]) : [0, 0, 0],
-      );
       this.dr.setGyroBias(this.zaru.gyroBias as [number, number, number]);
       this.dr.setAccelBias(this.zupt.accelBias as [number, number, number]);
 
@@ -1812,12 +1933,21 @@ export class NavigationEngine {
    * position was still wrong — exactly backwards.
    */
   private currentConfidence(tMs: number, mode: NavigationState['mode']): number {
+    // ★ AN UNKNOWN MOUNT IS AN UNKNOWN HEADING ★ Phase 12. While the alignment
+    // has been discarded — the phone was knocked, or nothing has been learned
+    // yet — the forward axis is a guess, and dead reckoning along a guessed
+    // axis is exactly the failure this system exists to avoid. Say so on the
+    // confidence bar rather than continuing to look certain. GNSS modes are
+    // unaffected: there the position is measured, not inferred.
+    const alignmentPenalty =
+      this.config.autoAlign && this.autoAlign.state.status === 'REALIGNING' ? 0.5 : 1;
+
     if (mode === 'GNSS') return 1;
     if (mode === 'GNSS_DEGRADED') return 0.7;
     if (mode === 'INITIALIZING') return 0;
     const drElapsedMs =
       this.drStartedAtMs === null ? 0 : Math.max(0, tMs - this.drStartedAtMs);
-    const c = Math.exp(-drElapsedMs / this.config.confidenceTimeConstantMs);
+    const c = Math.exp(-drElapsedMs / this.config.confidenceTimeConstantMs) * alignmentPenalty;
     return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
   }
 
@@ -1938,6 +2068,10 @@ export class NavigationEngine {
     this.spoofing.reset();
     this.lastTurn = null;
     this.alignment.reset();
+    this.autoAlign.reset();
+    this.lastAlignStatus = null;
+    this.planeAccelDcF = 0;
+    this.planeAccelDcR = 0;
     this.zupt.reset();
     this.zaru.reset();
     this.forwardBias.reset();

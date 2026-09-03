@@ -56,7 +56,8 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1227) |
+| `pnpm test` | All workspace tests (1255) |
+| `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -449,6 +450,7 @@ is. A scripted animation cannot be broken on request.
 | **Speed clamp** | Vehicles obey physics, and roads have limits | Integrated sensor error masquerading as motion |
 | **Adaptive fix timeout** | The receiver's cadence is observable, so observe it | "DEAD RECKONING" being announced under open sky on a 0.2 Hz receiver |
 | **ESKF** (`eskf/`) | Every measurement is worth what its variance says it is worth | Cross-track drift in the tail — **off by default, see below** |
+| **Auto alignment** (`alignment/autoAlign.ts`) | While driving straight, all acceleration is longitudinal — so its principal axis IS the vehicle's forward axis | A phone that is not square to the bonnet. Drift stops depending on the mount |
 
 The ablation is generated in CI by
 `packages/sensor-sources/test/ablation.test.ts`. Ground truth is the GNSS the
@@ -509,6 +511,70 @@ A UKF here would cost 31 propagations per step to fix a linearisation error
 that is not present, on a phone at 10 Hz and an edge engine at 200 Hz. The
 comparison is worth running and neither implementation is wasted — but that is
 the argument, and it is why this one exists first.
+
+### Phase 12 — the phone does not have to be straight any more
+
+Half of alignment was already solved: `AttitudeEstimator` tracks measured
+gravity, so pitch and roll are continuous and free. The missing degree of
+freedom is **which way in the horizontal plane the bonnet points** — gravity
+cannot tell you, because every yaw about the vertical looks identical to an
+accelerometer at rest.
+
+Until Phase 12 that came from a manual calibration nothing ever called, so the
+shipped default was a guess: *the phone's +Y axis points along the bonnet*.
+True of the demo cradle and of nothing else.
+
+`alignment/autoAlign.ts` measures it instead. While the vehicle drives straight
+all of its acceleration is longitudinal — accelerating and braking are the same
+axis, opposite signs — so the horizontal acceleration samples form a
+cigar-shaped cloud whose long axis is the vehicle's forward axis. Principal
+component analysis finds it in closed form from a 2×2 covariance. PCA returns a
+*line*, so the forward/backward sign is resolved against the derivative of
+speed: while speeding up, the acceleration points forward.
+
+**Measured** — `pnpm eval:alignment`, which rotates the raw IMU of the same
+logs by a known angle and re-runs the same harness ([docs/alignment.md](docs/alignment.md)):
+
+| Mount offset | alignment OFF | alignment ON | estimate error |
+| --- | --- | --- | --- |
+| 0° | 10.0 % | 10.3 % | 3.1° |
+| 30° | 12.6 % | 10.5 % | 4.0° |
+| 60° | 24.5 % | 10.4 % | 4.1° |
+| 90° | 37.0 % | 10.3 % | 4.1° |
+
+The claim is not "better" — it is **independent**. With alignment on, drift no
+longer depends on how the phone was mounted. The 0.3 % at 0° is the price of
+measuring something instead of assuming it, and the assumption is free and
+correct exactly once: when it happens to be true.
+
+This is deliberately **not** an ablation row. Every recorded log was made with
+the phone square, so there the true offset is zero, an alignment engine has
+nothing to find, and every degree it estimates is pure cost — a row showing
+only that would invite exactly the wrong conclusion.
+
+Two things had to be right, and both were wrong first:
+
+1. **The high-pass mean has to live in the plane frame.** `forwardAccelDc` is a
+   40-second running mean subtracted from every sample as a tilt estimate.
+   Tracked *after* the alignment rotation it describes a signal whose
+   definition moves when the alignment settles, and the difference is injected
+   as an acceleration that is not there. With a 30° mount and an alignment
+   accurate to 4°, that scored **worse than not aligning at all** — 17.3 %
+   against 12.6 %. Re-seeding the mean on every change was worse still (56 %),
+   because it throws away the history that stops the acceleration runaway.
+   Kept in the plane frame it is invariant to the mount and the problem
+   disappears.
+2. **Quality accumulates; it does not track the last window.** A stretch of
+   motorway cruise is weak evidence but contradicts nothing, and blending
+   toward its low quality pulled confidence *down* in an alignment six previous
+   windows had agreed on.
+
+**And it has to keep being true.** A phone in a holder gets knocked; one in a
+cup holder turns on every corner. The engine watches the gravity direction it
+aligned against and, when that has moved *and stayed moved*, discards the
+alignment, says `REALIGNING` on the panel and drops the confidence bar — rather
+than continuing to report a number it no longer believes. A single pothole is
+not a re-mount, so only a sustained change counts.
 
 ### Why attitude accuracy is position accuracy
 

@@ -22,6 +22,17 @@ import { DEFAULT_CONTROLS, type EngineDiagnostics } from '@/hooks/useNavigationE
 afterEach(cleanup);
 
 const DIAGNOSTICS: EngineDiagnostics = {
+  alignment: {
+    yawOffsetRad: 0.21,
+    isCalibrated: true,
+    quality: 0.82,
+    status: 'ALIGNED',
+    mount: 'FIXED',
+    pitchDeg: -4,
+    rollDeg: 2,
+    observations: 3,
+    lastAlignedAtMs: 42_000,
+  },
   zuptTriggers: 3,
   zaruTriggers: 7,
   accelBias: [0.021, -0.004, 0.001],
@@ -87,8 +98,10 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
   const onControlsChange = vi.fn();
   const onExportEvents = vi.fn();
   const onExportTrip = vi.fn();
+  const onRecalibrateAlignment = vi.fn();
   const utils = render(
     <TrustPanel
+      onRecalibrateAlignment={onRecalibrateAlignment}
       simulated={false}
       modelInfo={{ loaded: true, error: null, sizeBytes: 36076, latencyMs: 8.2, inferences: 40 }}
       sample={SAMPLE}
@@ -114,7 +127,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
       {...overrides}
     />,
   );
-  return { ...utils, onControlsChange, onExportEvents, onExportTrip };
+  return { ...utils, onControlsChange, onExportEvents, onExportTrip, onRecalibrateAlignment };
 }
 
 function openPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>> = {}) {
@@ -500,5 +513,46 @@ describe('TrustPanel — trip export (9F)', () => {
     openPanel();
     fireEvent.click(screen.getByRole('button', { name: /^events$/i }));
     expect(screen.getByText(/two tracks/i)).toBeDefined();
+  });
+});
+
+describe('TrustPanel — Phase 12 alignment card', () => {
+  const constraints = (overrides = {}) => {
+    const r = renderPanel(overrides);
+    fireEvent.click(screen.getByRole('button', { name: 'CONSTRAINTS' }));
+    return r;
+  };
+
+  it('shows the measured mount offset rather than leaving it implicit', () => {
+    constraints();
+    expect(screen.getByText('ALIGNED')).toBeTruthy();
+    // 0.21 rad is 12.0 degrees.
+    expect(screen.getByText('12.0°')).toBeTruthy();
+    expect(screen.getByText('FIXED')).toBeTruthy();
+  });
+
+  it('says REALIGNING, not a stale number, once the phone has been moved', () => {
+    // ★ THE FAILURE MUST BE VISIBLE ★ An alignment engine that keeps showing
+    // its last answer after the mount moved is worse than none at all.
+    constraints({
+      diagnostics: {
+        ...DIAGNOSTICS,
+        alignment: { ...DIAGNOSTICS.alignment, status: 'REALIGNING', isCalibrated: false },
+      },
+    });
+    expect(screen.getByText('REALIGNING')).toBeTruthy();
+    expect(screen.queryByText('12.0°')).toBeNull();
+    expect(screen.getByText(/confidence is reduced/i)).toBeTruthy();
+  });
+
+  it('admits it is assuming zero when the feature is switched off', () => {
+    constraints({ controls: { ...DEFAULT_CONTROLS, autoAlign: false } });
+    expect(screen.getByText(/assuming 0°/i)).toBeTruthy();
+  });
+
+  it('fires the re-calibrate action', () => {
+    const { onRecalibrateAlignment } = constraints();
+    fireEvent.click(screen.getByRole('button', { name: /re-calibrate/i }));
+    expect(onRecalibrateAlignment).toHaveBeenCalledTimes(1);
   });
 });

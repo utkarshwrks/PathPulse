@@ -5,6 +5,7 @@ import {
   EMPTY_SESSION_SUMMARY,
   NavigationEngine,
   SessionStats,
+  type AutoAlignState,
   type ConstraintFlags,
   type NavEvent,
   type MotionContext,
@@ -83,6 +84,8 @@ export interface EngineDiagnostics {
   acquiringReason: string | null;
   modeReason: string | null;
   speedSource: SpeedSource;
+  /** Phase 12 — where the alignment engine thinks the phone is pointing. */
+  alignment: AutoAlignState;
 }
 
 const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
@@ -120,6 +123,17 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   acquiringReason: null,
   modeReason: null,
   speedSource: 'NONE',
+  alignment: {
+    yawOffsetRad: 0,
+    isCalibrated: false,
+    quality: 0,
+    status: 'WAITING',
+    mount: 'UNKNOWN',
+    pitchDeg: 0,
+    rollDeg: 0,
+    observations: 0,
+    lastAlignedAtMs: null,
+  },
 };
 
 
@@ -156,6 +170,13 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // Phase 12. ON, because what it replaces is not a tuned alternative but a
+  // guess — "the phone's +Y axis points along the bonnet" — which is true of
+  // the demo cradle and of nothing else. Measured over the ablation logs with
+  // the IMU deliberately rotated: without it drift climbs from 10.0% to 37.0%
+  // as the mount goes from square to 90 degrees off; with it, it stays flat at
+  // about 10.4% at every angle. See docs/alignment.md.
+  autoAlign: true,
   // Phase 11. Off by default, matching the engine: over the ablation logs the
   // filter measures 10.8% mean against the shipped chain's 10.0%, and 17.8%
   // p90 against 22.7%. Worse in the middle, better in the tail. Toggleable so
@@ -198,6 +219,8 @@ export interface NavEngineOutput {
   setControls: (patch: Partial<EngineControls>) => void;
   feed: (sample: SensorSample) => void;
   reset: () => void;
+  /** Phase 12 — throw the mount alignment away and learn it again. */
+  recalibrateAlignment: () => void;
   exportEventsJson: () => string;
 }
 
@@ -374,6 +397,11 @@ export function useNavigationEngine(): NavEngineOutput {
     setStats(EMPTY_SESSION_SUMMARY);
   }, []);
 
+  /** Phase 12 — behind the "Re-calibrate" button. */
+  const recalibrateAlignment = useCallback(() => {
+    engineRef.current?.recalibrateAlignment();
+  }, []);
+
   const exportEventsJson = useCallback(() => engineRef.current?.events.toJSON() ?? '[]', []);
 
   // Returns a copy: handing out the live ref would let a caller mutate the
@@ -399,6 +427,7 @@ export function useNavigationEngine(): NavEngineOutput {
       feed,
       reset,
       exportEventsJson,
+      recalibrateAlignment,
       gnssTrail,
     }),
     [
@@ -417,6 +446,7 @@ export function useNavigationEngine(): NavEngineOutput {
       feed,
       reset,
       exportEventsJson,
+      recalibrateAlignment,
       gnssTrail,
     ],
   );

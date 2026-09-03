@@ -20,6 +20,12 @@ export interface RunResult {
   metrics: EvalMetrics;
   states: NavigationState[];
   truth: TruthPoint[];
+  /**
+   * What the alignment engine concluded about the mount by the end of the run,
+   * degrees, or null if it never had enough evidence. Phase 12's evaluation
+   * needs to report how close it got, not only what it cost.
+   */
+  alignmentDeg: number | null;
 }
 
 /** Parse a JSONL log. Malformed lines are skipped, not fatal. */
@@ -116,5 +122,11 @@ export function runEval(samples: readonly SensorSample[], opts: RunOptions): Run
     positionResets: events.filter((e) => e.type === 'POSITION_RESET').length,
   });
 
-  return { metrics, states, truth };
+  const align = diagnostics.alignment;
+  return {
+    metrics,
+    states,
+    truth,
+    alignmentDeg: align.isCalibrated ? (align.yawOffsetRad * 180) / Math.PI : null,
+  };
 }
