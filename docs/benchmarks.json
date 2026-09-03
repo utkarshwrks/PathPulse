@@ -209,6 +209,25 @@
       "roadSnapPct": 99.23531193216233,
       "positionResets": 0,
       "discardedSamples": 0
+    },
+    {
+      "config": "hmm",
+      "description": "Phase 14. The shipped configuration, with the matched road chosen by a Newson-Krumm HMM over a sliding window instead of nearest-road-plus-continuity. Everything else identical to `full`.",
+      "runs": 12,
+      "meanDriftPct": 10.517485209719188,
+      "medianDriftPct": 6.950407578885843,
+      "p90DriftPct": 25.075863779745617,
+      "maxDriftPct": 30.465048437952003,
+      "meanRmseM": 73.40531219346742,
+      "meanAlongM": 59.82448263216998,
+      "meanCrossM": 39.47581175932356,
+      "meanCep95M": 126.2341055852724,
+      "meanRecoveryS": 6.286000000000001,
+      "meanUpdateHz": 50,
+      "totalZupt": 18,
+      "roadSnapPct": 99.6845346254795,
+      "positionResets": 0,
+      "discardedSamples": 0
     }
   ]
 }

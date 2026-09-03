@@ -25,6 +25,7 @@ the outage window. Road graphs used: city, highway.
 | full | **9.2** | 5.3 | 22.6 | 28.2 | 71.4 | 57.4 | 39.6 | 118.4 |
 | full_forwardbias | **13.3** | 14.5 | 21.6 | 26.8 | 85.2 | 71.2 | 41.8 | 152.4 |
 | eskf | **10.1** | 8.5 | 19.4 | 25.0 | 80.5 | 62.2 | 46.2 | 135.3 |
+| hmm | **10.5** | 7.0 | 25.1 | 30.5 | 73.4 | 59.8 | 39.5 | 126.2 |
 
 ![drift by configuration](./ablation.svg)
 
@@ -42,6 +43,7 @@ the outage window. Road graphs used: city, highway.
 | full | 6.29 | 50.0 | 18 | 99.7 | 0 |
 | full_forwardbias | 7.59 | 50.0 | 18 | 100.0 | 0 |
 | eskf | 6.85 | 50.0 | 18 | 99.2 | 0 |
+| hmm | 6.29 | 50.0 | 18 | 99.7 | 0 |
 
 ## What each row is
 
@@ -55,6 +57,7 @@ the outage window. Road graphs used: city, highway.
 - **full** — Everything that earns its place, including road snapping. This is what ships.
 - **full_forwardbias** — NEGATIVE RESULT, kept deliberately. Full plus the GNSS-Doppler forward-bias estimator, which measurably WORSENS drift now that the high-pass exists. Reported rather than deleted.
 - **eskf** — Phase 11. The shipped configuration, with position taken from the 15-state error-state Kalman filter while dead reckoning instead of from open-loop integration. Everything else identical to `full`.
+- **hmm** — Phase 14. The shipped configuration, with the matched road chosen by a Newson-Krumm HMM over a sliding window instead of nearest-road-plus-continuity. Everything else identical to `full`.
 
 ## Reading this table
 

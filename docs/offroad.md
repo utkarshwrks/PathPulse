@@ -12,8 +12,7 @@ only samples the engine drew while `DEAD_RECKONING` are counted.
 
 | Config | samples | mean | median | p90 | max | >10 m | >25 m |
 |---|---|---|---|---|---|---|---|
-| full | 37196 | 0.8 m | 0.0 m | 0.0 m | 71.1 m | 2.8 % | 0.8 % |
-| highpass | 37196 | 15.7 m | 5.6 m | 49.9 m | 106.5 m | 35.2 % | 21.9 % |
+| hmm | 37196 | 1.3 m | 0.0 m | 0.5 m | 75.2 m | 3.9 % | 1.4 % |
 
 `highpass` is the same estimator with road snapping switched off, so the gap
 between the rows is what snapping is worth — measured on the axis it exists to

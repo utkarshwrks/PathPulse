@@ -24,6 +24,8 @@ import {
   type RoadSnapConfig,
 } from '../constraints/roadsnap.js';
 import { RoadIndex } from '../mapmatch/RoadIndex.js';
+import { RoadTopology } from '../mapmatch/RoadTopology.js';
+import { HmmMapMatcher, type HmmConfig } from '../mapmatch/hmm.js';
 import { describeTurn, TurnDetector, type TurnEvent } from '../mapmatch/turnDetector.js';
 import { SpoofingDetector } from '../detect/spoofing.js';
 import {
@@ -242,6 +244,21 @@ export interface ConstraintFlags {
    * ships disabled and the measurement decides.
    */
   useMlResidual: boolean;
+  /**
+   * ★ PHASE 14 ★ Choose the matched road with a Newson-Krumm HMM over a
+   * sliding window instead of nearest-road-plus-continuity.
+   *
+   * The difference is structural, not incremental. Greedy matching cannot
+   * express that a road is CLOSE BUT UNREACHABLE — a service road twenty
+   * metres away, the opposite carriageway, the road under a flyover are all
+   * twenty metres away and all require driving to the next junction and back.
+   * The HMM's transition term is exactly that quantity, so it can.
+   *
+   * It also costs a routable topology and a Viterbi pass per observation, so
+   * whether it ships is a measurement, not a preference. See docs/benchmarks.md.
+   */
+  hmmMatch: boolean;
+  hmmConfig: Partial<HmmConfig>;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -370,6 +387,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   autoAlign: true,
   useMlMotion: true,
   useMlResidual: false,
+  hmmMatch: false,
+  hmmConfig: {},
   residualConfig: DEFAULT_RESIDUAL_CONFIG,
   trustedAccuracyM: 20,
   gyroZSign: 1,
@@ -519,6 +538,10 @@ export class NavigationEngine {
   private drStartedAtMs: number | null = null;
   /** Phase 11. Runs on every sample; read only when `config.eskf` is on. */
   private readonly eskf = new ErrorStateKalmanFilter();
+  /** Phase 14. Built lazily beside the RoadIndex, from the same graph. */
+  private topology: RoadTopology | null = null;
+  private hmm: HmmMapMatcher | null = null;
+  private lastHmmEnu: EnuPoint | null = null;
   /** Consecutive trusted fixes the filter has rejected. See updateEskf. */
   private eskfGatedFixes = 0;
   /** Phase 12. Runs always; consulted only when `config.autoAlign` is on. */
@@ -850,6 +873,9 @@ export class NavigationEngine {
   setRoadGraph(graph: RoadGraph | null): void {
     this.roadGraph = graph;
     this.roadIndex = null;
+    this.topology = null;
+    this.hmm = null;
+    this.lastHmmEnu = null;
     this.lastMatchedWayId = null;
     this.lastMatch = null;
   }
@@ -1961,6 +1987,13 @@ export class NavigationEngine {
       if (!this.roadIndex && this.roadGraph) {
         this.roadIndex = new RoadIndex(this.roadGraph, this.origin.lat, this.origin.lon);
       }
+      // Phase 14's topology is built only when the HMM is actually switched
+      // on: it walks every way twice and hashes every coordinate, which is
+      // work a configuration that will never use it should not pay for.
+      if (this.config.hmmMatch && this.roadIndex && !this.hmm && this.roadGraph) {
+        this.topology = new RoadTopology(this.roadGraph, this.origin.lat, this.origin.lon);
+        this.hmm = new HmmMapMatcher(this.roadIndex, this.topology, this.config.hmmConfig);
+      }
       if (this.roadIndex) {
         this.snapAttemptCount++;
         const cfg = this.config.roadSnapConfig;
@@ -1997,6 +2030,30 @@ export class NavigationEngine {
             cfg.wideSearchRadiusM,
           );
           if (match) this.wideSnapCount++;
+        }
+
+        // ★ PHASE 14 — THE SEQUENCE DECIDES WHICH ROAD, THE SNAP DECIDES WHERE ★
+        //
+        // The HMM replaces the CHOICE of road, not the correction. Everything
+        // below — the rate-limited cross-track pull, the along-track cap, the
+        // strength ramp — is Phase 6D's and was measured into its current
+        // shape by the off-road evaluation. Swapping the whole mechanism to
+        // find out whether a better road choice helps would change two things
+        // at once and make the answer unreadable.
+        if (this.config.hmmMatch && this.hmm) {
+          const travelled = this.lastHmmEnu
+            ? Math.hypot(shownEnu.e - this.lastHmmEnu.e, shownEnu.n - this.lastHmmEnu.n)
+            : 0;
+          this.lastHmmEnu = { e: shownEnu.e, n: shownEnu.n };
+          const hmmMatch = this.hmm.push({
+            t: sample.t,
+            e: shownEnu.e,
+            n: shownEnu.n,
+            headingDeg: this.dr.current.headingDeg,
+            sigmaM: Math.max(this.covarianceCrossM, this.covarianceAlongM),
+            travelledM: travelled,
+          });
+          if (hmmMatch) match = hmmMatch;
         }
 
         if (match) {
@@ -2613,6 +2670,8 @@ export class NavigationEngine {
     this.snapStrength = 0;
     this.snapOffset = { e: 0, n: 0 };
     this.wideSnapCount = 0;
+    this.hmm?.reset();
+    this.lastHmmEnu = null;
     this.zupt.reset();
     this.zaru.reset();
     this.forwardBias.reset();

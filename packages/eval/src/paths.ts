@@ -48,6 +48,7 @@ export const ABLATION_ORDER = [
   'full',
   'full_forwardbias',
   'eskf',
+  'hmm',
 ];
 
 export function listLogs(): string[] {

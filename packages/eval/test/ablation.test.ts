@@ -96,8 +96,9 @@ describe('ablation over the committed logs', () => {
     // a row implying it does. Two rows are excluded because they are NOT
     // shipped steps — they are alternatives that are off by default, each with
     // its own assertion below: forwardBias (a documented negative result) and
-    // eskf (Phase 11's filter, which wins on the tail and loses on the mean).
-    const notShipped = new Set(['full_forwardbias', 'eskf']);
+    // eskf (Phase 11's filter, which wins on the tail and loses on the mean)
+    // and hmm (Phase 14's matcher, whose value these routes cannot show).
+    const notShipped = new Set(['full_forwardbias', 'eskf', 'hmm']);
     const shipped = ABLATION_ORDER.filter((n) => !notShipped.has(n));
     for (let i = 1; i < shipped.length; i++) {
       const prev = get(shipped[i - 1]!);
@@ -131,6 +132,25 @@ describe('ablation over the committed logs', () => {
     // And it must stay in the same league — a filter that diverges is not a
     // trade-off, it is a bug, and it was one twice while this was written.
     expect(eskf.mean).toBeLessThan(full.mean * 1.5);
+  });
+
+  it('records the HMM result as measured, including that it did not help here', () => {
+    // ★ PHASE 14, REPORTED HONESTLY ★
+    // The HMM's advantage over nearest-road-plus-continuity is structural: it
+    // can express that a road is CLOSE BUT UNREACHABLE, which is what
+    // distinguishes a parallel service road, the opposite carriageway, and the
+    // road under a flyover. None of those geometries occur on these routes at
+    // the moments that matter, so the extra machinery only adds variance and
+    // the measured drift is slightly worse.
+    //
+    // The capability is demonstrated by nav-core/test/hmm.test.ts, which
+    // constructs each of those geometries directly. This assertion exists so
+    // that "it did not help on these logs" stays a recorded measurement rather
+    // than becoming a forgotten disappointment.
+    const hmm = get('hmm');
+    expect(hmm.mean).toBeGreaterThan(get('full').mean);
+    // But it must stay in the same league. A matcher that diverges is a bug.
+    expect(hmm.mean).toBeLessThan(get('full').mean * 1.5);
   });
 
   it('does not regress past the figure published in docs/benchmarks.md', () => {

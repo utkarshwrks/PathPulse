@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 13 complete — Models 2 and 3 ✅
+**CURRENT PHASE:** Phase 14 — Newson-Krumm HMM map matching ✅
 **LAST UPDATED:** 2026-09-04
-**NEXT PHASE:** Phase 14 — Newson-Krumm HMM map matching
+**NEXT PHASE:** Phase 15 — native Kotlin sensor loop and foreground service
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -2122,6 +2122,59 @@ world differently. Model 2 learned that the expensive way.
 
 **Tests:** 1340 passing (was 1323; +17), including the clamp under the exact
 prediction that broke the model.
+
+### Phase 14 — Newson-Krumm HMM map matching ✅ (off; the routes cannot show it)
+
+`mapmatch/hmm.ts` + `mapmatch/RoadTopology.ts`.
+
+Phase 6D's matcher asks, per position, "which road is closest, points roughly
+the right way, and preferably the one I matched last time?" One structural
+blind spot: it cannot express that a road is CLOSE BUT UNREACHABLE. A service
+road 20 m away, the opposite carriageway, the road under a flyover — all 20 m
+away, all requiring a drive to the next junction and back.
+
+The HMM's transition term IS that quantity: the disagreement between route
+distance and straight-line distance. Viterbi over a sliding window picks the
+most likely SEQUENCE rather than the most likely point.
+
+`RoadTopology` recovers connectivity exactly. Overpass returns geometry from
+shared OSM nodes, so ways meeting at a junction carry the IDENTICAL coordinate;
+hashing to a centimetre grid finds every junction with no tolerance to tune,
+and without welding a flyover to the road beneath it — which any distance-based
+join would do on every overpass in the country.
+
+MEASURED, AND IT DID NOT HELP HERE
+
+    full (nearest road + continuity)   9.2% mean   5.3% median   22.6% p90
+    hmm                               10.5% mean   7.0% median   25.1% p90
+
+Off-road distance likewise slightly worse: 1.3 m against 0.8 m.
+
+AND THE SWEEP IS FLAT, WHICH IS THE FINDING. `minTravelM` controls how much
+sequence evidence the model gets; at 3, 5, 10, 20 and 40 m the mean moves
+between 10.4% and 11.2% with no trend. A knob controlling the model's entire
+source of advantage that changes nothing is saying these routes contain no
+geometry the transition term can discriminate — they are single carriageways
+through a simple extract, and the traps the HMM exists for are not on them.
+
+So it ships OFF, and the capability is demonstrated where it can be:
+nav-core/test/hmm.test.ts builds a parallel service road, a divided carriageway
+and a flyover, and shows greedy failing each and the HMM surviving it —
+including the mirror-image failure that with roads 18 m apart and a 20 m
+continuity bonus, greedy can NEVER revise a wrong choice. One step of memory
+defends a decision; it cannot re-examine one.
+
+TWO INTEGRATION BUGS, BOTH FOUND BY MEASURING
+
+1. Fed every sample it is not an HMM. Newson-Krumm assumes sparse sampling; at
+   50 Hz consecutive positions are 3 cm apart, the route between nearby
+   candidates is also 3 cm, and the transition term is uniform. It had
+   degenerated into nearest-road with extra steps.
+2. A held match must hold the ROAD, not the POINT. Returning the previous match
+   verbatim returns a position up to 10 m behind the vehicle and the snap pulls
+   the marker backwards down the road it is driving up: 9.9% -> 16.0%.
+
+**Tests:** 1359 passing (was 1340; +19).
 
 ## NEXT PHASE
 

@@ -56,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1299) |
+| `pnpm test` | All workspace tests (1359) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
@@ -554,6 +554,71 @@ it backwards.
 
 **Before a demo, in the actual room: open Offline, tap Download, then go into
 aeroplane mode.** That is now a complete preparation rather than a partial one.
+
+### Phase 14 — Newson-Krumm HMM map matching
+
+`mapmatch/hmm.ts` and `mapmatch/RoadTopology.ts`.
+
+Phase 6D's matcher asks, for each position independently: *which road is
+closest, points roughly the right way, and preferably the one I matched last
+time?* That is a good heuristic with one structural blind spot — **it cannot
+express that a road is close but unreachable.**
+
+A service road twenty metres away is twenty metres away. So is the opposite
+carriageway of a dual carriageway. So is the road under a flyover. In each case
+the nearest-road answer is geometrically correct and navigationally absurd: the
+vehicle would have had to drive to the next junction and back.
+
+An HMM says that out loud. Candidate road positions are the hidden states, the
+**emission** probability scores how well each explains the observation, and the
+**transition** probability is the disagreement between the *route* distance and
+the *straight-line* distance — precisely the quantity that makes a parallel
+carriageway implausible. Viterbi over a sliding window then picks the most
+likely *sequence*, not the most likely point.
+
+Route distance needs connectivity, which a list of ways does not have.
+`RoadTopology` recovers it exactly: Overpass returns geometry from shared OSM
+nodes, so two ways meeting at a junction carry the **identical** coordinate.
+Hashing coordinates to a centimetre grid finds every junction with no tolerance
+to tune — and, critically, without welding a flyover to the road beneath it,
+which any distance-based join would do on every overpass in the country.
+
+**Measured, and it did not help here:**
+
+| | mean | median | p90 |
+| --- | --- | --- | --- |
+| `full` (nearest road + continuity) | **9.2 %** | **5.3 %** | **22.6 %** |
+| `hmm` | 10.5 % | 7.0 % | 25.1 % |
+
+Off-road distance is likewise a shade worse: 1.3 m mean against 0.8 m.
+
+**And the parameter sweep is flat**, which is itself the finding. `minTravelM`
+controls how much sequence evidence the model gets — at 3, 5, 10, 20 and 40 m
+the mean moves between 10.4 % and 11.2 % with no trend. A knob that controls
+the model's whole source of advantage and changes nothing is telling you these
+routes contain no geometry the transition term can discriminate. They are
+single carriageways through a simple extract; the traps the HMM exists for are
+not on them.
+
+So it ships **off**, and the capability is demonstrated where it can be —
+`nav-core/test/hmm.test.ts` builds a parallel service road, a divided
+carriageway and a flyover, and shows greedy matching failing each one and the
+HMM surviving it. Including the mirror-image failure worth knowing about: with
+roads 18 m apart and a 20 m continuity bonus, **greedy can never revise a
+wrong choice** — one step of memory defends a decision, it cannot re-examine
+one.
+
+Two integration bugs found by measuring, both worth recording:
+
+1. **Fed every sample, it is not an HMM.** Newson-Krumm assumes sparse
+   sampling; at 50 Hz consecutive positions are three centimetres apart, the
+   route between any two nearby candidates is also three centimetres, and the
+   transition term is uniform. It had degenerated into nearest-road with extra
+   steps.
+2. **A held match must hold the road, not the point.** Returning the previous
+   match verbatim between accepted observations returns a position up to ten
+   metres *behind* the vehicle, and the snap then pulls the marker backwards
+   down the road it is driving up. That alone was 9.9 % → 16.0 %.
 
 ### Is the marker on a road? — the metric drift cannot see
 

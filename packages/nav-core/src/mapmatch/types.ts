@@ -15,6 +15,15 @@ export interface RoadWay {
   oneway?: boolean;
   /** OSM highway class — motorway, trunk, residential, service... */
   highway?: string;
+  /**
+   * Approximate height of this way above the surrounding ground, metres.
+   *
+   * Phase 14's flyover disambiguation. Derived from OSM's `layer` tag, which
+   * is an ordering rather than a height, so this is a modelled estimate and is
+   * usually absent — the HMM's altitude term is inert without it, which is the
+   * common case and is why nothing else depends on it.
+   */
+  layerM?: number;
   /** [lon, lat] pairs, in order along the way. */
   coords: Array<[number, number]>;
 }

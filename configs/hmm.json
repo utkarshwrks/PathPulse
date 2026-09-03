@@ -1,0 +1,11 @@
+{
+  "name": "hmm",
+  "description": "Phase 14. The shipped configuration, with the matched road chosen by a Newson-Krumm HMM over a sliding window instead of nearest-road-plus-continuity. Everything else identical to `full`.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": true,
+    "forwardBias": false, "roadSnap": true,
+    "hmmMatch": true
+  }
+}
