@@ -368,3 +368,67 @@ all three and does not care which is which. This model does, so rather than
 guess the full permutation from two correlations, its channels are built to be
 independent of it: the vertical rate from the column that demonstrably is one,
 the other two only as a magnitude, which no permutation can change.
+
+---
+
+# Phase 13, Model 3 — AI drift-residual correction
+
+The problem statement's third AI slot: *"AI based fusion model to mitigate
+drift errors"*. Eleven numbers the engine already knows during an outage, in;
+the estimate's own error, along and across the direction of travel, out. The
+engine subtracts it.
+
+```bash
+pnpm eval:drift-dataset      # 188,178 rows from 72 simulated outages
+python ml/train_residual.py
+```
+
+## ★ It does not work, and here is the number ★
+
+The split is **route-disjoint and run in both directions**, because a residual
+corrector's failure mode is learning the *route* rather than the physics.
+Trained and tested on the same drives it would look excellent and mean nothing.
+The baseline is predicting zero — exactly what the engine does today.
+
+| split | along MAE | cross MAE |
+|---|---|---|
+| train city → test highway | 70.0 → **206.9 m** (−195 %) | 24.2 → **73.2 m** (−202 %) |
+| train highway → test city | 45.5 → **426.1 m** (−837 %) | 33.1 → **247.6 m** (−649 %) |
+
+**Verdict: does not generalise across route types.** It ships disabled
+(`useMlResidual: false`) and this table is the reason.
+
+The cause is visible in the features. City and highway driving barely overlap
+in speed, distance-since-outage or covariance, so a network fitted on one is
+*extrapolating* on the other — and a two-layer MLP extrapolates confidently and
+linearly to whatever the features imply.
+
+## What the failure did prove
+
+The engine never trusts a raw prediction: `clampResidual` bounds the correction
+to the estimator's own stated uncertainty and to 50 m absolutely. Re-measuring
+the same broken model through that clamp:
+
+| split | along MAE | cross MAE |
+|---|---|---|
+| city → highway, clamped | 70.0 → 89.6 m (−28 %) | 24.2 → 24.3 m (−0.5 %) |
+| highway → city, clamped | 45.5 → 67.8 m (−49 %) | 33.1 → 33.4 m (−0.9 %) |
+
+Still negative, so it still does not ship — but −49 % instead of −837 % is the
+difference between a bad model degrading the estimate and destroying it. The
+guard was written before the model was measured, and it held.
+
+## What would make this work
+
+1. **Real logs.** Every row here comes from a simulator, so this measures
+   generalisation across route types *within one simulator*. That is the
+   weakest interesting claim available and it already failed.
+2. **A feature space that overlaps.** Either train per route type and select at
+   run time, or normalise the features so that "eighty seconds into an outage"
+   means the same thing at 12 m/s and at 28 m/s.
+3. **A model that cannot extrapolate.** Gradient boosting saturates outside its
+   training range where an MLP does not — which is precisely the failure here,
+   and is what the build guide suggested first.
+
+The mechanism, the bound, the feature contract and the training pipeline are
+all in place and tested. What is missing is data worth training on.

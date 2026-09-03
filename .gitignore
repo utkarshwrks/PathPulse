@@ -76,3 +76,6 @@ coverage/
 # per published build. If that becomes a problem the right home is GitHub
 # Releases, and only components/DownloadApk.tsx needs to change.
 !apps/web/public/downloads/*.apk
+ml/data/raw/
+ml/data/processed/
+ml/.venv/

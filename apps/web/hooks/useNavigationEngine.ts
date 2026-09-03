@@ -183,6 +183,12 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // Phase 13, Model 3. OFF, and it stays off: measured with a route-disjoint
+  // split it makes along-track error three to eight times worse, because city
+  // and highway feature distributions barely overlap and the network
+  // extrapolates. Kept as a toggle so the negative result is demonstrable
+  // rather than merely asserted. See ml/README.md.
+  useMlResidual: false,
   // Phase 13, Model 2. On, and inert until the classifier loads — the same
   // arrangement as useMlSpeed. Measured on a held-out journey: turn detection
   // F1 0.86/0.91, macro-F1 0.48 against a 0.09 majority-class baseline. See

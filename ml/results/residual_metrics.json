@@ -1,0 +1,63 @@
+{
+  "features": [
+    "timeSinceGnssS",
+    "speedMps",
+    "distanceSinceOutageM",
+    "covarianceAlongM",
+    "covarianceCrossM",
+    "headingSigmaDeg",
+    "turnsSinceOutage",
+    "zuptsSinceOutage",
+    "gyroBiasZ",
+    "accelBiasMag",
+    "roadMatched"
+  ],
+  "rows": 188178,
+  "params": 1506,
+  "route_disjoint": [
+    {
+      "split": "train city -> test highway",
+      "rows": 87012,
+      "along_mae_baseline": 70.014,
+      "along_mae_model": 206.855,
+      "cross_mae_baseline": 24.215,
+      "cross_mae_model": 73.168,
+      "along_improvement_pct": -195.4,
+      "cross_improvement_pct": -202.2
+    },
+    {
+      "split": "train highway -> test city",
+      "rows": 101166,
+      "along_mae_baseline": 45.455,
+      "along_mae_model": 426.074,
+      "cross_mae_baseline": 33.074,
+      "cross_mae_model": 247.59,
+      "along_improvement_pct": -837.4,
+      "cross_improvement_pct": -648.6
+    }
+  ],
+  "route_disjoint_clamped": [
+    {
+      "split": "  city -> highway, clamped",
+      "rows": 87012,
+      "along_mae_baseline": 70.014,
+      "along_mae_model": 89.606,
+      "cross_mae_baseline": 24.215,
+      "cross_mae_model": 24.339,
+      "along_improvement_pct": -28.0,
+      "cross_improvement_pct": -0.5
+    },
+    {
+      "split": "  highway -> city, clamped",
+      "rows": 101166,
+      "along_mae_baseline": 45.455,
+      "along_mae_model": 67.815,
+      "cross_mae_baseline": 33.074,
+      "cross_mae_model": 33.377,
+      "along_improvement_pct": -49.2,
+      "cross_improvement_pct": -0.9
+    }
+  ],
+  "generalises": false,
+  "caveat": "Every log is SIMULATED. This measures generalisation across route types within one simulator, not to a real vehicle."
+}

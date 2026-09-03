@@ -488,6 +488,11 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
   { key: 'medianFilter', label: 'Median filter', hint: 'Rejects pothole spikes.' },
   { key: 'adaptiveTimeout', label: 'Adaptive GNSS timeout', hint: 'Track the receiver’s real fix rate instead of assuming 1 Hz.' },
   {
+    key: 'useMlResidual',
+    label: 'AI drift correction (off — measured worse)',
+    hint: 'Predicts the estimator’s own error and subtracts it. Route-disjoint evaluation: 3-8× worse on an unseen route type, because city and highway features barely overlap and the network extrapolates. Inert without a model; kept so the negative result can be shown.',
+  },
+  {
     key: 'useMlMotion',
     label: 'AI motion classifier',
     hint: 'Eight-class 1D-CNN over one second of IMU. Fires ZUPT on a confident stop, rejects pothole impulses, and freezes the tilt estimate through corners. Inert until the model loads — see the SENSORS tab.',

@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 13 Model 2 — the motion-state classifier ✅
+**CURRENT PHASE:** Phase 13 complete — Models 2 and 3 ✅
 **LAST UPDATED:** 2026-09-04
-**NEXT PHASE:** Phase 13 Model 3 (AI drift residual), then Phase 14 (HMM map matching)
+**NEXT PHASE:** Phase 14 — Newson-Krumm HMM map matching
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -2079,6 +2079,49 @@ its channels are built to be permutation-independent.
 **Tests:** 1323 passing (was 1299; +24), including a contract test that loads
 the ACTUAL exported weights and asserts the class list matches the engine's.
 A reordered class list is the failure that does not throw.
+
+### Phase 13, Model 3 — AI drift residual ✅ (a documented negative result)
+
+The problem statement's third AI slot: "AI based fusion model to mitigate drift
+errors". Eleven numbers the engine already knows during an outage in — time
+since GNSS, speed, distance, covariance, heading sigma, turns, ZUPTs, gyro
+bias, accel bias, road matched — and the estimate's own error, along and
+across, out. The engine subtracts it.
+
+★ IT DOES NOT WORK, AND HERE IS THE NUMBER ★
+
+The split is ROUTE-DISJOINT and run BOTH WAYS, because a residual corrector's
+failure mode is learning the route rather than the physics. The baseline is
+predicting zero, which is what the engine does today.
+
+    split                        along MAE            cross MAE
+    train city -> test highway   70.0 -> 206.9 m      24.2 -> 73.2 m
+    train highway -> test city   45.5 -> 426.1 m      33.1 -> 247.6 m
+
+Three to eight times WORSE. It ships disabled and this table is the reason.
+The cause is visible in the features: city and highway driving barely overlap
+in speed, distance-since-outage or covariance, so a network fitted on one
+extrapolates on the other — and a two-layer MLP extrapolates confidently and
+linearly to whatever the features imply.
+
+WHAT THE FAILURE PROVED
+
+`clampResidual` bounds every correction to the estimator's own stated
+uncertainty and to 50 m absolutely. Re-measured through that clamp the same
+broken model scores -28% and -49% instead of -195% and -837%. Still negative,
+so it still does not ship — but that is the difference between degrading an
+estimate and destroying it, and the guard was written before the model was
+measured.
+
+THE CONTRACT LESSON, APPLIED BEFORE IT COST ANYTHING
+
+`buildDriftFeatures` is the single definition of the feature vector. The eval
+harness writes training rows through `engine.driftFeatures` and the engine
+reads inference features through the same call, so the two cannot describe the
+world differently. Model 2 learned that the expensive way.
+
+**Tests:** 1340 passing (was 1323; +17), including the clamp under the exact
+prediction that broke the model.
 
 ## NEXT PHASE
 

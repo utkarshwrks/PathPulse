@@ -40,6 +40,15 @@ import {
   type SpeedPredictor,
 } from '../ml/speedModel.js';
 import {
+  DEFAULT_RESIDUAL_CONFIG,
+  NullResidualCorrector,
+  buildDriftFeatures,
+  clampResidual,
+  type DriftResidual,
+  type ResidualConfig,
+  type ResidualCorrector,
+} from '../ml/residualModel.js';
+import {
   MOTION_WINDOW_SAMPLES,
   MotionGate,
   NullMotionClassifier,
@@ -223,9 +232,24 @@ export interface ConstraintFlags {
    * variance cut separates those two.
    */
   useMlMotion: boolean;
+  /**
+   * ★ PHASE 13, MODEL 3 ★ Subtract the drift the residual model predicts.
+   *
+   * OFF by default until the ablation says otherwise, for the same reason the
+   * ESKF is: a model is not an improvement because it is a model. This one has
+   * a specific way of being worse — learning the ROUTE rather than the physics
+   * and then mis-correcting confidently on a road it has never seen — so it
+   * ships disabled and the measurement decides.
+   */
+  useMlResidual: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
+  /**
+   * Bounds on Phase 13 Model 3's correction. Not in ConstraintFlags, which is
+   * the set of on/off toggles the UI renders — this is a shape, not a switch.
+   */
+  residualConfig: ResidualConfig;
   /** Accuracy at or below which a fix is trusted for reset/seed, metres. */
   trustedAccuracyM: number;
   gyroZSign: 1 | -1;
@@ -345,6 +369,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   eskf: false,
   autoAlign: true,
   useMlMotion: true,
+  useMlResidual: false,
+  residualConfig: DEFAULT_RESIDUAL_CONFIG,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
@@ -513,6 +539,12 @@ export class NavigationEngine {
   private potholesRejected = 0;
   /** Last conditioned acceleration, held across a rejected pothole sample. */
   private lastGoodAccel: { forward: number; lateral: number } | null = null;
+  /** Phase 13, Model 3. Inert until a corrector is supplied. */
+  private residualCorrector: ResidualCorrector = new NullResidualCorrector();
+  private lastResidual: DriftResidual | null = null;
+  /** Counters reset when dead reckoning begins, so features are outage-relative. */
+  private outageStart = { distanceM: 0, turns: 0, zupts: 0 };
+  private turnCount = 0;
   private motionScalerMean: readonly number[] = new Array(6).fill(0);
   private motionScalerStd: readonly number[] = new Array(6).fill(1);
   /** Last alignment status logged, so the event fires on change only. */
@@ -748,6 +780,53 @@ export class NavigationEngine {
     this.motionInferences = 0;
     this.potholesRejected = 0;
     this.lastMotionState = null;
+  }
+
+  /**
+   * Supply Phase 13's drift-residual corrector.
+   *
+   * Third model, third loader. They fail independently on purpose: one broken
+   * network must never disable the two that work.
+   */
+  setResidualCorrector(corrector: ResidualCorrector | null): void {
+    this.residualCorrector = corrector ?? new NullResidualCorrector();
+    this.lastResidual = null;
+  }
+
+  /**
+   * The feature vector the residual model reads, right now.
+   *
+   * Public because the eval harness writes the training rows from it. That is
+   * the whole point: `buildDriftFeatures` is called by exactly one place in
+   * training and one in inference, and both go through here, so the two
+   * cannot describe the world differently.
+   */
+  get driftFeatures(): Float32Array {
+    return buildDriftFeatures({
+      timeSinceGnssMs: this.lastGnssT === null ? 0 : Math.max(0, (this.lastSampleT ?? 0) - this.lastGnssT),
+      speedMps: this.dr.current.speedMps,
+      distanceSinceOutageM: Math.max(
+        0,
+        this.dr.current.distanceTravelledM - this.outageStart.distanceM,
+      ),
+      covarianceAlongM: this.covarianceAlongM,
+      covarianceCrossM: this.covarianceCrossM,
+      headingSigmaDeg: (this.headingSigmaRad * 180) / Math.PI,
+      turnsSinceOutage: this.turnCount - this.outageStart.turns,
+      zuptsSinceOutage: this.zupt.triggerCount - this.outageStart.zupts,
+      gyroBiasZ: this.zaru.gyroBias[2] ?? 0,
+      accelBiasMag: Math.hypot(
+        this.zupt.accelBias[0] ?? 0,
+        this.zupt.accelBias[1] ?? 0,
+        this.zupt.accelBias[2] ?? 0,
+      ),
+      roadMatched: this.lastMatch !== null,
+    });
+  }
+
+  /** What the residual model last predicted, for the debug panel. */
+  get residualPrediction(): DriftResidual | null {
+    return this.lastResidual;
   }
 
   /** The classifier's current verdict, for the debug panel. */
@@ -1498,6 +1577,7 @@ export class NavigationEngine {
       );
       if (turn) {
         this.lastTurn = turn;
+        this.turnCount++;
         this.log.push({
           t: turn.t,
           type: 'TURN',
@@ -1651,6 +1731,15 @@ export class NavigationEngine {
     } else if (mode === 'DEAD_RECKONING') {
       if (modeBefore !== 'DEAD_RECKONING') {
         this.drStartedAtMs = sample.t;
+        // Snapshot, so every feature the residual model reads is measured from
+        // the start of THIS outage rather than from the start of the session.
+        // A model fed a session-cumulative ZUPT count would learn how long the
+        // app had been open.
+        this.outageStart = {
+          distanceM: this.dr.current.distanceTravelledM,
+          turns: this.turnCount,
+          zupts: this.zupt.triggerCount,
+        };
         // Seed the outage from a smoothed view of the recent past, not the
         // last fix — which is usually the worst one, taken under the overpass.
         this.dr.initializeFromRecentFixes();
@@ -1806,6 +1895,61 @@ export class NavigationEngine {
         this.headingSigmaRad = 0;
         this.drStartedAtMs = null;
       }
+    }
+
+    // 7b. ★ PHASE 13, MODEL 3 — SUBTRACT THE DRIFT WE EXPECT TO HAVE ★
+    //
+    // Dead-reckoning error is not random. It is a systematic function of how
+    // long GNSS has been gone, how fast the vehicle is going, how many turns
+    // it has taken and how large the estimated gyro bias is — all of which the
+    // engine knows at the moment the correction is needed. If a model has
+    // learned "eighty seconds in at motorway speed with two turns behind you,
+    // the estimate is typically twelve metres long", then subtracting twelve
+    // metres is free accuracy.
+    //
+    // Applied BEFORE road snapping, deliberately: the correction is the
+    // estimator's best guess at its own error, and snapping is then free to
+    // veto the cross-track part of it by pulling the result back onto the
+    // road. A correction applied after would override the road, which is a
+    // much stronger claim than a residual model has earned.
+    //
+    // Never fed back into the estimator, for the same reason snapping is not:
+    // an estimator that consumes its own predicted error has no independent
+    // opinion left to correct.
+    if (this.config.useMlResidual && mode === 'DEAD_RECKONING' && this.residualCorrector.isReady()) {
+      let raw: DriftResidual | null = null;
+      try {
+        raw = this.residualCorrector.predict(this.driftFeatures);
+      } catch (err) {
+        this.log.push({
+          t: sample.t,
+          type: 'ML_ERROR',
+          message: `residual model threw: ${(err as Error).message}`,
+        });
+        this.residualCorrector = new NullResidualCorrector();
+      }
+
+      if (raw) {
+        const residual = clampResidual(
+          raw,
+          { alongM: this.covarianceAlongM, crossM: this.covarianceCrossM },
+          this.config.residualConfig,
+        );
+        this.lastResidual = residual;
+
+        // The prediction is the error OF the estimate, so it is subtracted.
+        // Decomposed against the estimate's own heading, which is the frame
+        // the targets were measured in — see decomposeError in the eval.
+        const h = (this.dr.current.headingDeg * Math.PI) / 180;
+        const fE = Math.sin(h);
+        const fN = Math.cos(h);
+        shownEnu = {
+          e: shownEnu.e - (residual.alongM * fE + residual.crossM * fN),
+          n: shownEnu.n - (residual.alongM * fN - residual.crossM * fE),
+        };
+      }
+    } else {
+      this.lastResidual = null;
     }
 
     // 8. Road snapping — the last constraint before emit, exactly as the build
@@ -2461,6 +2605,9 @@ export class NavigationEngine {
     this.motionInferences = 0;
     this.potholesRejected = 0;
     this.lastGoodAccel = null;
+    this.lastResidual = null;
+    this.outageStart = { distanceM: 0, turns: 0, zupts: 0 };
+    this.turnCount = 0;
     this.planeAccelDcF = 0;
     this.planeAccelDcR = 0;
     this.snapStrength = 0;

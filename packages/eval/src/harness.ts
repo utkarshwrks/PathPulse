@@ -4,7 +4,14 @@ import {
   type RoadGraph,
   type SensorSample,
 } from '@pathpulse/nav-core';
-import { computeMetrics, type EvalMetrics, type TruthPoint } from './metrics.js';
+import {
+  computeMetrics,
+  decomposeError,
+  truthAt,
+  truthHeadingAt,
+  type EvalMetrics,
+  type TruthPoint,
+} from './metrics.js';
 
 export interface RunOptions {
   configName: string;
@@ -14,6 +21,8 @@ export interface RunOptions {
   outageStartMs: number;
   outageDurationMs: number;
   roadGraph?: RoadGraph | null;
+  /** Phase 13, Model 3: record a training row for every dead-reckoning sample. */
+  collectDriftRows?: boolean;
 }
 
 export interface RunResult {
@@ -26,6 +35,26 @@ export interface RunResult {
    * needs to report how close it got, not only what it cost.
    */
   alignmentDeg: number | null;
+  /**
+   * Phase 13, Model 3: one row per dead-reckoning sample — the engine's own
+   * feature vector, and the error it turned out to have.
+   *
+   * Collected here rather than reconstructed afterwards because the features
+   * are only knowable AT the sample: covariance, bias estimates and counters
+   * all move, and a row rebuilt from the emitted state would be a different
+   * vector than the one the engine will read at inference. Only populated when
+   * `collectDriftRows` is set, since it is a few thousand rows per run.
+   */
+  driftRows: DriftRow[];
+}
+
+export interface DriftRow {
+  t: number;
+  features: number[];
+  /** The estimate's error along the direction of travel, m. Positive = ahead. */
+  alongM: number;
+  /** And across it, m. Positive = right of the truth. */
+  crossM: number;
 }
 
 /** Parse a JSONL log. Malformed lines are skipped, not fatal. */
@@ -81,6 +110,7 @@ export function runEval(samples: readonly SensorSample[], opts: RunOptions): Run
 
   const states: NavigationState[] = [];
   const outageStates: NavigationState[] = [];
+  const driftRows: DriftRow[] = [];
   let recoveredAtMs: number | null = null;
 
   for (const sample of samples) {
@@ -98,6 +128,30 @@ export function runEval(samples: readonly SensorSample[], opts: RunOptions): Run
     states.push(state);
 
     if (inOutage) outageStates.push(state);
+
+    // ★ THE FEATURES ARE READ FROM THE ENGINE, NOT REBUILT FROM THE STATE ★
+    // Covariance, bias estimates and the outage counters all move sample by
+    // sample. A row reconstructed afterwards from the emitted NavigationState
+    // would be a different vector than the one the engine reads at inference,
+    // and the model would be trained on a world that does not exist at run
+    // time. Same lesson as Model 2's class list, applied before it cost
+    // anything this time.
+    if (opts.collectDriftRows && inOutage && state.mode === 'DEAD_RECKONING') {
+      const truthHere = truthAt(truth, state.t);
+      if (truthHere) {
+        const { alongM, crossM } = decomposeError(
+          state.position,
+          truthHere,
+          truthHeadingAt(truth, state.t),
+        );
+        driftRows.push({
+          t: state.t,
+          features: Array.from(engine.driftFeatures),
+          alongM,
+          crossM,
+        });
+      }
+    }
     // Recovery is complete when the machine settles back on GNSS, not when the
     // first fix arrives — the slew is still running in between.
     if (!inOutage && sample.t >= outageEndMs && recoveredAtMs === null && state.mode === 'GNSS') {
@@ -128,5 +182,6 @@ export function runEval(samples: readonly SensorSample[], opts: RunOptions): Run
     states,
     truth,
     alignmentDeg: align.isCalibrated ? (align.yawOffsetRad * 180) / Math.PI : null,
+    driftRows,
   };
 }

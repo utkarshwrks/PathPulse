@@ -38,3 +38,18 @@ export {
   type MotionState,
   type MotionVerdict,
 } from './motionModel.js';
+export {
+  DEFAULT_RESIDUAL_CONFIG,
+  DRIFT_FEATURES,
+  DRIFT_FEATURE_COUNT,
+  MlpResidualCorrector,
+  NullResidualCorrector,
+  buildDriftFeatures,
+  clampResidual,
+  parseResidualWeights,
+  type DriftFeatureInput,
+  type DriftFeatureName,
+  type DriftResidual,
+  type ResidualConfig,
+  type ResidualCorrector,
+} from './residualModel.js';

@@ -292,7 +292,7 @@ export function parseSpeedCnnWeights(raw: unknown): SpeedCnnWeights {
  */
 export function parseCnnWeights(
   raw: unknown,
-  expect: { architecture: string; windowSamples: number },
+  expect: { architecture: string; windowSamples: number; channels?: number },
 ): SpeedCnnWeights {
   const j = raw as Record<string, unknown>;
   if (j?.['architecture'] !== expect.architecture) {
@@ -318,10 +318,11 @@ export function parseCnnWeights(
       `rate mismatch: model wants ${sampleRateHz} Hz, engine decimates to ${ML_SAMPLE_RATE_HZ}`,
     );
   }
+  const wantChannels = expect.channels ?? ML_CHANNELS;
   const channels = j['channels'];
-  if (!Array.isArray(channels) || channels.length !== ML_CHANNELS) {
+  if (!Array.isArray(channels) || channels.length !== wantChannels) {
     throw new Error(
-      `channel mismatch: model has ${Array.isArray(channels) ? channels.length : '?'}, engine sends ${ML_CHANNELS}`,
+      `channel mismatch: model has ${Array.isArray(channels) ? channels.length : '?'}, engine sends ${wantChannels}`,
     );
   }
 
@@ -377,12 +378,12 @@ export function parseCnnWeights(
   if (!Array.isArray(scaler?.mean) || !Array.isArray(scaler?.std)) {
     throw new Error('weights carry no scaler');
   }
-  if (scaler.mean.length !== ML_CHANNELS || scaler.std.length !== ML_CHANNELS) {
+  if (scaler.mean.length !== wantChannels || scaler.std.length !== wantChannels) {
     throw new Error(
-      `scaler has ${scaler.mean.length}/${scaler.std.length} channels, expected ${ML_CHANNELS}`,
+      `scaler has ${scaler.mean.length}/${scaler.std.length} channels, expected ${wantChannels}`,
     );
   }
-  for (let i = 0; i < ML_CHANNELS; i++) {
+  for (let i = 0; i < wantChannels; i++) {
     if (!Number.isFinite(scaler.mean[i]!) || !Number.isFinite(scaler.std[i]!)) {
       throw new Error(`scaler channel ${i} is not finite`);
     }
