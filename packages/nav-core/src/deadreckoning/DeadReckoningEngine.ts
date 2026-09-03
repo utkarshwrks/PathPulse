@@ -433,6 +433,25 @@ export class DeadReckoningEngine {
     return this.state;
   }
 
+  /**
+   * Replace the integrated position, leaving velocity, heading and distance
+   * alone.
+   *
+   * ★ POSITION ONLY, ON PURPOSE ★ Phase 11's error-state filter is a better
+   * position estimator; it is not a replacement for the speed chain, whose
+   * Doppler-hold, ML and step-model priority order is the thing the ablation
+   * table actually measured. Handing it the velocity as well would change two
+   * variables at once and make the "+ ESKF" row unreadable.
+   *
+   * Distance is untouched for the same reason it is a path length everywhere
+   * else: a correction is not travel, and adding the jump to the odometer
+   * would inflate the denominator of every drift percentage we quote.
+   */
+  overridePosition(enu: EnuPoint): void {
+    if (!Number.isFinite(enu.e) || !Number.isFinite(enu.n)) return;
+    this.state.enu = { e: enu.e, n: enu.n, ...(enu.u !== undefined ? { u: enu.u } : {}) };
+  }
+
   /** Force velocity to zero — used by ZUPT when the vehicle stops. */
   applyZeroVelocity(): void {
     this.state.speedMps = 0;

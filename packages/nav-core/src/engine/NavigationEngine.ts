@@ -1,4 +1,4 @@
-import type { EnuPoint, LatLon, NavigationState, SensorSample } from '../types.js';
+import type { EnuPoint, LatLon, NavMode, NavigationState, SensorSample } from '../types.js';
 import { enuToLatLon, latLonToEnu } from '../geo/enu.js';
 import { haversineDistance } from '../geo/distance.js';
 import { AttitudeEstimator } from '../alignment/attitude.js';
@@ -36,6 +36,8 @@ import {
   SpeedWindowBuffer,
   type SpeedPredictor,
 } from '../ml/speedModel.js';
+import { ErrorStateKalmanFilter } from '../eskf/ErrorStateKalmanFilter.js';
+import { DEFAULT_ESKF_CONFIG } from '../eskf/noise.js';
 import type { RoadGraph, RoadPosition } from '../mapmatch/types.js';
 
 /**
@@ -116,6 +118,24 @@ export interface ConstraintFlags {
    * most of the compass and drew the estimate out and back on every interval.
    */
   pedestrianHeadingFromGnss: boolean;
+  /**
+   * ★ PHASE 11 ★ Take position from the error-state Kalman filter instead of
+   * from open-loop integration, while dead reckoning.
+   *
+   * The filter runs on EVERY sample regardless of this flag — it is fed the
+   * same conditioned forward/lateral acceleration and vertical yaw rate the
+   * dead-reckoning chain gets, plus GNSS, ZUPT, ZARU and NHC as measurements
+   * with real variances. What the flag decides is whether anybody reads its
+   * answer. That is deliberate: it means switching it on mid-drive from the
+   * CONSTRAINTS tab does not restart a filter from a cold covariance, and it
+   * means `pnpm ablation` compares two estimators that saw identical inputs.
+   *
+   * OFF BY DEFAULT UNTIL THE ABLATION SAYS OTHERWISE. Part A's hand-built
+   * chain measures 10.0 % mean drift. A filter is not better for being more
+   * principled; it is better when the number is lower, and the row in
+   * docs/benchmarks.md is the only thing entitled to decide that.
+   */
+  eskf: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -235,6 +255,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   useMlSpeed: true,
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  eskf: false,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
@@ -381,6 +402,10 @@ export class NavigationEngine {
   private speedSource: SpeedSource = 'NONE';
   /** When the current dead-reckoning stretch began. Drives confidence decay. */
   private drStartedAtMs: number | null = null;
+  /** Phase 11. Runs on every sample; read only when `config.eskf` is on. */
+  private readonly eskf = new ErrorStateKalmanFilter();
+  /** Consecutive trusted fixes the filter has rejected. See updateEskf. */
+  private eskfGatedFixes = 0;
 
   constructor(config: Partial<EngineConfig> = {}) {
     this.config = { ...DEFAULT_ENGINE_CONFIG, ...config };
@@ -1149,6 +1174,34 @@ export class NavigationEngine {
         roadMaxSpeedMps: this.roadMaxSpeedMps,
         gnssSpeedWeight,
       });
+      // ★ PHASE 11 — THE ERROR-STATE KALMAN FILTER, IN PARALLEL ★
+      //
+      // Fed the same conditioned inputs the chain above just used, so the two
+      // estimators genuinely differ only in how they combine them. See
+      // `updateEskf` for the frame conversion and the measurement order.
+      this.updateEskf({
+        tMs: sample.t,
+        dtMs,
+        forwardAccel,
+        lateralAccel,
+        yawRate: drYawRate,
+        stationary: stationaryForZupt,
+        trusted,
+        gnssEnu,
+        gnssSpeedMps: speedForFix,
+        gnssHeadingDeg: headingForFix,
+        gnssAccuracyM: sample.gnss?.accuracyM,
+        mode: modeBefore,
+        // ★ THE SPEED CHAIN STAYS THE SPEED CHAIN ★ Read AFTER propagate, so
+        // this is the speed the shipped configuration actually settled on —
+        // Doppler, or the ML model, or the step model, or a decayed
+        // integration — handed to the filter as a measurement rather than
+        // reinvented inside it. See updateForwardSpeed for why a filter with
+        // no speed reference does worse than naive integration, not better.
+        chainSpeedMps: this.dr.current.speedMps,
+        chainSpeedUnaidedMs: this.dr.current.unaidedMs,
+      });
+
       // Record what actually supplied the speed, in the same priority order
       // DeadReckoningEngine.propagate() applies it.
       this.speedSource =
@@ -1482,6 +1535,211 @@ export class NavigationEngine {
   }
 
   /**
+   * Step the error-state Kalman filter for this sample.
+   *
+   * ★ FRAME CONVERSION ★
+   * The filter works in a level VEHICLE body frame — x forward, y left, z up —
+   * and the engine has already done the hard part of getting there:
+   * `AttitudeEstimator` resolves the phone's acceleration onto a genuinely
+   * horizontal plane and the yaw rate onto the true vertical, and
+   * `SimpleAlignment` supplies the yaw offset. So the conversion is bookkeeping
+   * about signs, and there are exactly two to get right:
+   *
+   *   - `lateralAccel` is positive to the RIGHT (it is applied along the
+   *     `rE = cos h, rN = -sin h` axis in DeadReckoningEngine). Body y is LEFT.
+   *     Hence the negation. Get this backwards and NHC pushes the heading the
+   *     wrong way on every corner, which looks like a plausible slow drift.
+   *   - `yawRate` is a COMPASS rate, positive clockwise. A rotation clockwise
+   *     seen from above is a rotation about DOWN, so body z (up) gets its
+   *     negative.
+   *
+   * The vertical channel is handed a specific force of exactly +g because the
+   * horizontal split has already removed gravity and the vehicle frame is
+   * level by construction. That is a modelling choice, not a measurement, and
+   * it is why the filter's altitude is not claimed anywhere in the UI.
+   *
+   * ★ MEASUREMENT ORDER ★ Cheapest and most certain first: ZUPT and ZARU (a
+   * stopped vehicle is known exactly), then NHC (a constraint, always true but
+   * only approximately), then GNSS (a real measurement, but the least certain
+   * of the three when it is degraded).
+   */
+  private updateEskf(input: {
+    tMs: number;
+    dtMs: number;
+    forwardAccel: number;
+    lateralAccel: number;
+    yawRate: number;
+    stationary: boolean;
+    trusted: boolean;
+    gnssEnu: EnuPoint | null;
+    gnssSpeedMps: number | undefined;
+    gnssHeadingDeg: number | undefined;
+    gnssAccuracyM: number | undefined;
+    chainSpeedMps: number;
+    chainSpeedUnaidedMs: number;
+    /**
+     * The mode as of the previous sample. This runs at step 5, before the
+     * state machine is stepped at step 6, so it is the only mode there is —
+     * and it is the same one the dead-reckoning chain above just used.
+     */
+    mode: NavMode;
+  }): void {
+    const g = DEFAULT_ESKF_CONFIG.gravityMps2;
+
+    if (!this.eskf.isInitialised) {
+      // Seed from the first trusted fix. Before that there is no origin and no
+      // heading, and seeding from nothing would just be an expensive way to
+      // integrate noise.
+      if (input.trusted && input.gnssEnu) {
+        this.eskf.initialize({
+          position: [input.gnssEnu.e, input.gnssEnu.n, 0],
+          headingDeg: input.gnssHeadingDeg ?? this.dr.current.headingDeg,
+          velocity: this.velocityEnuFrom(
+            input.gnssSpeedMps ?? this.dr.current.speedMps,
+            input.gnssHeadingDeg ?? this.dr.current.headingDeg,
+          ),
+        });
+      }
+      return;
+    }
+
+    // ★ ONE GYRO VECTOR, USED FOR BOTH PREDICT AND ZARU ★
+    // This cost an afternoon. The filter was being predicted with the
+    // synthetic vehicle-frame rate below and ZARU'd with the RAW DEVICE-FRAME
+    // gyro, which is a different vector in a different frame — so ZARU kept
+    // telling the filter that its x and y gyro biases were whatever the
+    // handset's tilted axes happened to read. Those states are not observable
+    // from a [0, 0, w] input and had nothing to contradict the lie: the
+    // attitude tumbled at a quarter of a radian per second, the heading spun
+    // through the whole compass every twenty seconds, every returning fix was
+    // then gated as an outlier, and the ablation read 84.6 % drift.
+    //
+    // A measurement must be expressed in the frame of the state it measures.
+    const gyroVehicle: [number, number, number] = [0, 0, -input.yawRate];
+
+    // ★ THE LATERAL CHANNEL IS MODELLED, NOT MEASURED ★
+    //
+    // Two failures, one after the other, got us here.
+    //
+    // Feeding the engine's measured `lateralAccel` blew the filter up on the
+    // first hard corner: it has to reconcile a sideways force that came
+    // through an imperfect phone-to-vehicle alignment against NHC's assertion
+    // that sideways velocity is zero, and the only states it can spend the
+    // difference on are attitude and accelerometer bias. 8 m/s^2 went into
+    // body-y bias, 0.05 rad/s into gyro-z, and the heading then rotated
+    // through the whole compass. 84.6 % drift.
+    //
+    // Feeding zero was worse in a subtler way. With no lateral acceleration
+    // the nav velocity vector cannot turn, so every corner leaves a growing
+    // lateral velocity in the body frame — and NHC's attitude Jacobian
+    // attributes that residual to YAW ERROR, because from inside the filter a
+    // vehicle sliding sideways and a vehicle pointing the wrong way look the
+    // same. The heading walked off by 26 degrees in the first five seconds of
+    // the outage and kept going.
+    //
+    // A non-holonomic vehicle turning at omega with forward speed v has
+    // centripetal acceleration v*omega, pointing right when omega is
+    // clockwise. Body y is LEFT, hence the negation. Computing it is not a
+    // shortcut around a missing sensor: it is the same kinematic model NHC
+    // already asserts, so the two agree by construction instead of arguing
+    // through the bias states. It is also exactly what DeadReckoningEngine
+    // does with `lateral * rE`, which is why the two estimators stay
+    // comparable in the ablation.
+    const centripetal = -input.chainSpeedMps * input.yawRate;
+    this.eskf.predict([input.forwardAccel, centripetal, g], gyroVehicle, input.dtMs / 1000);
+
+    if (input.stationary) {
+      if (this.config.zupt) this.eskf.updateZupt();
+      // The engine's own ZARU has already removed gyro bias upstream — see
+      // `attitude.yawRate` — so what this asserts is that there is no bias
+      // LEFT, which is exactly the residual the filter's state represents.
+      if (this.config.zaru) this.eskf.updateZaru(gyroVehicle);
+    }
+
+    if (this.config.nhc) this.eskf.updateNhc();
+
+    // How much to believe the chain's speed, as a function of how long it has
+    // been since anything measured it. A fresh Doppler reading is worth 0.15
+    // m/s; ninety seconds into a tunnel the answer is an extrapolation and the
+    // sigma says so, which is exactly the statement the covariance needs in
+    // order to let a returning fix correct hard.
+    const speedSigma = Math.min(6, 0.15 + input.chainSpeedUnaidedMs / 20_000);
+    this.eskf.updateForwardSpeed(input.chainSpeedMps, speedSigma);
+
+    if (input.trusted && input.gnssEnu) {
+      const accuracy = input.gnssAccuracyM ?? this.config.trustedAccuracyM;
+      // A gate at chi-squared(3) 99.9 % — wide enough that a hard manoeuvre is
+      // never mistaken for a bad fix, tight enough to reject the multipath
+      // jump that would otherwise be swallowed whole.
+      const posUpdate = this.eskf.updateGnssPosition(
+        [input.gnssEnu.e, input.gnssEnu.n, 0],
+        accuracy,
+        16.3,
+      );
+
+      // ★ A GATE THAT NEVER OPENS AGAIN IS NOT A GATE, IT IS A DIVERGENCE ★
+      // Once the estimate is far enough out, every honest fix looks like an
+      // outlier and gets rejected, the covariance keeps shrinking because
+      // nothing contradicts it, and the filter sits there confidently lost —
+      // observed exactly that way: GNSS returned at 126 s and the filter was
+      // still 800 m away sixty seconds later. Three consecutive rejections is
+      // the filter telling us its own state is wrong, and the only correct
+      // response is to believe the receiver instead of ourselves.
+      if (posUpdate.applied) {
+        this.eskfGatedFixes = 0;
+      } else if (posUpdate.reason === 'gated') {
+        this.eskfGatedFixes++;
+        if (this.eskfGatedFixes >= 3) {
+          this.eskf.initialize({
+            position: [input.gnssEnu.e, input.gnssEnu.n, 0],
+            headingDeg: input.gnssHeadingDeg ?? this.dr.current.headingDeg,
+            velocity: this.velocityEnuFrom(
+              input.gnssSpeedMps ?? this.dr.current.speedMps,
+              input.gnssHeadingDeg ?? this.dr.current.headingDeg,
+            ),
+            // Biases deliberately NOT carried over: a filter that diverged is
+            // a filter whose bias estimates are the prime suspect.
+            accelBias: [0, 0, 0],
+            gyroBias: [0, 0, 0],
+          });
+          this.eskfGatedFixes = 0;
+          this.log.push({
+            t: input.tMs,
+            type: 'ESKF_RESET',
+            message: 'filter re-seeded — three fixes running gated as outliers',
+          });
+        }
+      }
+
+      if (input.gnssSpeedMps !== undefined && input.gnssHeadingDeg !== undefined) {
+        const v = this.velocityEnuFrom(input.gnssSpeedMps, input.gnssHeadingDeg);
+        this.eskf.updateGnssVelocity(v, 0.3, 16.3);
+      }
+    }
+
+    // ★ WHAT THE FILTER IS ALLOWED TO CHANGE ★
+    // Position, and only while dead reckoning. In GNSS mode step 7 resets the
+    // dead-reckoning state onto the fix a few lines later, so writing here
+    // would be overwritten anyway; during RECOVERING the blender owns the
+    // shown position and must keep owning it, because "the marker never
+    // teleports" is a property of the demo that no accuracy improvement pays
+    // for. Speed, heading and distance stay with the chain that has the
+    // measured ablation behind them.
+    if (this.config.eskf && input.mode === 'DEAD_RECKONING') {
+      const p = this.eskf.state.position;
+      if (Number.isFinite(p[0]) && Number.isFinite(p[1])) {
+        this.dr.overridePosition({ e: p[0], n: p[1] });
+      }
+    }
+  }
+
+  /** Speed and compass heading as an ENU velocity vector. */
+  private velocityEnuFrom(speedMps: number, headingDeg: number): [number, number, number] {
+    const h = (headingDeg * Math.PI) / 180;
+    return [speedMps * Math.sin(h), speedMps * Math.cos(h), 0];
+  }
+
+  /**
    * Run the speed model, at most once per `mlInferenceIntervalMs`.
    *
    * Returns undefined whenever the model must not be trusted — flag off, no
@@ -1672,6 +1930,8 @@ export class NavigationEngine {
   reset(): void {
     this.stateMachine.reset();
     this.dr.reset();
+    this.eskf.reset();
+    this.eskfGatedFixes = 0;
     this.recovery.reset();
     this.attitude.reset();
     this.turns.reset();

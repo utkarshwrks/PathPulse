@@ -429,6 +429,11 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
   { key: 'lowPass', label: 'Low-pass filter', hint: 'Removes engine and road vibration before integration.' },
   { key: 'medianFilter', label: 'Median filter', hint: 'Rejects pothole spikes.' },
   { key: 'adaptiveTimeout', label: 'Adaptive GNSS timeout', hint: 'Track the receiver’s real fix rate instead of assuming 1 Hz.' },
+  {
+    key: 'eskf',
+    label: 'ESKF (off — better tail, worse mean)',
+    hint: '15-state error-state Kalman filter for position during an outage. Measured: 10.8% mean vs 10.0%, but 17.8% p90 vs 22.7%. On is not simply better, and that is the point.',
+  },
 ];
 
 /**

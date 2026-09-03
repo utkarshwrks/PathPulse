@@ -156,6 +156,11 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // Phase 11. Off by default, matching the engine: over the ablation logs the
+  // filter measures 10.8% mean against the shipped chain's 10.0%, and 17.8%
+  // p90 against 22.7%. Worse in the middle, better in the tail. Toggleable so
+  // that trade can be shown live rather than argued about.
+  eskf: false,
   walkingMode: false,
 };
 

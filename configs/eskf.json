@@ -1,0 +1,11 @@
+{
+  "name": "eskf",
+  "description": "Phase 11. The shipped configuration, with position taken from the 15-state error-state Kalman filter while dead reckoning instead of from open-loop integration. Everything else identical to `full`.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": true,
+    "forwardBias": false, "roadSnap": true,
+    "eskf": true
+  }
+}

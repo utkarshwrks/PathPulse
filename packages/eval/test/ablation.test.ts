@@ -93,9 +93,12 @@ describe('ablation over the committed logs', () => {
 
   it('improves, or holds, at every shipped step', () => {
     // A constraint that does not measurably help should be off, not shipped as
-    // a row implying it does. forwardBias is excluded — it is a documented
-    // negative result, asserted separately below.
-    const shipped = ABLATION_ORDER.filter((n) => n !== 'full_forwardbias');
+    // a row implying it does. Two rows are excluded because they are NOT
+    // shipped steps — they are alternatives that are off by default, each with
+    // its own assertion below: forwardBias (a documented negative result) and
+    // eskf (Phase 11's filter, which wins on the tail and loses on the mean).
+    const notShipped = new Set(['full_forwardbias', 'eskf']);
+    const shipped = ABLATION_ORDER.filter((n) => !notShipped.has(n));
     for (let i = 1; i < shipped.length; i++) {
       const prev = get(shipped[i - 1]!);
       const cur = get(shipped[i]!);
@@ -110,6 +113,24 @@ describe('ablation over the committed logs', () => {
     // worse than the high-pass alone — so it ships disabled, and this test
     // exists so the decision is revisited deliberately if that ever changes.
     expect(get('full_forwardbias').mean).toBeGreaterThan(get('full').mean);
+  });
+
+  it('records the ESKF result as measured, in both directions', () => {
+    // ★ PHASE 11, REPORTED HONESTLY ★
+    // The error-state Kalman filter is the more principled estimator and it
+    // does NOT win outright. It is worse in the middle of the distribution and
+    // better at the end of it, which is a real and explainable trade: the
+    // hand-tuned chain is very good on the runs it was tuned against, and the
+    // filter's covariance bookkeeping is what stops the bad runs getting as
+    // bad. Both halves are asserted so neither can be quietly dropped from
+    // whichever story is more convenient on the day.
+    const eskf = get('eskf');
+    const full = get('full');
+    expect(eskf.mean).toBeGreaterThan(full.mean);
+    expect(eskf.p90).toBeLessThan(full.p90);
+    // And it must stay in the same league — a filter that diverges is not a
+    // trade-off, it is a bug, and it was one twice while this was written.
+    expect(eskf.mean).toBeLessThan(full.mean * 1.5);
   });
 
   it('does not regress past the figure published in docs/benchmarks.md', () => {

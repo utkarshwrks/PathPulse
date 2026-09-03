@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Splash, landing, tour spotlight, and the indoor GNSS rule ✅
-**LAST UPDATED:** 2026-08-30
-**NEXT PHASE:** Rehearsal. See [docs/TESTING.md](./docs/TESTING.md) for the step-by-step check
+**CURRENT PHASE:** Phase 11 — error-state Kalman filter ✅ (Part B begins)
+**LAST UPDATED:** 2026-09-04
+**NEXT PHASE:** Phase 12 — automatic in-vehicle alignment engine
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -1787,6 +1787,59 @@ through the timer. This is the simulator's clock, not the estimator.
 
 **Tests:** 1166 passing (was 1162; +4). Typecheck clean, `lint:core-purity`
 clean.
+
+### Phase 11 — Error-State Kalman Filter ✅ — Part B begins
+
+15 states — position, velocity, attitude error, accelerometer bias, gyroscope
+bias — in `nav-core/src/eskf/`, following Solà's error-state formulation with
+the LOCAL angular error convention throughout. Prediction from the IMU; six
+measurement updates, each with a real variance: GNSS position, GNSS velocity,
+NHC, ZUPT, ZARU, road cross-track, barometric altitude, plus a forward-speed
+pseudo-measurement that hands the filter the chain's speed rather than
+reinventing it. Joseph-form covariance updates, exact symmetrisation every
+step, and the reset Jacobian after every injection.
+
+No dependency. `eskf/matrix.ts` is 150 lines of dense linear algebra, which is
+cheaper than putting a package resolution step between the phone and the
+estimator for the sake of inverting a 3x3.
+
+**The measured result — it does not win outright:**
+
+| | mean | median | p90 | max |
+| --- | --- | --- | --- | --- |
+| `full` (shipped) | **10.0 %** | **6.4 %** | 22.7 % | 27.3 % |
+| `eskf` | 10.8 % | 12.4 % | **17.8 %** | **22.7 %** |
+
+Worse in the middle, better in the tail. The chain was tuned against these
+logs; the filter's covariance bookkeeping is what keeps the bad runs from
+getting as bad. Ships OFF, reported either way, and `packages/eval` asserts
+both halves so neither can be quietly dropped.
+
+**Two bugs, both found by measuring rather than by reading the code.**
+
+1. **84.6 % drift** — ZARU was fed the raw device-frame gyro while prediction
+   used the synthetic vehicle-frame rate. A measurement in the wrong frame:
+   the unobservable x/y gyro-bias states absorbed the difference, attitude
+   tumbled at 0.25 rad/s, and every fix that returned was then gated as an
+   outlier forever. Fixed by using one gyro vector for both, and by re-seeding
+   the filter after three consecutively gated fixes — a gate that never opens
+   again is a divergence, not a gate.
+2. **The lateral channel.** Measured lateral acceleration put 8 m/s² into the
+   body-y bias on the first corner; zero was worse, because with no lateral
+   acceleration the velocity vector cannot turn and NHC reads the accumulating
+   lateral velocity as yaw error (26° lost in five seconds). The answer is the
+   centripetal term `v × ω`, which is the same kinematic model NHC already
+   asserts, so the two agree by construction instead of arguing through the
+   bias states.
+
+**Scope, deliberately narrow.** The filter owns position, and only during
+DEAD_RECKONING. Speed, heading and distance stay with the chain that has the
+ablation behind it, and RECOVERING still belongs to the blender — "the marker
+never teleports" is not for sale. Asserted by three engine tests.
+
+**Tests:** 1227 passing (was 1166; +61). Typecheck clean, `lint:core-purity`
+clean — the whole filter is pure math, so it already runs unchanged in the
+edge engine.
 
 ## NEXT PHASE
 

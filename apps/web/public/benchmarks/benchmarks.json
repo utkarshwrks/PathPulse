@@ -190,6 +190,25 @@
       "roadSnapPct": 99.66441546966466,
       "positionResets": 0,
       "discardedSamples": 0
+    },
+    {
+      "config": "eskf",
+      "description": "Phase 11. The shipped configuration, with position taken from the 15-state error-state Kalman filter while dead reckoning instead of from open-loop integration. Everything else identical to `full`.",
+      "runs": 12,
+      "meanDriftPct": 10.794626667764794,
+      "medianDriftPct": 12.396235022840411,
+      "p90DriftPct": 17.830682423192272,
+      "maxDriftPct": 22.65615576381986,
+      "meanRmseM": 79.19867288963555,
+      "meanAlongM": 51.925747837268155,
+      "meanCrossM": 55.79957809219567,
+      "meanCep95M": 131.5589826428379,
+      "meanRecoveryS": 6.544,
+      "meanUpdateHz": 50,
+      "totalZupt": 18,
+      "roadSnapPct": 91.20259895029814,
+      "positionResets": 0,
+      "discardedSamples": 0
     }
   ]
 }

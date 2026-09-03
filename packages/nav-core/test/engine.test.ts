@@ -532,3 +532,60 @@ describe('NavigationStateMachine — a poor fix is still information', () => {
     expect(sm.modeReason({ hasFix: true, accuracyM: 4 }, 500)).toBeNull();
   });
 });
+
+describe('Phase 11 — the ESKF flag inside the engine', () => {
+  const drive = () => makeDrive({ durationS: 120, outageStartS: 40, outageEndS: 100 });
+
+  const run = (eskf: boolean): NavigationState[] => {
+    const engine = new NavigationEngine({ eskf, roadSnap: false });
+    return drive().map((s) => engine.update(s));
+  };
+
+  it('changes nothing at all while GNSS is healthy', () => {
+    // ★ THE FLAG MUST BE INERT WHERE IT CLAIMS TO BE INERT ★
+    // The filter runs on every sample either way — that is deliberate, so
+    // switching it on mid-drive does not start it from a cold covariance. But
+    // it is only permitted to move the estimate during DEAD_RECKONING, and a
+    // "principled improvement" that quietly perturbs the mode a judge spends
+    // most of the demo looking at is not the trade it was sold as.
+    const off = run(false);
+    const on = run(true);
+    for (let i = 0; i < off.length; i++) {
+      if (off[i]!.mode === 'DEAD_RECKONING' || off[i]!.mode === 'RECOVERING') continue;
+      expect(on[i]!.position.lat, `sample ${i} (${off[i]!.mode})`).toBe(off[i]!.position.lat);
+      expect(on[i]!.position.lon).toBe(off[i]!.position.lon);
+    }
+  });
+
+  it('takes over the position during dead reckoning, and only there', () => {
+    const off = run(false);
+    const on = run(true);
+    const differing = off.filter(
+      (s, i) => s.mode === 'DEAD_RECKONING' && on[i]!.position.lon !== s.position.lon,
+    );
+    expect(differing.length).toBeGreaterThan(0);
+  });
+
+  it('leaves speed, heading and distance to the chain that was measured', () => {
+    // The filter is a position estimator here. Handing it the speed as well
+    // would change two variables at once and make the ablation row unreadable
+    // — see DeadReckoningEngine.overridePosition.
+    const off = run(false);
+    const on = run(true);
+    const last = off.length - 1;
+    expect(on[last]!.velocityMps).toBeCloseTo(off[last]!.velocityMps, 6);
+    expect(on[last]!.distanceTravelledM).toBeCloseTo(off[last]!.distanceTravelledM, 6);
+  });
+
+  it('stays on the road on a straight drive rather than diverging', () => {
+    // A 60 s outage on a dead-straight drive due east. The filter is allowed
+    // to be a little different from the chain; it is not allowed to be lost.
+    const states = run(true);
+    const outage = states.filter((s) => s.mode === 'DEAD_RECKONING');
+    expect(outage.length).toBeGreaterThan(0);
+    for (const s of outage) {
+      expect(Number.isFinite(s.position.lat)).toBe(true);
+      expect(Math.abs(s.position.lat - START.lat)).toBeLessThan(0.01); // ~1 km
+    }
+  });
+});

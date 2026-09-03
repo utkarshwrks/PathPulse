@@ -24,6 +24,7 @@ the outage window. Road graphs used: city, highway.
 | highpass | **13.6** | 16.8 | 22.8 | 27.5 | 83.4 | 62.9 | 48.2 | 135.8 |
 | full | **10.0** | 6.4 | 22.7 | 27.3 | 71.5 | 52.3 | 45.2 | 113.6 |
 | full_forwardbias | **12.9** | 11.9 | 21.0 | 25.6 | 82.4 | 68.5 | 41.5 | 142.5 |
+| eskf | **10.8** | 12.4 | 17.8 | 22.7 | 79.2 | 51.9 | 55.8 | 131.6 |
 
 ![drift by configuration](./ablation.svg)
 
@@ -40,6 +41,7 @@ the outage window. Road graphs used: city, highway.
 | highpass | 8.05 | 50.0 | 18 | 0.0 | 0 |
 | full | 6.18 | 50.0 | 18 | 96.0 | 0 |
 | full_forwardbias | 6.91 | 50.0 | 18 | 99.7 | 0 |
+| eskf | 6.54 | 50.0 | 18 | 91.2 | 0 |
 
 ## What each row is
 
@@ -52,6 +54,7 @@ the outage window. Road graphs used: city, highway.
 - **highpass** — + acceleration high-pass. Real longitudinal acceleration averages to zero over a minute; tilt error does not. Largest single improvement in the table.
 - **full** — Everything that earns its place, including road snapping. This is what ships.
 - **full_forwardbias** — NEGATIVE RESULT, kept deliberately. Full plus the GNSS-Doppler forward-bias estimator, which measurably WORSENS drift now that the high-pass exists. Reported rather than deleted.
+- **eskf** — Phase 11. The shipped configuration, with position taken from the 15-state error-state Kalman filter while dead reckoning instead of from open-loop integration. Everything else identical to `full`.
 
 ## Reading this table
 

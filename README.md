@@ -42,7 +42,8 @@ Total spend: ₹0. No paid APIs, no IoT hardware.
 
 ## Setup
 
-Requires Node 20+, pnpm, and (from Phase 3) Android Studio with the Android SDK.
+Requires Node 20+, pnpm, and — for the APK only — a JDK 17 and the Android SDK
+command-line tools. **Android Studio is not required**; see below.
 
 ```bash
 pnpm install
@@ -55,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1166) |
+| `pnpm test` | All workspace tests (1227) |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
 | `pnpm lint:core-purity` | **Enforces Golden Rule #1** (see below) |
 
@@ -74,15 +75,42 @@ Phase 9 can swap in an offline PMTiles basemap without touching `MapView`.
 
 ### Building the Android APK
 
-Prerequisites: **JDK 17** (Capacitor 6 requires it — 7 and 8 need JDK 21),
-Android Studio with the SDK, and a phone with USB debugging on.
+**No Android Studio.** The APK is a Gradle task; the IDE is 1.5 GB of
+packaging around a JDK and an SDK, and it hides both — which is why
+`./gradlew assembleDebug` in a plain shell fails with *"Unable to locate a Java
+Runtime"* on a machine that can perfectly well build the app. So the toolchain
+is resolved per-invocation by `scripts/android-toolchain.mjs`, which looks for
+a JDK in the range Gradle 8.2 accepts (17–21) across Homebrew, `/Library/Java`,
+`/usr/lib/jvm` and — last — a Studio install if one happens to exist, finds the
+SDK, writes `local.properties`, and exports both into Gradle's environment
+only. Nothing is written to a shell profile.
+
+Prerequisites, once:
+
+```bash
+brew install openjdk@17                          # Capacitor 6 wants 17; Gradle 8.2 rejects 22+
+brew install --cask android-commandlinetools     # sdkmanager, ~100 MB, no IDE
+sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+sdkmanager --licenses
+```
+
+Check the machine before building — it names the one thing that is missing
+rather than handing you a Gradle stack trace:
+
+```bash
+pnpm android:doctor
+```
+
+Then:
 
 ```bash
 pnpm build:android
 ```
 
 That runs `next build` → `cap sync android` → `gradlew assembleDebug` and
-prints the APK path. Install it:
+prints the APK path. `pnpm android:gradle <task>` runs any other Gradle task
+through the same resolver (`pnpm android:gradle clean assembleRelease`).
+Install it:
 
 ```bash
 adb install -r apps/web/android/app/build/outputs/apk/debug/app-debug.apk
@@ -91,7 +119,7 @@ adb install -r apps/web/android/app/build/outputs/apk/debug/app-debug.apk
 | | |
 | --- | --- |
 | Package | `in.avinya.pathpulse` |
-| Size | ~4.7 MB |
+| Size | ~12.8 MB (the landing page's assets dominate it) |
 | Output | `apps/web/android/app/build/outputs/apk/debug/app-debug.apk` |
 
 **`apps/web/android/` is committed on purpose.** `AndroidManifest.xml` carries
@@ -420,11 +448,67 @@ is. A scripted animation cannot be broken on request.
 | ~~Forward bias~~ | GNSS Doppler as a truth signal for longitudinal acceleration | **Off — measured worse.** 12.7% drift without it, 19.1% with. Superseded by the high-pass; kept and documented as a negative result |
 | **Speed clamp** | Vehicles obey physics, and roads have limits | Integrated sensor error masquerading as motion |
 | **Adaptive fix timeout** | The receiver's cadence is observable, so observe it | "DEAD RECKONING" being announced under open sky on a 0.2 Hz receiver |
+| **ESKF** (`eskf/`) | Every measurement is worth what its variance says it is worth | Cross-track drift in the tail — **off by default, see below** |
 
 The ablation is generated in CI by
 `packages/sensor-sources/test/ablation.test.ts`. Ground truth is the GNSS the
 simulator withheld: drive with good GNSS, record, then delete it in software —
 honest and reproducible.
+
+### Phase 11 — the error-state Kalman filter, and why not a UKF
+
+`nav-core/src/eskf/` is a 15-state error-state Kalman filter: position,
+velocity, attitude error, accelerometer bias, gyroscope bias. Prediction from
+the IMU, and six measurement updates — GNSS position, GNSS velocity, NHC, ZUPT,
+ZARU, road cross-track and barometric altitude — each with a real variance.
+Joseph-form covariance updates, exact symmetrisation every step, and Solà's
+reset Jacobian after each injection.
+
+**The result, measured, in both directions:**
+
+| | mean | median | p90 | max |
+| --- | --- | --- | --- | --- |
+| `full` (shipped chain) | **10.0 %** | **6.4 %** | 22.7 % | 27.3 % |
+| `eskf` | 10.8 % | 12.4 % | **17.8 %** | **22.7 %** |
+
+It loses in the middle of the distribution and wins at the end of it. That is a
+real trade and not a disappointment: the hand-built chain has been tuned
+against exactly these logs and is very good on the runs it was tuned for, while
+the filter's covariance bookkeeping is what stops the bad runs getting as bad —
+a 22 % worst case instead of a 27 % one. Since the problem statement's
+requirement is a *ceiling* on drift, that tail is arguably the number that
+matters. It ships **off** anyway, because the published headline belongs to the
+configuration that measured best on it, and the row is in the table either way.
+
+Two things had to be got right, and both were got wrong first:
+
+1. **A measurement must be in the frame of the state it measures.** ZARU was
+   fed the raw device-frame gyro while prediction used the vehicle-frame rate.
+   The unobservable x/y gyro-bias states absorbed the difference, the attitude
+   tumbled at a quarter radian per second, every returning fix was then gated
+   as an outlier, and the ablation read **84.6 %**.
+2. **The lateral channel is modelled, not measured.** Feeding the measured
+   lateral acceleration made the filter reconcile an alignment error against
+   NHC by dumping 8 m/s² into the body-y bias. Feeding zero was worse: with no
+   lateral acceleration the velocity vector cannot turn, and NHC then reads the
+   accumulating lateral velocity as *yaw error*. The answer is the centripetal
+   term `v × ω` the kinematics already imply, which agrees with NHC by
+   construction.
+
+**Why ESKF rather than the UKF the problem statement suggests.** A UKF earns
+its keep where the dynamics are strongly non-linear across the width of the
+uncertainty — it propagates sigma points through the true non-linear model
+instead of through a Jacobian. Here the non-linearity is entirely in the
+*nominal* state, which is integrated exactly and never linearised at all; what
+the filter estimates is the *error*, which stays within a few centimetres and a
+few milliradians of zero, where a first-order Jacobian is not an approximation
+worth worrying about. The ESKF also carries attitude error as a minimal
+3-vector, so there is no unit-norm constraint for a linear update to violate
+and no quaternion for the unscented transform's weighted mean to average badly.
+A UKF here would cost 31 propagations per step to fix a linearisation error
+that is not present, on a phone at 10 Hz and an edge engine at 200 Hz. The
+comparison is worth running and neither implementation is wasted — but that is
+the argument, and it is why this one exists first.
 
 ### Why attitude accuracy is position accuracy
 

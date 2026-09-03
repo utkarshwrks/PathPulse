@@ -25,6 +25,12 @@ export type NavEventType =
   | 'ML_SUPPRESSED'
   /** The motion classifier changed its mind about what the carrier is doing. */
   | 'MOTION_CONTEXT'
+  /**
+   * The error-state Kalman filter was re-seeded from GNSS after rejecting
+   * several honest fixes in a row. Phase 11. Never silent: a filter that
+   * needed rescuing is a fact about the run, not an implementation detail.
+   */
+  | 'ESKF_RESET'
   | 'WARNING';
 
 export interface NavEvent {
