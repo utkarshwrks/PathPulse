@@ -1,6 +1,6 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Field fix — the marker stays on the road ✅
+**CURRENT PHASE:** Offline anywhere — road graph downloadable on the spot ✅
 **LAST UPDATED:** 2026-09-04
 **NEXT PHASE:** Phase 13 — AI models 2, 3 and 4 (motion classifier, fusion residual, GNSS quality)
 
@@ -1965,6 +1965,46 @@ produces. 108.9 m. The blender works in unsnapped space, and now says so.
 **Tests:** 1279 passing (was 1255; +24), including a new `pnpm eval:offroad`
 guard that asserts both halves — that the marker is on the road, and that road
 snapping is what puts it there.
+
+### Offline anywhere, not just in three bounding boxes ✅
+
+"It should work in aeroplane mode everywhere, because we don't know where the
+mentor will be." Correct, and it did not.
+
+The engine needs no network and that was always true. But the road graph does,
+once — and road snapping is what holds the marker on the road during an outage.
+The app shipped graphs for three bounding boxes chosen months in advance. Drive
+anywhere else and snapping silently did not engage, with nothing on screen to
+say so. The Offline panel even asserted "the engine never needs a network, this
+is about the basemap", which was true of the physics and false of the result.
+
+You cannot bundle a graph for a location you do not know yet. So it is fetched
+on the spot, while there is still a connection, and stored:
+
+- `lib/roadGraphFetch.ts` — Overpass query for the current viewport, using the
+  SAME road-class list as scripts/build-road-graph.mjs. Two definitions of "a
+  road" would mean the downloaded graph and the committed one behaved
+  differently on the same street. 25 km² cap, two mirrors.
+- `lib/roadGraphStore.ts` — IndexedDB. A city graph is 1-3 MB: too big for
+  localStorage (synchronous, ~5 MB origin cap, parsed on the render thread at
+  10 Hz), and the Cache API belongs to the tile worker's host allowlist.
+- `lib/roadGraph.ts` — a downloaded graph is indistinguishable from a bundled
+  one at lookup time; `source` says which, because they have different failure
+  modes and the panel has to be able to say which is covering you.
+- `reloadRoadGraph()` — the original lookup runs once on the first fix, so a
+  graph downloaded mid-session would otherwise sit unused until a restart, on a
+  phone that is by then in aeroplane mode.
+
+The panel shows `road graph: NOT COVERED` in amber and relabels its button to
+"Download roads + map". It no longer requires the service worker: the graph
+goes to IndexedDB, and refusing the download that decides CORRECTNESS because
+the one that decides PRETTINESS is unavailable had it backwards.
+
+Demo procedure, in the actual room: open Offline, tap Download, go into
+aeroplane mode. That is now complete preparation rather than partial.
+
+**Tests:** 1299 passing (was 1279; +20). The OfflinePanel suite was making a
+real Overpass request — both network boundaries are stubbed now.
 
 ## NEXT PHASE
 

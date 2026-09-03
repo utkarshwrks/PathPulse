@@ -1,12 +1,22 @@
 import type { RoadGraph } from '@pathpulse/nav-core';
+import { bboxContains, listStoredGraphs, loadStoredGraph } from '@/lib/roadGraphStore';
 
 export interface RoadGraphEntry {
   name: string;
+  /** Asset path for a bundled graph; empty for one downloaded on this device. */
   file: string;
   /** [minLon, minLat, maxLon, maxLat] */
   bbox: [number, number, number, number];
   ways: number;
   sizeKb: number;
+  /**
+   * Where this graph came from.
+   *
+   * Surfaced rather than inferred, because "downloaded" and "shipped with the
+   * app" have different failure modes and the offline screen has to be able to
+   * say which one is covering you.
+   */
+  source: 'bundled' | 'downloaded';
 }
 
 interface Manifest {
@@ -42,12 +52,24 @@ async function loadManifest(): Promise<Manifest | null> {
 }
 
 function contains(bbox: RoadGraphEntry['bbox'], lat: number, lon: number): boolean {
-  return lon >= bbox[0] && lon <= bbox[2] && lat >= bbox[1] && lat <= bbox[3];
+  return bboxContains(bbox, lat, lon);
 }
 
-/** Every graph the build has produced. */
+/** Every graph the build produced, plus everything downloaded on this device. */
 export async function listRoadGraphs(): Promise<RoadGraphEntry[]> {
-  return (await loadManifest())?.graphs ?? [];
+  const bundled = ((await loadManifest())?.graphs ?? []).map((g) => ({
+    ...g,
+    source: 'bundled' as const,
+  }));
+  const stored = (await listStoredGraphs()).map((g) => ({
+    name: g.name,
+    file: '',
+    bbox: g.bbox,
+    ways: g.ways,
+    sizeKb: g.sizeKb,
+    source: 'downloaded' as const,
+  }));
+  return [...bundled, ...stored];
 }
 
 /** The entry covering a position, or null if none does. */
@@ -64,8 +86,12 @@ function area(b: RoadGraphEntry['bbox']): number {
   return Math.abs((b[2] - b[0]) * (b[3] - b[1]));
 }
 
-/** Fetch and cache a graph by manifest entry. */
+/** Fetch and cache a graph by entry, from app assets or from device storage. */
 export async function loadRoadGraph(entry: RoadGraphEntry): Promise<RoadGraph | null> {
+  if (entry.source === 'downloaded') {
+    const stored = await loadStoredGraph(entry.name);
+    return stored;
+  }
   const cached = graphCache.get(entry.file);
   if (cached) return cached;
   try {

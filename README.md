@@ -56,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1279) |
+| `pnpm test` | All workspace tests (1299) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
@@ -512,6 +512,48 @@ A UKF here would cost 31 propagations per step to fix a linearisation error
 that is not present, on a phone at 10 Hz and an edge engine at 200 Hz. The
 comparison is worth running and neither implementation is wasted — but that is
 the argument, and it is why this one exists first.
+
+### Working offline *anywhere*, not just in three bounding boxes
+
+The engine needs no network — that is the point of the project, and it is
+true. But "offline works" was only half-checked, because two things the engine
+*depends on* do need a network, once:
+
+| | needs network | what happens without it |
+| --- | --- | --- |
+| Estimator (IMU, NHC, ZUPT, ML speed) | never | — |
+| Basemap tiles | once, to cache | blank map, navigation fine |
+| **Road graph** | once, to store | **snapping does nothing — the marker drifts into fields** |
+
+The road graph was the dangerous one. The app shipped graphs for three bounding
+boxes chosen months in advance; drive anywhere else and road snapping silently
+did not engage, with nothing on screen to say so. And you cannot bundle a graph
+for a location you do not know yet — "we will demo in Delhi" is not a plan when
+somebody else picks the room.
+
+So the Offline screen now **checks coverage for where you actually are** and
+downloads it on the spot:
+
+- `lib/roadGraphFetch.ts` queries Overpass for the current viewport, using the
+  same road-class list as the build script — two definitions of "a road" would
+  mean the downloaded graph and the committed one behaved differently on the
+  same street.
+- `lib/roadGraphStore.ts` persists it in IndexedDB (a city graph is 1–3 MB:
+  too large for `localStorage`, and the Cache API belongs to the tile worker).
+- A downloaded graph is then indistinguishable from a bundled one — same
+  lookup, same snapping, same offline behaviour.
+- `reloadRoadGraph()` installs it immediately, because the original lookup runs
+  once on the first fix and a graph downloaded mid-session would otherwise sit
+  unused until a restart, on a phone that is by then in aeroplane mode.
+
+The panel says `road graph: NOT COVERED` in amber when it isn't, and the button
+relabels to **Download roads + map**. It no longer requires the service worker
+either: the road graph goes to IndexedDB, and refusing the download that
+decides correctness because the one that decides prettiness is unavailable had
+it backwards.
+
+**Before a demo, in the actual room: open Offline, tap Download, then go into
+aeroplane mode.** That is now a complete preparation rather than a partial one.
 
 ### Is the marker on a road? — the metric drift cannot see
 

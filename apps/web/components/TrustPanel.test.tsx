@@ -112,6 +112,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
         bbox: [79.87, 23.11, 79.99, 23.22],
         ways: 9462,
         sizeKb: 2265,
+        source: 'bundled',
       }}
       diagnostics={DIAGNOSTICS}
       stats={STATS}

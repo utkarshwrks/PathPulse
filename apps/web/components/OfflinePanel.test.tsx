@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import OfflinePanel from './OfflinePanel';
 import type { OfflineStatus } from '@/hooks/useOfflineStatus';
@@ -14,6 +14,20 @@ import type { OfflineStatus } from '@/hooks/useOfflineStatus';
  */
 
 afterEach(cleanup);
+
+/**
+ * ★ NO UNIT TEST MAY TOUCH THE NETWORK ★
+ * `handleDownload` fetches a road graph from OpenStreetMap. Left unmocked this
+ * suite made a real Overpass request, which is slow, rate-limited, and turns a
+ * logic test into a test of somebody else's uptime. Both boundaries are
+ * stubbed: the fetch, and the coverage lookup that reads the app's manifest.
+ */
+vi.mock('@/lib/roadGraphFetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/roadGraphFetch')>();
+  return { ...actual, fetchRoadGraph: vi.fn().mockRejectedValue(new Error('offline in tests')) };
+});
+
+vi.mock('@/lib/roadGraph', () => ({ findGraphFor: vi.fn().mockResolvedValue(null) }));
 
 const JABALPUR = { north: 23.19, south: 23.15, east: 79.99, west: 79.95 };
 
@@ -36,6 +50,8 @@ function renderPanel(patch: Partial<OfflineStatus> = {}, bounds = JABALPUR) {
     <OfflinePanel
       status={s}
       bounds={bounds}
+      position={{ lat: 23.16, lon: 79.93 }}
+      onRoadGraphChanged={() => {}}
       mapSourceLabel="OpenStreetMap raster"
       onClose={() => {}}
     />,
@@ -74,26 +90,34 @@ describe('OfflinePanel', () => {
   it('★ refuses an area too large to store, with the limit stated', () => {
     renderPanel({}, { north: 60, south: -60, east: 170, west: -170 });
     expect(screen.getByText(/Too large/)).toBeDefined();
-    const button = screen.getByRole('button', { name: /download this area/i });
+    const button = screen.getByRole('button', { name: /download (this area|roads \+ map)/i });
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('cannot download while offline — there is nothing to download from', () => {
     renderPanel({ online: false });
-    const button = screen.getByRole('button', { name: /download this area/i });
+    const button = screen.getByRole('button', { name: /download (this area|roads \+ map)/i });
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('cannot download with no worker to do the storing', () => {
+  it('still offers the download with no tile worker, because roads matter more', () => {
+    // ★ A DELIBERATE CHANGE ★ The button used to be disabled without a service
+    // worker, because tiles were the only thing it fetched. The road graph
+    // needs no worker — it goes to IndexedDB — and it is the half that decides
+    // whether the marker stays on the road rather than merely whether the map
+    // is pretty. Refusing the important download because the cosmetic one is
+    // unavailable had it exactly backwards.
     renderPanel({ capability: { supported: true, active: false, reason: 'blocked' } });
-    const button = screen.getByRole('button', { name: /download this area/i });
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    const button = screen.getByRole('button', { name: /download (this area|roads \+ map)/i });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('hands the worker a real list of tile urls', () => {
+  it('hands the worker a real list of tile urls', async () => {
+    // The road-graph fetch runs first and fails in jsdom with no network, which
+    // must not stop the tiles being stored: the two halves fail independently.
     const s = renderPanel();
-    fireEvent.click(screen.getByRole('button', { name: /download this area/i }));
-    expect(s.download).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /download (this area|roads \+ map)/i }));
+    await waitFor(() => expect(s.download).toHaveBeenCalledTimes(1));
     const urls = (s.download as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string[];
     expect(urls.length).toBeGreaterThan(0);
     for (const u of urls) {
@@ -109,21 +133,18 @@ describe('OfflinePanel', () => {
 
   it('does not offer a second download while one is running', () => {
     renderPanel({ progress: { done: 1, total: 100, failed: 0, finished: false } });
-    const button = screen.getByRole('button', { name: /download this area/i });
+    const button = screen.getByRole('button', { name: /download (this area|roads \+ map)/i });
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('only offers to clear a cache that has something in it', () => {
-    renderPanel({ cachedTiles: 0 });
-    expect((screen.getByRole('button', { name: /clear cache/i }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    cleanup();
+  it('clears stored roads as well as tiles', async () => {
+    // No longer gated on the tile count: a downloaded road graph is storage
+    // too, and it can exist with zero tiles cached.
     const s = renderPanel({ cachedTiles: 50 });
     const clearButton = screen.getByRole('button', { name: /clear cache/i });
     expect((clearButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(clearButton);
-    expect(s.clear).toHaveBeenCalled();
+    await waitFor(() => expect(s.clear).toHaveBeenCalled());
   });
 
   it('waits for the map rather than quoting a made-up area', () => {
@@ -131,13 +152,46 @@ describe('OfflinePanel', () => {
       <OfflinePanel
         status={status()}
         bounds={null}
-        mapSourceLabel="OpenStreetMap raster"
+        position={{ lat: 23.16, lon: 79.93 }}
+      onRoadGraphChanged={() => {}}
+      mapSourceLabel="OpenStreetMap raster"
         onClose={() => {}}
       />,
     );
     expect(screen.getByText(/Waiting for the map/)).toBeDefined();
     expect(
-      (screen.getByRole('button', { name: /download this area/i }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: /download (this area|roads \+ map)/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+});
+
+describe('OfflinePanel — road graph coverage', () => {
+  /**
+   * ★ THE HALF OF "OFFLINE" THAT WAS MISSING ★
+   * The panel used to say "the engine never needs a network, this is about the
+   * basemap". True of the physics, false of the result: road snapping is what
+   * holds the marker on the road during an outage, it needs a road graph, and
+   * the app shipped graphs for three bounding boxes chosen months in advance.
+   * Anywhere else, snapping silently did nothing and the panel said everything
+   * was fine.
+   */
+  it('says plainly when no road graph covers this area', async () => {
+    // jsdom has no network and no IndexedDB, so the lookup finds nothing —
+    // which is exactly the state a driver outside the bundled boxes is in.
+    renderPanel();
+    await waitFor(() => expect(screen.getByText('NOT COVERED')).toBeDefined());
+    expect(screen.getByText(/will not be held on the road/i)).toBeDefined();
+  });
+
+  it('relabels the button so the missing half is the obvious thing to fix', async () => {
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /download roads \+ map/i })).toBeDefined(),
+    );
+  });
+
+  it('does not claim the engine is fine without a network', () => {
+    renderPanel();
+    expect(screen.getByText(/the map and the road graph do/i)).toBeDefined();
   });
 });

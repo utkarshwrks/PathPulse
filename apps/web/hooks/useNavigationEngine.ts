@@ -221,6 +221,16 @@ export interface NavEngineOutput {
   reset: () => void;
   /** Phase 12 — throw the mount alignment away and learn it again. */
   recalibrateAlignment: () => void;
+  /**
+   * Look for a road graph covering the current position again, and install it.
+   *
+   * The initial lookup happens once, on the first fix, because before that the
+   * app does not know where it is. That is right, and it means a graph
+   * DOWNLOADED mid-session — which is the whole point of the offline screen —
+   * would otherwise sit in storage unused until the app was restarted, on a
+   * phone that is by then in aeroplane mode.
+   */
+  reloadRoadGraph: () => Promise<boolean>;
   exportEventsJson: () => string;
 }
 
@@ -397,6 +407,17 @@ export function useNavigationEngine(): NavEngineOutput {
     setStats(EMPTY_SESSION_SUMMARY);
   }, []);
 
+  const reloadRoadGraph = useCallback(async () => {
+    const at = lastGnssRef.current?.gnss;
+    if (!at) return false;
+    const found = await loadRoadGraphFor(at.lat, at.lon);
+    if (!found) return false;
+    engineRef.current?.setRoadGraph(found.graph);
+    setRoadGraphEntry(found.entry);
+    setRoadGraph(found.graph);
+    return true;
+  }, []);
+
   /** Phase 12 — behind the "Re-calibrate" button. */
   const recalibrateAlignment = useCallback(() => {
     engineRef.current?.recalibrateAlignment();
@@ -428,6 +449,7 @@ export function useNavigationEngine(): NavEngineOutput {
       reset,
       exportEventsJson,
       recalibrateAlignment,
+      reloadRoadGraph,
       gnssTrail,
     }),
     [
@@ -447,6 +469,7 @@ export function useNavigationEngine(): NavEngineOutput {
       reset,
       exportEventsJson,
       recalibrateAlignment,
+      reloadRoadGraph,
       gnssTrail,
     ],
   );

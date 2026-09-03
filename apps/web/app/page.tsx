@@ -504,6 +504,8 @@ export default function Home() {
           status={offline}
           bounds={mapBounds}
           mapSourceLabel={styleInfo.label}
+          position={nav.lastGnss ? { lat: nav.lastGnss.gnss.lat, lon: nav.lastGnss.gnss.lon } : null}
+          onRoadGraphChanged={() => void nav.reloadRoadGraph()}
           onClose={closePanel}
         />
       ) : null}
