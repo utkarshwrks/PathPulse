@@ -1,4 +1,5 @@
 export {
+  ImuWindowBuffer,
   ML_CHANNELS,
   ML_SAMPLE_RATE_HZ,
   ML_WINDOW_SAMPLES,
@@ -11,8 +12,29 @@ export {
 export {
   CnnSpeedPredictor,
   decodeFloat32,
+  parseCnnWeights,
   parseSpeedCnnWeights,
+  runCnn,
   runSpeedCnn,
   type SpeedCnnLayer,
   type SpeedCnnWeights,
 } from './cnn.js';
+export {
+  CnnMotionClassifier,
+  DEFAULT_MOTION_GATE_CONFIG,
+  MOTION_CHANNELS,
+  MOTION_SAMPLE_RATE_HZ,
+  MOTION_STATES,
+  MOTION_WINDOW_SAMPLES,
+  MotionGate,
+  NullMotionClassifier,
+  isStoppedState,
+  isTurningState,
+  parseMotionCnnWeights,
+  softmax,
+  type MotionClassifier,
+  type MotionGateConfig,
+  type MotionPrediction,
+  type MotionState,
+  type MotionVerdict,
+} from './motionModel.js';

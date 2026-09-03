@@ -37,6 +37,12 @@ export type NavEventType =
    * is pointing" is exactly the sort of thing that must not be silent.
    */
   | 'ALIGNMENT'
+  /**
+   * Phase 13's motion classifier changed its accepted state. Distinct from
+   * MOTION_CONTEXT, which is the vehicle/pedestrian detector: this one is the
+   * eight-class model, and confusing the two in a log would make both useless.
+   */
+  | 'MOTION_STATE'
   | 'WARNING';
 
 export interface NavEvent {

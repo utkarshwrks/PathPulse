@@ -262,3 +262,109 @@ The HUD tags the speed `[GNSS]`, `[ML]` or `[INTEGRATED]` so the source is
 visible rather than asserted, and the SENSORS tab shows the model's live
 prediction against GNSS actual — while satellites are up, the error is
 measurable on screen in real time.
+
+
+---
+
+# Phase 13, Model 2 — the motion-state classifier
+
+The problem statement asks for AI in three places. Phase 8 built the first
+(speed). This is the second:
+
+> "dynamically detect and filter out non-navigation motions such as engine
+> idling vibrations, pothole shocks, bumps"
+
+A 1D-CNN, 9,736 parameters, 50.7 KB, reading **one second** of IMU and
+answering with one of eight states.
+
+```bash
+python ml/data/preprocess_motion.py
+python ml/train_motion.py
+python ml/export_motion.py
+```
+
+## The result, on a held-out journey
+
+`ml/results/motion_metrics.json`, `ml/results/motion_confusion.png`
+
+| class | support | precision | recall | F1 |
+|---|---|---|---|---|
+| STATIONARY | 0 | — | — | — |
+| IDLING | 1120 | 0.70 | 0.12 | 0.20 |
+| STRAIGHT | 4634 | 0.61 | 0.79 | 0.69 |
+| **TURNING_LEFT** | 749 | 0.85 | 0.86 | **0.86** |
+| **TURNING_RIGHT** | 772 | 0.90 | 0.92 | **0.91** |
+| ACCELERATING | 1004 | 0.08 | 0.03 | 0.05 |
+| BRAKING | 2010 | 0.37 | 0.35 | 0.36 |
+| POTHOLE_EVENT | 59 | 0.19 | 0.75 | 0.30 |
+
+**macro-F1 0.480**, against a majority-class baseline of **0.088**.
+Accuracy is 0.574 against a 0.448 baseline — reported only because omitting it
+would look evasive. 45 % of the windows are STRAIGHT, so accuracy is close to
+meaningless here and macro-F1 is the number that matters: it weights
+POTHOLE_EVENT at 1 % of the data exactly as heavily as STRAIGHT at 45 %.
+
+**Turn detection is the strong result and it is the one the engine leans on
+hardest.** Accelerating-versus-straight is the weak one; gentle acceleration
+genuinely does look like cruising over one second.
+
+## ★ The dataset finding, which cost most of the data ★
+
+**Most of IO-VNBD's phones were not rigidly mounted.**
+
+The phone and vehicle files *are* time-synchronised — GPS speed against CAN
+speed correlates above 0.9 for nearly every sequence. But the phone's
+gyroscope only tracks the car's yaw rate in **two of twenty-six**:
+
+```
+S3c   0.949   keep
+S1    0.935   keep
+S3b   0.311   drop        Vw03    0.330   drop
+Vtb03 0.311   drop        S3a     0.200   drop
+...all others below 0.25, most below 0.05
+```
+
+In the rest the handset was loose on a seat or in a bag, measuring its own
+motion rather than the vehicle's. That is survivable for a *speed* model — a
+moving car shakes its whole cabin and the vibration still carries the speed —
+and fatal for a model whose classes are TURNING_LEFT and TURNING_RIGHT.
+
+So `preprocess_motion.py` screens on that correlation and drops what fails,
+loudly. It leaves one sequence to train on and one held out entirely, which is
+why STATIONARY has no test support and POTHOLE_EVENT has 59 windows. **The
+honest summary is: the split is real, the held-out journey is real, and the
+sample is small.** More rigidly-mounted data is the fix, and our own recorded
+logs will supply it.
+
+## Two mistakes worth keeping in the record
+
+**1. The input has to be in the vehicle's frame.** The first version fed raw
+device axes and reused Phase 8's augmentation, which applies a uniformly random
+yaw. Three classes scored an F1 of *exactly* 0.000 and the best epoch was epoch
+zero — the model got worse with training. That is not a tuning failure:
+accelerating and braking are one axis with opposite signs, left and right
+likewise, so a model told the phone's heading is random has been told the sign
+carries no information. Speed is a magnitude and does not care. The fix is to
+feed what Phase 12's alignment engine already establishes.
+
+**2. The time column is milliseconds.** `TIME SINCE START` ticks 11, 111, 211.
+Dividing by it directly makes every acceleration a thousand times too small,
+and the symptom is not an error — it is a class balance with 5 ACCELERATING
+windows out of eighty thousand.
+
+## The gyroscope columns are not in the accelerometer's axis order
+
+The header calls them `GYROSCOPE Yaw / Pitch / Roll`. On the two sequences
+where the phone is rigidly mounted flat, measured against the CAN yaw rate:
+
+```
+column 15 "Yaw"     +0.071 (S1)   +0.047 (S3c)
+column 16 "Pitch"   +0.935 (S1)   +0.949 (S3c)     <- the vertical rate
+column 17 "Roll"    -0.342 (S1)   +0.256 (S3c)
+```
+
+Phase 8 takes them at face value, harmlessly, because a speed regressor reads
+all three and does not care which is which. This model does, so rather than
+guess the full permutation from two correlations, its channels are built to be
+independent of it: the vertical rate from the column that demonstrably is one,
+the other two only as a magnitude, which no permutation can change.

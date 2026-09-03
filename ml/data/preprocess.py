@@ -143,8 +143,16 @@ def _random_rotation(rng: np.random.Generator) -> np.ndarray:
 
 
 def augment(X: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Rotation, extra noise, bias, vibration. Applied to TRAIN ONLY."""
+    """Rotation, extra noise, bias, vibration. Applied to TRAIN ONLY.
+
+    The window length is taken from the array rather than from WINDOW_SAMPLES:
+    Phase 13's motion classifier reads one second where the speed regressor
+    reads two, and the augmentation is about the PHONE, not about the model.
+    For a 20-sample window every draw is identical to before, so Phase 8's
+    committed numbers still reproduce exactly.
+    """
     out = X.copy()
+    w = out.shape[1]
     for i in range(len(out)):
         # 1. Orientation: accelerometer and gyroscope are the same physical
         #    frame, so they take the SAME rotation. Rotating them independently
@@ -153,8 +161,8 @@ def augment(X: np.ndarray, rng: np.random.Generator) -> np.ndarray:
         out[i, :, 0:3] = out[i, :, 0:3] @ R.T
         out[i, :, 3:6] = out[i, :, 3:6] @ R.T
         # 2. A cheap handset is noisier than a research rig.
-        out[i, :, 0:3] += rng.normal(0, 0.05, (WINDOW_SAMPLES, 3))
-        out[i, :, 3:6] += rng.normal(0, 0.002, (WINDOW_SAMPLES, 3))
+        out[i, :, 0:3] += rng.normal(0, 0.05, (w, 3))
+        out[i, :, 3:6] += rng.normal(0, 0.002, (w, 3))
         # 3. Constant bias — the error that actually kills dead reckoning.
         out[i, :, 0:3] += rng.uniform(0.01, 0.05) * rng.choice([-1, 1], 3)
         out[i, :, 3:6] += rng.uniform(0.0005, 0.002) * rng.choice([-1, 1], 3)
@@ -165,7 +173,7 @@ def augment(X: np.ndarray, rng: np.random.Generator) -> np.ndarray:
         #    teaching the model to ignore it is the point. Evaluating the sine
         #    at the real sample times is what physically happens.
         f = rng.uniform(15, 25)
-        ts = np.arange(WINDOW_SAMPLES) / 10.0
+        ts = np.arange(w) / 10.0
         out[i, :, 2] += rng.uniform(0.05, 0.3) * np.sin(2 * np.pi * f * ts)
     return out
 

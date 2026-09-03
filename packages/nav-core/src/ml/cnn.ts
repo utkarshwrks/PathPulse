@@ -143,15 +143,23 @@ function linear(
 }
 
 /**
- * Evaluate the network.
+ * Evaluate the network and return its whole output vector.
+ *
+ * ★ WHY THIS IS SEPARATE FROM runSpeedCnn ★
+ * Phase 8's regressor has one output and the runner used to return
+ * `x.data[0]`. Phase 13's motion classifier has eight, and every layer type
+ * before the last one is identical — same conv, same pooling, same folded
+ * BatchNorm. Duplicating the network for the sake of the final line would mean
+ * two implementations to keep in step, and the one that is not exercised by
+ * the speed tests would be the one that quietly rots.
  *
  * @param samples already scaler-normalised, (channel, time), channel-major —
- *                exactly what `SpeedWindowBuffer.buildWindow()` produces.
- * @returns speed in m/s, or NaN if the input is the wrong shape.
+ *                exactly what `ImuWindowBuffer.buildWindow()` produces.
+ * @returns the output activation, or null if the input is the wrong shape.
  */
-export function runSpeedCnn(weights: SpeedCnnWeights, samples: Float32Array): number {
+export function runCnn(weights: SpeedCnnWeights, samples: Float32Array): Float32Array | null {
   const channels = weights.channels.length;
-  if (samples.length !== channels * weights.windowSamples) return Number.NaN;
+  if (samples.length !== channels * weights.windowSamples) return null;
 
   let x: Activation = {
     channels,
@@ -179,7 +187,17 @@ export function runSpeedCnn(weights: SpeedCnnWeights, samples: Float32Array): nu
     }
   }
 
-  const v = x.data[0];
+  return x.data;
+}
+
+/**
+ * Evaluate a single-output network — the Phase 8 speed regressor.
+ *
+ * @returns speed in m/s, or NaN if the input is the wrong shape.
+ */
+export function runSpeedCnn(weights: SpeedCnnWeights, samples: Float32Array): number {
+  const out = runCnn(weights, samples);
+  const v = out?.[0];
   return v === undefined || !Number.isFinite(v) ? Number.NaN : v;
 }
 
@@ -253,9 +271,34 @@ function block(b64: unknown, expected: number, what: string): Float32Array {
  * that refuses to load at all — the second gets investigated.
  */
 export function parseSpeedCnnWeights(raw: unknown): SpeedCnnWeights {
+  return parseCnnWeights(raw, {
+    architecture: 'SpeedCNN',
+    windowSamples: ML_WINDOW_SAMPLES,
+  });
+}
+
+/**
+ * Parse an exported network, checking it against the contract the caller will
+ * actually feed it.
+ *
+ * The architecture name and the window length are arguments rather than
+ * constants because Phase 13 adds a second model with a different window — one
+ * second rather than two — and a parser that hard-codes one model's shape
+ * cannot validate the other. Everything else (rate, channel count, scaler,
+ * layer shapes) is shared and is still checked, because the failure it
+ * prevents is the same: a model that half-loads and answers plausible nonsense
+ * is far worse than one that refuses to load, because the second gets
+ * investigated.
+ */
+export function parseCnnWeights(
+  raw: unknown,
+  expect: { architecture: string; windowSamples: number },
+): SpeedCnnWeights {
   const j = raw as Record<string, unknown>;
-  if (j?.['architecture'] !== 'SpeedCNN') {
-    throw new Error(`unexpected architecture "${String(j?.['architecture'])}"`);
+  if (j?.['architecture'] !== expect.architecture) {
+    throw new Error(
+      `unexpected architecture "${String(j?.['architecture'])}", wanted "${expect.architecture}"`,
+    );
   }
   if (j['encoding'] !== 'base64-float32-le') {
     throw new Error(`unexpected weight encoding "${String(j['encoding'])}"`);
@@ -264,9 +307,9 @@ export function parseSpeedCnnWeights(raw: unknown): SpeedCnnWeights {
   // These three must match the constants the engine builds windows from, or
   // every prediction is silently discarded.
   const windowSamples = Number(j['windowSamples']);
-  if (windowSamples !== ML_WINDOW_SAMPLES) {
+  if (windowSamples !== expect.windowSamples) {
     throw new Error(
-      `window mismatch: model wants ${windowSamples} samples, engine builds ${ML_WINDOW_SAMPLES}`,
+      `window mismatch: model wants ${windowSamples} samples, engine builds ${expect.windowSamples}`,
     );
   }
   const sampleRateHz = Number(j['sampleRateHz']);
@@ -348,7 +391,7 @@ export function parseSpeedCnnWeights(raw: unknown): SpeedCnnWeights {
   }
 
   return {
-    architecture: 'SpeedCNN',
+    architecture: expect.architecture,
     windowSamples,
     sampleRateHz,
     channels: channels as string[],

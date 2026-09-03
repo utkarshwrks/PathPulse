@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Offline anywhere — road graph downloadable on the spot ✅
+**CURRENT PHASE:** Phase 13 Model 2 — the motion-state classifier ✅
 **LAST UPDATED:** 2026-09-04
-**NEXT PHASE:** Phase 13 — AI models 2, 3 and 4 (motion classifier, fusion residual, GNSS quality)
+**NEXT PHASE:** Phase 13 Model 3 (AI drift residual), then Phase 14 (HMM map matching)
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -2005,6 +2005,80 @@ aeroplane mode. That is now complete preparation rather than partial.
 
 **Tests:** 1299 passing (was 1279; +20). The OfflinePanel suite was making a
 real Overpass request — both network boundaries are stubbed now.
+
+### Phase 13, Model 2 — the motion-state classifier ✅
+
+The problem statement asks for AI in three places. Phase 8 built the first
+(speed). This is the second: "dynamically detect and filter out non-navigation
+motions such as engine idling vibrations, pothole shocks, bumps".
+
+A 1D-CNN, 9736 parameters, 50.7 KB, one second of IMU, eight classes. Trained
+on IO-VNBD with labels read off the car's own CAN bus — wheel speed, yaw rate,
+longitudinal acceleration, ENGINE RPM (which replaces the vibration heuristic
+for stationary-versus-idling) and the BRAKE PEDAL itself.
+
+RESULT, ON A HELD-OUT JOURNEY
+
+    class            support  precision  recall     F1
+    IDLING              1120       0.70    0.12   0.20
+    STRAIGHT            4634       0.61    0.79   0.69
+    TURNING_LEFT         749       0.85    0.86   0.86
+    TURNING_RIGHT        772       0.90    0.92   0.91
+    ACCELERATING        1004       0.08    0.03   0.05
+    BRAKING             2010       0.37    0.35   0.36
+    POTHOLE_EVENT         59       0.19    0.75   0.30
+
+macro-F1 0.480 against a majority-class baseline of 0.088. Turn detection is
+the strong result and is what the engine leans on hardest.
+
+THREE USES, EACH CHANGING A DECISION
+
+1. A confident stop fires a ZUPT the fixed thresholds miss. Held to a HIGHER
+   confidence bar than the status line (0.85 against 0.6) because the measured
+   precision for IDLING is 0.70 — fine for a readout, not fine for zeroing a
+   velocity and teaching a bias estimator. The consequences are asymmetric so
+   the thresholds are.
+2. A pothole sample is HELD, not zeroed: zeroing swaps a fictitious
+   acceleration for a fictitious deceleration and is no more truthful.
+3. Through a corner the 40 s tilt mean is frozen. Its premise is that real
+   acceleration averages to zero over a minute — true longitudinally, false in
+   a corner, where the lateral component is sustained and one-signed.
+
+★ THE DATASET FINDING, WHICH COST MOST OF THE DATA ★
+
+Most of IO-VNBD's phones were not rigidly mounted. The files ARE synchronised
+— GPS speed against CAN speed correlates above 0.9 nearly everywhere — but the
+phone's gyroscope tracks the car's yaw rate in only TWO of twenty-six
+sequences (0.949 and 0.935; everything else below 0.34, most below 0.05). In
+the rest the handset was loose on a seat, measuring its own motion. Survivable
+for a speed model, fatal for one whose classes are TURNING_LEFT and
+TURNING_RIGHT. So sequences are screened and the failures dropped, loudly,
+leaving one to train on and one held out entirely. The split is real; the
+sample is small; more rigidly-mounted data is the fix and our own logs supply
+it.
+
+TWO MISTAKES WORTH KEEPING IN THE RECORD
+
+1. Fed raw device axes with Phase 8's uniformly-random-yaw augmentation, three
+   classes scored an F1 of EXACTLY 0.000 and the best epoch was epoch zero —
+   the model got worse with training. Accelerating and braking are one axis
+   with opposite signs; a model told the phone's heading is random has been
+   told the sign carries no information. Fixed by feeding the vehicle frame
+   Phase 12 already establishes.
+2. IO-VNBD's time column is MILLISECONDS. Dividing by it directly made every
+   acceleration a thousand times too small; the symptom was not an error but a
+   class balance with 5 ACCELERATING windows in eighty thousand.
+
+Also found: the gyroscope columns are not in the accelerometer's axis order.
+The header says Yaw/Pitch/Roll; measured against CAN yaw on the rigid
+sequences, it is column 16 that is the vertical rate (0.935/0.949) and not the
+one called "Yaw" (0.071/0.047). Phase 8 is unaffected — a speed regressor reads
+all three channels and does not care which is which — but this model does, so
+its channels are built to be permutation-independent.
+
+**Tests:** 1323 passing (was 1299; +24), including a contract test that loads
+the ACTUAL exported weights and asserts the class list matches the engine's.
+A reordered class list is the failure that does not throw.
 
 ## NEXT PHASE
 

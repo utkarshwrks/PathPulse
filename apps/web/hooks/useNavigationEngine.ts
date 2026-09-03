@@ -6,6 +6,7 @@ import {
   NavigationEngine,
   SessionStats,
   type AutoAlignState,
+  type MotionState,
   type ConstraintFlags,
   type NavEvent,
   type MotionContext,
@@ -17,6 +18,7 @@ import {
 } from '@pathpulse/nav-core';
 import { loadRoadGraphFor, type RoadGraphEntry } from '@/lib/roadGraph';
 import { EMPTY_MODEL_INFO, WebSpeedPredictor, type ModelInfo } from '@/lib/ml/speedModel';
+import { WebMotionClassifier } from '@/lib/ml/motionModel';
 
 /**
  * Target UI emit period. The engine itself consumes every sample; this only
@@ -86,6 +88,12 @@ export interface EngineDiagnostics {
   speedSource: SpeedSource;
   /** Phase 12 — where the alignment engine thinks the phone is pointing. */
   alignment: AutoAlignState;
+  /** Phase 13 — the motion classifier's accepted state and its evidence. */
+  motionState: MotionState | null;
+  motionConfidence: number;
+  motionReady: boolean;
+  motionInferences: number;
+  potholesRejected: number;
 }
 
 const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
@@ -123,6 +131,11 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   acquiringReason: null,
   modeReason: null,
   speedSource: 'NONE',
+  motionState: null,
+  motionConfidence: 0,
+  motionReady: false,
+  motionInferences: 0,
+  potholesRejected: 0,
   alignment: {
     yawOffsetRad: 0,
     isCalibrated: false,
@@ -170,6 +183,11 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // Phase 13, Model 2. On, and inert until the classifier loads — the same
+  // arrangement as useMlSpeed. Measured on a held-out journey: turn detection
+  // F1 0.86/0.91, macro-F1 0.48 against a 0.09 majority-class baseline. See
+  // ml/results/motion_metrics.json.
+  useMlMotion: true,
   // Phase 12. ON, because what it replaces is not a tuned alternative but a
   // guess — "the phone's +Y axis points along the bonnet" — which is true of
   // the demo cradle and of nothing else. Measured over the ablation logs with
@@ -214,6 +232,8 @@ export interface NavEngineOutput {
   diagnostics: EngineDiagnostics;
   /** Phase 8: what happened when we tried to load the speed model. */
   modelInfo: ModelInfo;
+  /** Phase 13: the same, for the motion-state classifier. */
+  motionModelInfo: ModelInfo;
   stats: SessionSummary;
   controls: EngineControls;
   setControls: (patch: Partial<EngineControls>) => void;
@@ -251,6 +271,8 @@ export function useNavigationEngine(): NavEngineOutput {
   const [diagnostics, setDiagnostics] = useState<EngineDiagnostics>(EMPTY_DIAGNOSTICS);
   const [modelInfo, setModelInfo] = useState<ModelInfo>(EMPTY_MODEL_INFO);
   const predictorRef = useRef<WebSpeedPredictor | null>(null);
+  const [motionModelInfo, setMotionModelInfo] = useState<ModelInfo>(EMPTY_MODEL_INFO);
+  const motionRef = useRef<WebMotionClassifier | null>(null);
 
   // ── Phase 8: load the speed model, once, and never let it break the app ──
   useEffect(() => {
@@ -275,6 +297,29 @@ export function useNavigationEngine(): NavEngineOutput {
       predictorRef.current = null;
     };
   }, []);
+  // ── Phase 13: the motion classifier, loaded exactly like the speed model ──
+  //
+  // Separate effect, separate failure. They are different networks trained on
+  // different labels, and one loading says nothing about the other — a single
+  // combined loader would let a broken motion model silently disable the
+  // working speed one, or the reverse.
+  useEffect(() => {
+    let cancelled = false;
+    const classifier = new WebMotionClassifier();
+    motionRef.current = classifier;
+    void classifier.load().then((ok) => {
+      if (cancelled) return;
+      if (ok) engineRef.current?.setMotionClassifier(classifier, classifier.scaler);
+      setMotionModelInfo(classifier.info);
+    });
+    return () => {
+      cancelled = true;
+      engineRef.current?.setMotionClassifier(null);
+      classifier.dispose();
+      motionRef.current = null;
+    };
+  }, []);
+
   const [stats, setStats] = useState<SessionSummary>(EMPTY_SESSION_SUMMARY);
   const [controls, setControlsState] = useState<EngineControls>(DEFAULT_CONTROLS);
 
@@ -347,6 +392,7 @@ export function useNavigationEngine(): NavEngineOutput {
         gyroMean: s.gyroMean,
       });
       if (predictorRef.current) setModelInfo(predictorRef.current.info);
+      if (motionRef.current) setMotionModelInfo(motionRef.current.info);
       setStats(statsRef.current!.summary);
 
       // Measured from the wall clock, not from sample timestamps — a simulator
@@ -442,6 +488,7 @@ export function useNavigationEngine(): NavEngineOutput {
       roadGraph,
       diagnostics,
       modelInfo,
+      motionModelInfo,
       stats,
       controls,
       setControls,
@@ -462,6 +509,7 @@ export function useNavigationEngine(): NavEngineOutput {
       roadGraph,
       diagnostics,
       modelInfo,
+      motionModelInfo,
       stats,
       controls,
       setControls,

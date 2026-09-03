@@ -362,6 +362,7 @@ export default function Home() {
       <Sheet title="Live sensors & proof" onClose={closePanel}>
       <TrustPanel
         modelInfo={nav.modelInfo}
+        motionModelInfo={nav.motionModelInfo}
         sample={nav.lastSample}
         lastGnss={nav.lastGnss}
         roadGraphEntry={nav.roadGraphEntry}

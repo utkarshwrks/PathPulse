@@ -1,4 +1,5 @@
-import type { EnuPoint, LatLon, NavMode, NavigationState, SensorSample } from '../types.js';
+import type { EnuPoint, LatLon, NavMode, NavigationState, SensorSample, Vec3 } from '../types.js';
+import { GRAVITY_MPS2 } from '../alignment/gravity.js';
 import { enuToLatLon, latLonToEnu } from '../geo/enu.js';
 import { haversineDistance } from '../geo/distance.js';
 import { AttitudeEstimator } from '../alignment/attitude.js';
@@ -32,14 +33,50 @@ import {
 } from '../motion/context.js';
 import { StepDetector, StrideModel } from '../motion/steps.js';
 import {
+  ImuWindowBuffer,
   NullSpeedPredictor,
   SpeedSmoother,
   SpeedWindowBuffer,
   type SpeedPredictor,
 } from '../ml/speedModel.js';
+import {
+  MOTION_WINDOW_SAMPLES,
+  MotionGate,
+  NullMotionClassifier,
+  isTurningState,
+  type MotionClassifier,
+  type MotionState,
+  type MotionVerdict,
+} from '../ml/motionModel.js';
 import { ErrorStateKalmanFilter } from '../eskf/ErrorStateKalmanFilter.js';
 import { DEFAULT_ESKF_CONFIG } from '../eskf/noise.js';
 import type { RoadGraph, RoadPosition } from '../mapmatch/types.js';
+
+/**
+ * Magnitude of the angular rate perpendicular to the vertical, rad/s.
+ *
+ * Pitching over a crest and rolling into a corner both appear here. It is a
+ * MAGNITUDE because the training data could not supply a signed one: IO-VNBD's
+ * gyroscope columns are not in the accelerometer's axis order, and only the
+ * vertical component could be identified against the car's CAN bus. A
+ * magnitude is invariant to whatever the remaining permutation is, so training
+ * and inference agree without either having to guess it.
+ */
+function horizontalGyroMagnitude(
+  gx: number,
+  gy: number,
+  gz: number,
+  up: Readonly<Vec3>,
+  bias: Readonly<Vec3>,
+): number {
+  const wx = gx - bias[0];
+  const wy = gy - bias[1];
+  const wz = gz - bias[2];
+  if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) return 0;
+  const along = wx * up[0] + wy * up[1] + wz * up[2];
+  const total = wx * wx + wy * wy + wz * wz;
+  return Math.sqrt(Math.max(0, total - along * along));
+}
 
 /** Move a 2-D offset toward a target by at most `maxStepM`. */
 function approach(from: EnuPoint, to: EnuPoint, maxStepM: number): EnuPoint {
@@ -172,6 +209,20 @@ export interface ConstraintFlags {
    * construction it can only cost and never gain.
    */
   autoAlign: boolean;
+  /**
+   * ★ PHASE 13, MODEL 2 ★ Let the motion-state classifier decide when the
+   * vehicle is stopped, when a sample is a pothole, and when it is cornering.
+   *
+   * On by default and completely inert until `setMotionClassifier()` supplies
+   * a model that reports ready — the same arrangement as `useMlSpeed`, and for
+   * the same reason: the app has to be shippable before the weights exist.
+   *
+   * What it replaces is a set of fixed thresholds, and thresholds are exactly
+   * as good as the vehicle they were tuned on. A diesel idling at 800 rpm
+   * shakes harder than a petrol hatchback doing 30 km/h, and no single
+   * variance cut separates those two.
+   */
+  useMlMotion: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -293,6 +344,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   pedestrianHeadingFromGnss: true,
   eskf: false,
   autoAlign: true,
+  useMlMotion: true,
   trustedAccuracyM: 20,
   gyroZSign: 1,
   confidenceTimeConstantMs: 60_000,
@@ -445,6 +497,24 @@ export class NavigationEngine {
   private eskfGatedFixes = 0;
   /** Phase 12. Runs always; consulted only when `config.autoAlign` is on. */
   private readonly autoAlign = new AutoAlignment();
+  /** Phase 13, Model 2. Inert until a classifier is supplied. */
+  private motionClassifier: MotionClassifier = new NullMotionClassifier();
+  private readonly motionBuffer = new ImuWindowBuffer(MOTION_WINDOW_SAMPLES);
+  private readonly motionGate = new MotionGate();
+  private lastMotionVerdict: MotionVerdict = {
+    state: null,
+    confidence: 0,
+    pothole: false,
+    stoppedConfidently: false,
+    raw: null,
+  };
+  private lastMotionState: MotionState | null = null;
+  private motionInferences = 0;
+  private potholesRejected = 0;
+  /** Last conditioned acceleration, held across a rejected pothole sample. */
+  private lastGoodAccel: { forward: number; lateral: number } | null = null;
+  private motionScalerMean: readonly number[] = new Array(6).fill(0);
+  private motionScalerStd: readonly number[] = new Array(6).fill(1);
   /** Last alignment status logged, so the event fires on change only. */
   private lastAlignStatus: string | null = null;
   /** Applied snap strength, ramped rather than switched. See step 8. */
@@ -569,9 +639,21 @@ export class NavigationEngine {
     speedSource: SpeedSource;
     /** Phase 12: where the alignment engine thinks the phone is pointing. */
     alignment: AutoAlignState;
+    /** Phase 13: the motion classifier's accepted state, and its evidence. */
+    motionState: MotionState | null;
+    motionConfidence: number;
+    motionReady: boolean;
+    motionInferences: number;
+    /** IMU samples discarded as pothole impulses this session. */
+    potholesRejected: number;
   } {
     return {
       alignment: this.autoAlign.state,
+      motionState: this.lastMotionVerdict.state,
+      motionConfidence: this.lastMotionVerdict.confidence,
+      motionReady: this.motionClassifier.isReady(),
+      motionInferences: this.motionInferences,
+      potholesRejected: this.potholesRejected,
       zuptTriggers: this.zupt.triggerCount,
       zaruTriggers: this.zaru.triggerCount,
       accelBias: this.zupt.accelBias,
@@ -639,6 +721,38 @@ export class NavigationEngine {
     this.lastMlSpeedMps = Number.NaN;
     this.lastMlInferenceT = null;
     this.mlFailure = null;
+  }
+
+  /**
+   * Supply Phase 13's motion-state classifier, plus its normalisation.
+   *
+   * Separate from the speed model on purpose: they are different networks with
+   * different windows (one second against two) trained on different labels,
+   * and one loading successfully says nothing about the other. Either can be
+   * absent and the engine still runs — on thresholds, exactly as before.
+   */
+  setMotionClassifier(
+    classifier: MotionClassifier | null,
+    scaler?: { mean: readonly number[]; std: readonly number[] },
+  ): void {
+    this.motionClassifier = classifier ?? new NullMotionClassifier();
+    if (scaler) {
+      this.motionScalerMean = scaler.mean;
+      this.motionScalerStd = scaler.std;
+    } else if (classifier) {
+      this.motionScalerMean = classifier.scaler.mean;
+      this.motionScalerStd = classifier.scaler.std;
+    }
+    this.motionBuffer.reset();
+    this.motionGate.reset();
+    this.motionInferences = 0;
+    this.potholesRejected = 0;
+    this.lastMotionState = null;
+  }
+
+  /** The classifier's current verdict, for the debug panel. */
+  get motionVerdict(): MotionVerdict {
+    return this.lastMotionVerdict;
   }
 
   /** Where the currently emitted speed came from. Drives the HUD's tag. */
@@ -757,7 +871,23 @@ export class NavigationEngine {
       // a genuine tunnel stop still gets its ZUPT.
       const gnssSaysMoving =
         this.lastMovingGnssT !== null && sample.t - this.lastMovingGnssT < 3000;
-      const still = this.lastStationarity.isStationary && !gnssSaysMoving;
+
+      // ★ PHASE 13, USE 1 — THE CLASSIFIER MAY CALL A STOP THE THRESHOLD MISSES ★
+      //
+      // `StationarityDetector` compares accelerometer variance and gyro
+      // magnitude against fixed numbers, and IDLING is the case it gets wrong:
+      // a diesel at 800 rpm shakes past any threshold that a petrol hatchback
+      // at 30 km/h stays under, so one of the two must be misread. The model
+      // was trained on labelled stops and can tell them apart.
+      //
+      // It is an OR, not a replacement. Either witness may assert a stop, and
+      // the GNSS interlock below still has the final word over both — because
+      // a ZUPT asserted while moving zeroes a real velocity and teaches the
+      // bias estimators from a moving vehicle, which is far more damaging than
+      // a ZUPT missed at a red light.
+      const motionSaysStopped =
+        this.config.useMlMotion && this.lastMotionVerdict.stoppedConfidently;
+      const still = (this.lastStationarity.isStationary || motionSaysStopped) && !gnssSaysMoving;
       stationaryForZupt = still;
 
       // Every stop is free calibration. Harvest it before using the sample.
@@ -829,7 +959,7 @@ export class NavigationEngine {
           : this.alignment.state.yawOffsetRad;
       const cy = Math.cos(yawOffsetRad);
       const sy = Math.sin(yawOffsetRad);
-      const h = {
+      const h: { forward: number; lateral: number; vertical: number } = {
         forward: plane.forward * cy - plane.lateral * sy,
         lateral: plane.lateral * cy + plane.forward * sy,
         vertical: plane.vertical,
@@ -879,7 +1009,22 @@ export class NavigationEngine {
       // Kept in the plane frame the mean is invariant to the mount rotation —
       // the same physical quantity however the phone is turned — and the
       // forward component is recovered by rotating it, below.
-      if (dtMs > 0 && dtMs < 1000) {
+      // ★ PHASE 13, USE 3 — DO NOT LEARN A TILT ESTIMATE FROM A CORNER ★
+      //
+      // `planeAccelDc` is a forty-second mean, subtracted from every sample as
+      // an estimate of mount tilt. Its premise is that real acceleration
+      // averages to zero over a minute. That premise holds for longitudinal
+      // acceleration and fails for a corner, where the lateral component is
+      // sustained, one-signed, and lasts several seconds — so a run of
+      // roundabouts teaches the estimator a tilt that is not there, and it
+      // then subtracts it from the straight that follows.
+      //
+      // While the classifier says the vehicle is turning, the mean is frozen
+      // rather than updated. It is not discarded: the tilt has not changed,
+      // only our ability to observe it.
+      const learningTilt = !(this.config.useMlMotion && isTurningState(this.lastMotionVerdict.state));
+
+      if (learningTilt && dtMs > 0 && dtMs < 1000) {
         const a = Math.min(0.2, dtMs / this.config.accelHighPassTauMs);
         this.planeAccelDcF = this.hasAccelDc
           ? this.planeAccelDcF + a * (plane.forward - this.planeAccelDcF)
@@ -909,6 +1054,60 @@ export class NavigationEngine {
       //
       // The fallback matters most exactly where the estimator is blind: below
       // walking pace, and on the many handsets that report no Doppler at all.
+      // ★ PHASE 13 — THE CLASSIFIER IS FED WHAT THE ENGINE KNOWS ★
+      //
+      // Not raw device axes. The speed model gets those because speed is a
+      // magnitude and does not care which way the phone points; a motion STATE
+      // does — accelerating and braking are one axis with opposite signs, left
+      // and right likewise. Trained on randomly-yawed device axes, three of
+      // the eight classes scored an F1 of exactly zero, because the model had
+      // been told the sign carried no information.
+      //
+      // So it reads the vehicle frame Phase 12 already establishes. See
+      // `motionChannels` for the six, and ml/data/preprocess_motion.py for the
+      // identical construction on the training side.
+      //
+      // Pushed BEFORE the pothole rejection below, deliberately: the impulse
+      // is what the classifier has to see in order to call it one.
+      if (
+        this.motionBuffer.push(
+          sample.t,
+          h.forward,
+          h.lateral,
+          h.vertical,
+          // The engine's yaw rate is a COMPASS rate, positive clockwise. The
+          // model was trained against ISO 8855's, positive counter-clockwise —
+          // a left turn. One negation, in one place, rather than a convention
+          // mismatch discovered later as a model that turns the wrong way.
+          -yawRate,
+          horizontalGyroMagnitude(gx, gy, gz, this.attitude.upVector, this.zaru.gyroBias),
+          Math.hypot(ax, ay, az) - GRAVITY_MPS2,
+        )
+      ) {
+        this.lastMotionVerdict = this.runMotionClassifier();
+      }
+
+      // ★ PHASE 13, USE 2 — A POTHOLE IS NOT VEHICLE MOTION ★
+      //
+      // The problem statement names this: "filter out non-navigation motions
+      // such as engine idling vibrations, pothole shocks, bumps". A pothole is
+      // a sub-second impulse of several g that the median filter blunts and
+      // does not remove, and integrating it puts metres of imaginary travel
+      // into the estimate in a tenth of a second.
+      //
+      // The rejected sample is HELD, not zeroed. Zeroing substitutes a
+      // fictitious deceleration for a fictitious acceleration and is no more
+      // truthful; holding the last good value says "nothing was measured this
+      // frame", which is what actually happened.
+      if (this.config.useMlMotion && this.lastMotionVerdict.pothole && this.lastGoodAccel) {
+        this.potholesRejected++;
+        h.forward = this.lastGoodAccel.forward;
+        h.lateral = this.lastGoodAccel.lateral;
+        lateralAccel = h.lateral;
+      } else {
+        this.lastGoodAccel = { forward: h.forward, lateral: h.lateral };
+      }
+
       if (this.config.forwardBias && this.forwardBias.hasEstimate) {
         forwardAccel = h.forward + this.forwardBias.correctionMps2;
       } else if (this.config.accelHighPass && this.hasAccelDc) {
@@ -1979,6 +2178,67 @@ export class NavigationEngine {
   }
 
   /**
+   * Run the motion classifier on the window that has just closed.
+   *
+   * Every accepted 10 Hz sample, not on a slower interval like the speed
+   * model: a motion STATE changes in a few hundred milliseconds, and a
+   * classifier polled twice a second would report the pothole after the
+   * estimate had already integrated it. The network is a tenth the size of the
+   * speed model and reads half the window, so it is cheap enough to mean it.
+   */
+  private runMotionClassifier(): MotionVerdict {
+    const idle: MotionVerdict = {
+      state: null,
+      confidence: 0,
+      pothole: false,
+      stoppedConfidently: false,
+      raw: null,
+    };
+    if (!this.config.useMlMotion || !this.motionClassifier.isReady()) return idle;
+    if (!this.motionBuffer.isFull) return idle;
+
+    // Named `imuWindow`, not `window`: `lint:core-purity` scans for the
+    // browser global by identifier, and it is right to — a local that shadows
+    // it is exactly how browser code creeps into a package that must not have
+    // any. The second time this rule has caught a shadowing local, and both
+    // times the clearer name was the better one anyway.
+    const imuWindow = this.motionBuffer.buildWindow(this.motionScalerMean, this.motionScalerStd);
+    if (!imuWindow) return idle;
+
+    let prediction;
+    try {
+      prediction = this.motionClassifier.predict(imuWindow);
+    } catch (err) {
+      // Never let a model take the estimator down. Same contract as the speed
+      // model: it is an aid, and the physics runs without it.
+      this.log.push({
+        t: this.lastSampleT ?? 0,
+        type: 'ML_ERROR',
+        message: `motion classifier threw: ${(err as Error).message}`,
+      });
+      this.motionClassifier = new NullMotionClassifier();
+      return idle;
+    }
+
+    this.motionInferences++;
+    const verdict = this.motionGate.push(prediction ?? null);
+
+    if (verdict.state !== this.lastMotionState) {
+      this.lastMotionState = verdict.state;
+      this.log.push({
+        t: this.lastSampleT ?? 0,
+        type: 'MOTION_STATE',
+        message: `${verdict.state ?? 'unknown'} (${(verdict.confidence * 100).toFixed(0)}%)`,
+        data: {
+          state: verdict.state ?? 'unknown',
+          confidence: Number(verdict.confidence.toFixed(2)),
+        },
+      });
+    }
+    return verdict;
+  }
+
+  /**
    * Run the speed model, at most once per `mlInferenceIntervalMs`.
    *
    * Returns undefined whenever the model must not be trusted — flag off, no
@@ -2188,6 +2448,19 @@ export class NavigationEngine {
     this.alignment.reset();
     this.autoAlign.reset();
     this.lastAlignStatus = null;
+    this.motionBuffer.reset();
+    this.motionGate.reset();
+    this.lastMotionVerdict = {
+      state: null,
+      confidence: 0,
+      pothole: false,
+      stoppedConfidently: false,
+      raw: null,
+    };
+    this.lastMotionState = null;
+    this.motionInferences = 0;
+    this.potholesRejected = 0;
+    this.lastGoodAccel = null;
     this.planeAccelDcF = 0;
     this.planeAccelDcR = 0;
     this.snapStrength = 0;

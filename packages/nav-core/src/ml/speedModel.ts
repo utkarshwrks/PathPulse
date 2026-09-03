@@ -105,8 +105,16 @@ export class SpeedWindowBuffer {
   private lastT: number | null = null;
   private readonly periodMs = 1000 / ML_SAMPLE_RATE_HZ;
 
-  constructor() {
-    this.buf = new Float32Array(ML_WINDOW_SAMPLES * ML_CHANNELS);
+  /**
+   * @param windowSamples how many 10 Hz samples the model wants.
+   *
+   * A parameter rather than a constant because Phase 13's motion classifier
+   * reads one second where the speed regressor reads two. The decimation, the
+   * clock-jump handling and the channel ordering are identical and hard-won,
+   * and were not worth writing twice.
+   */
+  constructor(private readonly windowSamples: number = ML_WINDOW_SAMPLES) {
+    this.buf = new Float32Array(windowSamples * ML_CHANNELS);
   }
 
   /** True when the sample was taken (i.e. it landed on the 10 Hz grid). */
@@ -146,13 +154,13 @@ export class SpeedWindowBuffer {
       const x = v[i]!;
       this.buf[this.head * ML_CHANNELS + i] = Number.isFinite(x) ? x : 0;
     }
-    this.head = (this.head + 1) % ML_WINDOW_SAMPLES;
-    if (this.count < ML_WINDOW_SAMPLES) this.count++;
+    this.head = (this.head + 1) % this.windowSamples;
+    if (this.count < this.windowSamples) this.count++;
     return true;
   }
 
   get isFull(): boolean {
-    return this.count >= ML_WINDOW_SAMPLES;
+    return this.count >= this.windowSamples;
   }
 
   /**
@@ -162,12 +170,13 @@ export class SpeedWindowBuffer {
    */
   buildWindow(mean: readonly number[], std: readonly number[]): Float32Array | null {
     if (!this.isFull) return null;
-    const out = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES);
-    for (let t = 0; t < ML_WINDOW_SAMPLES; t++) {
-      const src = (this.head + t) % ML_WINDOW_SAMPLES;
+    const n = this.windowSamples;
+    const out = new Float32Array(ML_CHANNELS * n);
+    for (let t = 0; t < n; t++) {
+      const src = (this.head + t) % n;
       for (let c = 0; c < ML_CHANNELS; c++) {
         const s = std[c] ?? 1;
-        out[c * ML_WINDOW_SAMPLES + t] =
+        out[c * n + t] =
           (this.buf[src * ML_CHANNELS + c]! - (mean[c] ?? 0)) / (s === 0 ? 1 : s);
       }
     }
@@ -191,6 +200,15 @@ export class SpeedWindowBuffer {
  * predictions share half their input but their errors are still largely
  * independent — which is exactly the condition under which averaging helps.
  */
+/**
+ * The same ring buffer, named for what it actually is.
+ *
+ * `SpeedWindowBuffer` is kept as the export Phase 8 uses so nothing has to
+ * change; this alias is what Phase 13 imports, because a motion classifier
+ * holding something called a speed buffer reads as a mistake.
+ */
+export { SpeedWindowBuffer as ImuWindowBuffer };
+
 export class SpeedSmoother {
   private readonly ring: number[] = [];
 
