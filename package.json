@@ -14,6 +14,8 @@
     "dev:lan": "pnpm --filter @pathpulse/web dev:lan",
     "dev:https": "pnpm --filter @pathpulse/web dev:https",
     "build:android": "pnpm --filter @pathpulse/web build:android && node scripts/apk-path.mjs",
+    "android:doctor": "node scripts/android-toolchain.mjs",
+    "android:gradle": "node scripts/android-build.mjs",
     "publish:apk": "node scripts/publish-apk.mjs",
     "build:site": "pnpm build:android && node scripts/publish-apk.mjs && pnpm build",
     "cap:sync": "pnpm --filter @pathpulse/web cap:sync",

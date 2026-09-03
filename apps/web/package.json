@@ -12,7 +12,7 @@
     "dev:lan": "next dev -H 0.0.0.0",
     "dev:https": "next dev --experimental-https -H 0.0.0.0",
     "cap:sync": "next build && cap sync android && node ../../scripts/clean-dupes.mjs",
-    "build:android": "next build && cap sync android && node ../../scripts/clean-dupes.mjs && cd android && ./gradlew assembleDebug"
+    "build:android": "next build && cap sync android && node ../../scripts/clean-dupes.mjs && node ../../scripts/android-build.mjs assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.1",
