@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 16 completed — edge engine is now a real engine ✅
+**CURRENT PHASE:** Phase 17 — map-aided particle filter and turn relocalisation ✅
 **LAST UPDATED:** 2026-09-04
-**NEXT PHASE:** Phase 17 — map-aided particle filter and turn relocalisation
+**NEXT PHASE:** Phase 18 — real-drive validation, two-wheeler support, NavIC. Needs a car.
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -2303,6 +2303,61 @@ makes `docker run <image> --grade FOG` ask tini to execute a file called
 the program.
 
 **Tests:** 1415 passing (was 1399; +16).
+
+### Phase 17 — the particle filter, and what only it can do ✅ (off; helps in the city)
+
+NOT in the problem statement, which is the point. Every other estimator here is
+unimodal — the ESKF has a mean, snapping picks a road, the HMM picks a
+sequence. Right while the answer has one peak, and wrong five minutes into an
+outage: the vehicle went left or right three minutes ago and the truth is ONE
+of them, not a covariance stretched across both.
+
+500 particles, each a complete hypothesis (road, arc length, speed), splitting
+at junctions and dying when the evidence contradicts them. Typed arrays,
+stratified resampling, deterministic RNG.
+
+MEASURED, AND IT SPLITS BY ROUTE TYPE
+
+                        full      + particle
+    city                15.1%       13.3%      helps
+    highway              3.2%       12.8%      hurts
+    overall              9.2%       13.0%
+
+Exactly what the mechanism predicts: the filter carries both futures through a
+junction whose choice cannot yet be known, and a city is made of those. A
+motorway has few junctions, the chain is already at 3.2%, and 500 hypotheses
+about a road with no alternatives can only add variance. Ships OFF; the split
+is the finding, and the average of the two is the least informative number.
+
+THREE BUGS, EACH OF WHICH MADE IT NOT A PARTICLE FILTER
+
+1. Snapping each particle's heading to its new road at a junction. Looks right,
+   destroys everything: the heading is the GYRO'S, and it is the only evidence
+   that can punish a wrong branch. Overwritten, every particle agrees with
+   itself and the wrong branch is never killed — a vehicle turning right
+   through a fork ended up on the LEFT branch.
+2. Plain systematic resampling. With two equal branches and no evidence,
+   survival is luck and luck compounds: 50/50 drifted to 75/25 and then to one
+   mode having learned nothing. Now stratified BY HYPOTHESIS, so a branch with
+   40% of the belief keeps 40% of the particles.
+3. No position evidence at all — only heading and speed limit. A cloud that has
+   collectively taken a wrong turn agrees with ITSELF perfectly: unimodal, two
+   metre spread, one kilometre from the vehicle, 134% drift. Self-consistency
+   is not evidence. Dead reckoning is.
+
+Plus the divergence guard (a cloud outside the estimator's own covariance has
+diverged, not discovered something) and the rate-limited correction, which the
+invariant tests demanded the moment the guard was added — switching between
+adopting and rejecting the cloud steps the marker by the whole disagreement.
+That rate limit costs highway accuracy (7.4% -> 12.8%) and Golden Rule #6 is
+not negotiable, so it stays.
+
+Turn relocalisation declines far more often than it answers: three turns, a
+unique match, distances that agree. A wrong relocalisation is a confident
+teleport nothing would ever pull back.
+
+**Tests:** 1444 passing (was 1415; +29), including two new Golden Rule #6 cases
+for the two components that can move the marker independently of the estimator.
 
 ## NEXT PHASE
 

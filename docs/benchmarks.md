@@ -26,6 +26,7 @@ the outage window. Road graphs used: city, highway.
 | full_forwardbias | **13.3** | 14.5 | 21.6 | 26.8 | 85.2 | 71.2 | 41.8 | 152.4 |
 | eskf | **10.1** | 8.5 | 19.4 | 25.0 | 80.5 | 62.2 | 46.2 | 135.3 |
 | hmm | **10.5** | 7.0 | 25.1 | 30.5 | 73.4 | 59.8 | 39.5 | 126.2 |
+| particle | **13.0** | 10.1 | 22.7 | 28.1 | 90.6 | 85.5 | 22.6 | 180.3 |
 
 ![drift by configuration](./ablation.svg)
 
@@ -44,6 +45,7 @@ the outage window. Road graphs used: city, highway.
 | full_forwardbias | 7.59 | 50.0 | 18 | 100.0 | 0 |
 | eskf | 6.85 | 50.0 | 18 | 99.2 | 0 |
 | hmm | 6.29 | 50.0 | 18 | 99.7 | 0 |
+| particle | 6.96 | 50.0 | 18 | 99.7 | 0 |
 
 ## What each row is
 
@@ -58,6 +60,7 @@ the outage window. Road graphs used: city, highway.
 - **full_forwardbias** — NEGATIVE RESULT, kept deliberately. Full plus the GNSS-Doppler forward-bias estimator, which measurably WORSENS drift now that the high-pass exists. Reported rather than deleted.
 - **eskf** — Phase 11. The shipped configuration, with position taken from the 15-state error-state Kalman filter while dead reckoning instead of from open-loop integration. Everything else identical to `full`.
 - **hmm** — Phase 14. The shipped configuration, with the matched road chosen by a Newson-Krumm HMM over a sliding window instead of nearest-road-plus-continuity. Everything else identical to `full`.
+- **particle** — Phase 17. The shipped configuration plus the map-aided particle filter and turn relocalisation. Five hundred hypotheses over the road graph instead of one, so a junction taken during an outage does not have to be guessed at the moment it is reached.
 
 ## Reading this table
 

@@ -56,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1418) |
+| `pnpm test` | All workspace tests (1444) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
@@ -554,6 +554,75 @@ it backwards.
 
 **Before a demo, in the actual room: open Offline, tap Download, then go into
 aeroplane mode.** That is now a complete preparation rather than a partial one.
+
+### Phase 17 — the particle filter, and the thing no single hypothesis can do
+
+`particle/ParticleFilter.ts`, `particle/TurnRelocaliser.ts`. **This is not in
+the problem statement.**
+
+Every other estimator here carries **one** hypothesis. The ESKF has a mean and
+a covariance, road snapping picks a road, the HMM picks a sequence. That is
+right while the answer has one peak — and five minutes into an outage it does
+not. The vehicle went left or right at a junction three minutes ago, and the
+truth is *one of them*, not a wide covariance stretched across both.
+
+Five hundred particles do not have to choose. Each is a complete hypothesis —
+this road, this far along it, this fast — and at a junction they **split**,
+carrying both futures. Evidence then kills the wrong ones. When a turn sequence
+becomes unique in the road graph, one branch survives and the estimate
+collapses onto it: not smoothing, **recognition**, which is why a long outage
+can end *more* accurate than it began.
+
+**Measured, and it splits cleanly by route type:**
+
+| | shipped chain | + particle filter |
+| --- | --- | --- |
+| **City** (junctions everywhere) | 15.1 % | **13.3 %** |
+| **Highway** (few, grade-separated) | **3.2 %** | 12.8 % |
+| Overall | **9.2 %** | 13.0 % |
+
+Which is exactly what the mechanism predicts. The filter exists to carry both
+futures through a junction whose choice cannot yet be known, and a city is made
+of those. A motorway has few junctions, the shipped chain is already at 3.2 %,
+and five hundred hypotheses about a road with no alternatives is machinery that
+can only add variance. **It ships off**, and the split is the finding — the
+average of those two is the least informative number available.
+
+Three bugs, each of which made the filter something other than a particle
+filter:
+
+1. **Snapping each particle's heading to its new road at a junction.** Looks
+   right — the vehicle is on that road, so it points along it — and it destroys
+   the entire mechanism. The heading a particle carries is the *gyro's*, and
+   the reweight scores a particle by how well its road agrees with it. Overwrite
+   it and every particle agrees with itself by construction, the disagreement is
+   zero for both branches, and the wrong one is never punished. A vehicle
+   turning right through a fork ended up on the **left** branch.
+2. **Plain systematic resampling.** Two branches with equal weight and no
+   evidence: which particles survive is luck, and luck compounds. A 50/50 split
+   drifted to 75/25 and then to one mode with nothing having been learned —
+   sample impoverishment, and fatal for a filter whose whole job is to hold
+   hypotheses open. Resampling is now **stratified by hypothesis**: a branch
+   holding 40 % of the belief keeps 40 % of the particles.
+3. **No position evidence at all.** Only heading and the road's speed limit —
+   which constrains nothing, because a cloud that has collectively taken a wrong
+   turn agrees with *itself* perfectly. It reported unimodal, with a two-metre
+   spread, a kilometre from the vehicle: **134 % drift**. Self-consistency is
+   not evidence. Dead reckoning is, its uncertainty is known, and the filter is
+   now map-aided dead reckoning rather than an independent guess.
+
+And the guard that catches the fourth: a cloud further from the estimator than
+its own covariance allows has diverged, not discovered something, so it is
+re-seeded and the divergence is counted. The correction is applied as a
+**rate-limited vector** for the same reason road snapping's is — adopting the
+cloud on one sample and rejecting it on the next steps the marker by the whole
+disagreement, which the invariant tests caught immediately. That rate limit
+costs accuracy on the highway (7.4 % → 12.8 %) and Golden Rule #6 is not
+negotiable, so it stays.
+
+**Turn relocalisation** declines far more often than it answers, by design: it
+needs three turns, a unique match, and distances that agree. A wrong
+relocalisation is a confident teleport that nothing would ever pull back.
 
 ## Edge deployment
 

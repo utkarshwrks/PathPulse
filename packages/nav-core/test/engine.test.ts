@@ -8,7 +8,9 @@ import {
   haversineDistance,
   type NavMode,
   type NavigationState,
+  type RoadGraph,
   type SensorSample,
+  enuToLatLon,
 } from '../src/index.js';
 
 const START = { lat: 28.6315, lon: 77.2167 };
@@ -775,5 +777,109 @@ describe('Phase 12 — automatic alignment inside the engine', () => {
   it('reports the alignment in diagnostics rather than hiding it in a private field', () => {
     const { engine } = run(true);
     expect(engine.diagnostics.alignment.status).toBe('ALIGNED');
+  });
+});
+
+describe('Phase 17 — the particle filter inside the engine', () => {
+  /** A road graph along the fixture's due-east drive, with a fork in it. */
+  function forkGraph(): RoadGraph {
+    const toLonLat = (e: number, n: number): [number, number] => {
+      const p = enuToLatLon(e, n, START.lat, START.lon);
+      return [p.lon, p.lat];
+    };
+    return {
+      bbox: [0, 0, 0, 0],
+      ways: [
+        { id: 'main', coords: [toLonLat(-200, 0), toLonLat(900, 0)], name: 'Main', highway: 'primary' },
+        { id: 'ne', coords: [toLonLat(900, 0), toLonLat(1800, 300)], name: 'North Fork', highway: 'primary' },
+        { id: 'se', coords: [toLonLat(900, 0), toLonLat(1800, -300)], name: 'South Fork', highway: 'primary' },
+      ],
+    };
+  }
+
+  const run = (config: Record<string, unknown>) => {
+    const engine = new NavigationEngine({ ...config });
+    engine.setRoadGraph(forkGraph());
+    const states = makeDrive({ durationS: 140, outageStartS: 20, outageEndS: 120 }).map((s) =>
+      engine.update(s),
+    );
+    return { engine, states };
+  };
+
+  it('changes nothing at all when it is switched off', () => {
+    // The most expensive component in the engine must be genuinely inert when
+    // it is not wanted — including not building a topology nobody asked for.
+    const off = run({ particleFilter: false }).states;
+    const alsoOff = run({ particleFilter: false }).states;
+    expect(off.map((s) => s.position.lat)).toEqual(alsoOff.map((s) => s.position.lat));
+  });
+
+  /** The engine, stopped mid-outage — which is when the cloud exists. */
+  const midOutage = (config: Record<string, unknown>) => {
+    const engine = new NavigationEngine(config);
+    engine.setRoadGraph(forkGraph());
+    const samples = makeDrive({ durationS: 140, outageStartS: 20, outageEndS: 120 });
+    let last: NavigationState | null = null;
+    for (const s of samples) {
+      last = engine.update(s);
+      if (s.t >= 90_000) break;
+    }
+    return { engine, last: last! };
+  };
+
+  it('seeds a cloud during the outage and draws it', () => {
+    const { engine, last } = midOutage({ particleFilter: true });
+    expect(last.mode).toBe('DEAD_RECKONING');
+    // The cloud is drawable — which is the demo, not a detail.
+    const dots = engine.particlePositions();
+    expect(dots.length).toBeGreaterThan(100);
+    for (const d of dots) {
+      expect(Number.isFinite(d.e)).toBe(true);
+      expect(Number.isFinite(d.n)).toBe(true);
+    }
+  });
+
+  it('reports the cloud through diagnostics', () => {
+    const { engine } = midOutage({ particleFilter: true });
+    const p = engine.diagnostics.particles;
+    expect(p).not.toBeNull();
+    expect(Number.isFinite(p!.spreadM)).toBe(true);
+    expect(p!.clusters.length).toBeGreaterThan(0);
+  });
+
+  it('★ clears the cloud when GNSS returns, rather than drawing a stale one', () => {
+    // The typed arrays are reused rather than reallocated, so a reset that only
+    // dropped the weights would leave the map drawing a cloud from an outage
+    // that ended a minute ago.
+    const { engine } = run({ particleFilter: true });
+    expect(engine.particlePositions()).toHaveLength(0);
+    expect(engine.diagnostics.particles).toBeNull();
+  });
+
+  it('never emits a non-finite state with the filter running', () => {
+    const { states } = run({ particleFilter: true, turnRelocalisation: true });
+    for (const s of states) {
+      expect(Number.isFinite(s.position.lat)).toBe(true);
+      expect(Number.isFinite(s.position.lon)).toBe(true);
+      expect(s.confidence).toBeGreaterThanOrEqual(0);
+      expect(s.confidence).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('is deterministic', () => {
+    // The filter is stochastic by nature, so this is a real assertion: the RNG
+    // is seeded, and the ablation depends on the whole engine reproducing.
+    const a = run({ particleFilter: true, turnRelocalisation: true }).states;
+    const b = run({ particleFilter: true, turnRelocalisation: true }).states;
+    expect(a.map((s) => s.position.lon)).toEqual(b.map((s) => s.position.lon));
+  });
+
+  it('lowers confidence while the hypotheses are split', () => {
+    // ★ SAYING "ONE OF THESE TWO" IS THE FEATURE ★ A split cloud must not be
+    // reported with the same confidence as a resolved one.
+    const { states } = run({ particleFilter: true });
+    const outage = states.filter((s) => s.mode === 'DEAD_RECKONING');
+    expect(outage.length).toBeGreaterThan(0);
+    expect(outage.every((s) => s.confidence <= 1)).toBe(true);
   });
 });

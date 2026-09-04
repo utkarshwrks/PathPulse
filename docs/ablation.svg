@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="542" viewBox="0 0 900 542" font-family="ui-sans-serif, system-ui, sans-serif">
-  <rect width="900" height="542" fill="#0a0e14" />
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="582" viewBox="0 0 900 582" font-family="ui-sans-serif, system-ui, sans-serif">
+  <rect width="900" height="582" fill="#0a0e14" />
   <text x="24" y="30" font-size="16" fill="#f1f5f9" font-weight="600">PathPulse — mean drift by constraint set</text>
   <text x="24" y="48" font-size="12" fill="#64748b">12 runs per configuration · lower is better · dashed line is the &lt;10% target</text>
   <text x="198" y="76.4" text-anchor="end" font-size="13" fill="#cbd5e1">naive</text>
@@ -35,6 +35,9 @@
   <text x="198" y="476.4" text-anchor="end" font-size="13" fill="#cbd5e1">hmm</text>
   <rect x="210" y="456" width="106.1" height="30" rx="4" fill="#eab308" />
   <text x="326.1" y="476.4" font-size="13" fill="#e2e8f0">10.5%</text>
-  <line x1="310.8" y1="48" x2="310.8" y2="508" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 4" />
-  <text x="316.8" y="522" font-size="11" fill="#38bdf8">10% target</text>
+  <text x="198" y="516.4" text-anchor="end" font-size="13" fill="#cbd5e1">particle</text>
+  <rect x="210" y="496" width="131.5" height="30" rx="4" fill="#eab308" />
+  <text x="351.5" y="516.4" font-size="13" fill="#e2e8f0">13.0%</text>
+  <line x1="310.8" y1="48" x2="310.8" y2="548" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 4" />
+  <text x="316.8" y="562" font-size="11" fill="#38bdf8">10% target</text>
 </svg>

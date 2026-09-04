@@ -228,6 +228,25 @@
       "roadSnapPct": 99.6845346254795,
       "positionResets": 0,
       "discardedSamples": 0
+    },
+    {
+      "config": "particle",
+      "description": "Phase 17. The shipped configuration plus the map-aided particle filter and turn relocalisation. Five hundred hypotheses over the road graph instead of one, so a junction taken during an outage does not have to be guessed at the moment it is reached.",
+      "runs": 12,
+      "meanDriftPct": 13.037874108667515,
+      "medianDriftPct": 10.111498297343728,
+      "p90DriftPct": 22.662279163925003,
+      "maxDriftPct": 28.086180176470165,
+      "meanRmseM": 90.60733189475441,
+      "meanAlongM": 85.54421856573178,
+      "meanCrossM": 22.645162792489526,
+      "meanCep95M": 180.28823485816827,
+      "meanRecoveryS": 6.964,
+      "meanUpdateHz": 50,
+      "totalZupt": 18,
+      "roadSnapPct": 99.68958207147183,
+      "positionResets": 0,
+      "discardedSamples": 0
     }
   ]
 }

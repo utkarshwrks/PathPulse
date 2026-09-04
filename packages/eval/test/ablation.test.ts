@@ -97,8 +97,11 @@ describe('ablation over the committed logs', () => {
     // shipped steps — they are alternatives that are off by default, each with
     // its own assertion below: forwardBias (a documented negative result) and
     // eskf (Phase 11's filter, which wins on the tail and loses on the mean)
-    // and hmm (Phase 14's matcher, whose value these routes cannot show).
-    const notShipped = new Set(['full_forwardbias', 'eskf', 'hmm']);
+    // hmm (Phase 14's matcher, whose value these routes cannot show) and
+    // particle (Phase 17's filter, which helps in the city and hurts on the
+    // highway — asserted separately, because the average of those two is the
+    // least informative number available).
+    const notShipped = new Set(['full_forwardbias', 'eskf', 'hmm', 'particle']);
     const shipped = ABLATION_ORDER.filter((n) => !notShipped.has(n));
     for (let i = 1; i < shipped.length; i++) {
       const prev = get(shipped[i - 1]!);
@@ -151,6 +154,34 @@ describe('ablation over the committed logs', () => {
     expect(hmm.mean).toBeGreaterThan(get('full').mean);
     // But it must stay in the same league. A matcher that diverges is a bug.
     expect(hmm.mean).toBeLessThan(get('full').mean * 1.5);
+  });
+
+  it('★ records where the particle filter helps and where it does not', () => {
+    // ★ PHASE 17, AND THE MOST INTERESTING RESULT IN THE TABLE ★
+    //
+    // Averaged over everything it looks like a small regression: 10.4 % mean
+    // against 9.2 %. Split by route type it is not one number at all:
+    //
+    //     city      15.1 % -> 13.3 %    it helps
+    //     highway    3.2 % ->  7.4 %    it hurts
+    //
+    // Which is exactly what the mechanism predicts. The filter exists to carry
+    // both futures through a junction whose choice cannot yet be known, and a
+    // city is made of those. A motorway has few junctions, most of them
+    // grade-separated, the shipped chain is already at 3.2 %, and five hundred
+    // hypotheses about a road with no alternatives is machinery that can only
+    // add variance.
+    //
+    // The overall mean is asserted only to keep the filter in the same league.
+    // The per-route numbers are the finding, and they are in docs/benchmarks.md.
+    const particle = get('particle');
+    const full = get('full');
+    expect(particle.mean).toBeLessThan(full.mean * 1.5);
+    // And it must not be the catastrophe it was before the divergence guard:
+    // an unguarded cloud that had collectively taken a wrong slip road
+    // reported itself unimodal, with a two-metre spread, a kilometre from the
+    // vehicle. 134 % drift. Self-consistency is not evidence.
+    expect(particle.max).toBeLessThan(60);
   });
 
   it('does not regress past the figure published in docs/benchmarks.md', () => {

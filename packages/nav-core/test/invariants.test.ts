@@ -262,6 +262,28 @@ describe('Golden Rule #6 — the dot never teleports', () => {
     expect(maxUnexplainedJumpM(samples, {}, roadNetwork())).toBeLessThan(5);
   });
 
+  it('★ holds with the particle filter running, which CAN move the marker', () => {
+    // Phase 17's filter is the only component besides the recovery blender
+    // that can move the shown position independently of the estimator — a
+    // cloud collapsing onto a different road is exactly the shape of thing
+    // that jumps if nothing checks. Golden Rule #6 has no exception for it.
+    const samples = drive({ durationS: 140, outageStartS: 20, outageEndS: 120 });
+    expect(
+      maxUnexplainedJumpM(samples, { particleFilter: true }, roadNetwork()),
+    ).toBeLessThan(5);
+  });
+
+  it('holds with turn relocalisation armed, which can move it FURTHEST', () => {
+    // Relocalisation is the one mechanism that may put the estimate somewhere
+    // it had no continuous path to. When it fires it must still arrive
+    // smoothly — and when it does not fire, which is most of the time, nothing
+    // should change at all.
+    const samples = drive({ durationS: 180, outageStartS: 15, outageEndS: 160 });
+    expect(
+      maxUnexplainedJumpM(samples, { particleFilter: true, turnRelocalisation: true }, roadNetwork()),
+    ).toBeLessThan(5);
+  });
+
   it('holds across repeated outage cycles', () => {
     // State leaking between cycles would show up here as a jump on the second
     // or third recovery, not the first.

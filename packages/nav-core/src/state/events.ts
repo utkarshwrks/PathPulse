@@ -43,6 +43,13 @@ export type NavEventType =
    * eight-class model, and confusing the two in a log would make both useless.
    */
   | 'MOTION_STATE'
+  /**
+   * Phase 17: a turn sequence was recognised in the road graph and the
+   * particle cloud collapsed onto it. The one event in this engine that
+   * describes the estimate moving somewhere it had no continuous path to, so
+   * it carries the fit and the margin over the runner-up.
+   */
+  | 'RELOCALISED'
   | 'WARNING';
 
 export interface NavEvent {

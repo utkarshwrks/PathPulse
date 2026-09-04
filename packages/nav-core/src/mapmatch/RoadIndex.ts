@@ -48,6 +48,16 @@ export class RoadIndex {
   private readonly config: RoadIndexConfig;
   private readonly cells = new Map<string, RoadSegment[]>();
   private readonly waysById = new Map<string, RoadWay>();
+  /**
+   * Every segment of a way, in arc order.
+   *
+   * The cell index answers "what is near this point", which is what snapping
+   * needs. Phase 17's particles ask the opposite question — "where is 340
+   * metres along way w123?" — because a particle IS an arc length, and
+   * converting one to a position by searching cells would be a spatial query
+   * for something whose answer is already known.
+   */
+  private readonly segmentsByWay = new Map<string, RoadSegment[]>();
   private segmentCount = 0;
 
   /**
@@ -74,6 +84,50 @@ export class RoadIndex {
 
   getWay(id: string): RoadWay | undefined {
     return this.waysById.get(id);
+  }
+
+  /** Every segment of a way, in arc order. Empty if the way is unknown. */
+  segmentsOfWay(id: string): readonly RoadSegment[] {
+    return this.segmentsByWay.get(id) ?? [];
+  }
+
+  /** Total length of a way, metres. */
+  wayLengthM(id: string): number {
+    const segments = this.segmentsByWay.get(id);
+    if (!segments || segments.length === 0) return 0;
+    const last = segments[segments.length - 1]!;
+    return last.arcStartM + last.lengthM;
+  }
+
+  /**
+   * Where `arcLengthM` along a way is, and which way the road points there.
+   *
+   * ★ CLAMPED, NOT EXTRAPOLATED ★ A particle that has run past the end of its
+   * way is at the end of it, not on an imaginary continuation. The filter's
+   * job is then to move it onto a connected way, and it can only notice it has
+   * to if this refuses to invent road that is not there.
+   */
+  positionAt(id: string, arcLengthM: number): { e: number; n: number; bearingDeg: number } | null {
+    const segments = this.segmentsByWay.get(id);
+    if (!segments || segments.length === 0) return null;
+
+    const arc = Number.isFinite(arcLengthM) ? arcLengthM : 0;
+    // Binary search: a long way is thousands of segments, and this runs once
+    // per particle per sample.
+    let lo = 0;
+    let hi = segments.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (segments[mid]!.arcStartM <= arc) lo = mid;
+      else hi = mid - 1;
+    }
+    const seg = segments[lo]!;
+    const t = seg.lengthM > 0 ? Math.max(0, Math.min(1, (arc - seg.arcStartM) / seg.lengthM)) : 0;
+    return {
+      e: seg.e1 + (seg.e2 - seg.e1) * t,
+      n: seg.n1 + (seg.n2 - seg.n1) * t,
+      bearingDeg: seg.bearingDeg,
+    };
   }
 
   private addWay(way: RoadWay): void {
@@ -110,6 +164,9 @@ export class RoadIndex {
             bearingDeg: normaliseDeg((Math.atan2(dx, dy) * 180) / Math.PI),
           };
           this.insert(seg);
+          const list = this.segmentsByWay.get(way.id);
+          if (list) list.push(seg);
+          else this.segmentsByWay.set(way.id, [seg]);
           this.segmentCount++;
           arc += len;
         }

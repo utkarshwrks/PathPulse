@@ -151,6 +151,22 @@ export class RoadTopology {
     return this.nextNode;
   }
 
+  /**
+   * Edges leaving a junction. Phase 17's particles branch on this.
+   *
+   * Returned rather than kept private because a particle at a junction has to
+   * CHOOSE, and choosing is the filter's job — the topology's job is to say
+   * what the choices are.
+   */
+  edgesFrom(node: number): readonly TopologyEdge[] {
+    return this.out.get(node) ?? [];
+  }
+
+  /** Every edge of a way, in arc order. */
+  edgesOfWay(wayId: string): readonly TopologyEdge[] {
+    return this.wayEdges.get(wayId) ?? [];
+  }
+
   get edgeCount(): number {
     let n = 0;
     for (const edges of this.wayEdges.values()) n += edges.length;

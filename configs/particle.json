@@ -1,0 +1,11 @@
+{
+  "name": "particle",
+  "description": "Phase 17. The shipped configuration plus the map-aided particle filter and turn relocalisation. Five hundred hypotheses over the road graph instead of one, so a junction taken during an outage does not have to be guessed at the moment it is reached.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": true,
+    "forwardBias": false, "roadSnap": true,
+    "particleFilter": true, "turnRelocalisation": true
+  }
+}
