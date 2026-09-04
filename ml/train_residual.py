@@ -245,7 +245,15 @@ def main() -> None:
     }
     (RESULTS / "residual_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
     torch.save(
-        {"state_dict": model.state_dict(), "mean": meta["mean"], "std": meta["std"]},
+        {
+            "state_dict": model.state_dict(),
+            # Plain lists, not numpy arrays. torch.load defaults to
+            # weights_only=True since 2.6 and refuses to unpickle a numpy
+            # reconstruct — so a checkpoint carrying arrays cannot be reloaded
+            # by the exporter that has to read it.
+            "mean": [float(v) for v in meta["mean"]],
+            "std": [float(v) for v in meta["std"]],
+        },
         RESULTS / "residual_model.pt",
     )
     print(f"\n  wrote {RESULTS / 'residual_metrics.json'}")

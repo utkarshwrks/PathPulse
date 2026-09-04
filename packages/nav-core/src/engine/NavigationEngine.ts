@@ -43,6 +43,13 @@ import {
   type SpeedPredictor,
 } from '../ml/speedModel.js';
 import {
+  GnssQualityTracker,
+  NullGnssQualityClassifier,
+  type GnssQuality,
+  type GnssQualityClassifier,
+  type GnssQualityPrediction,
+} from '../ml/gnssQualityModel.js';
+import {
   DEFAULT_RESIDUAL_CONFIG,
   NullResidualCorrector,
   buildDriftFeatures,
@@ -246,6 +253,22 @@ export interface ConstraintFlags {
    */
   useMlResidual: boolean;
   /**
+   * ★ PHASE 13, MODEL 4 ★ Classify each fix as GOOD / MULTIPATH / SPOOFED /
+   * LOST and let it lower confidence.
+   *
+   * ON by default and inert without a model, like the other classifiers — but
+   * with a hard limit that the others do not have: it is ADVISORY. It may
+   * reduce the confidence the UI shows and it may NOT gate a fix, adjust the
+   * position, or change what the estimator integrates.
+   *
+   * `detect/spoofing.ts` carries the long argument for that rule — a detector
+   * which rejects the fix it is suspicious of turns a false positive into a
+   * navigation failure — and it applies here with more force, not less. Three
+   * readable rules have fewer ways to be confidently wrong than a network
+   * trained on modelled corruptions.
+   */
+  useMlGnssQuality: boolean;
+  /**
    * ★ PHASE 14 ★ Choose the matched road with a Newson-Krumm HMM over a
    * sliding window instead of nearest-road-plus-continuity.
    *
@@ -389,6 +412,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   autoAlign: true,
   useMlMotion: true,
   useMlResidual: false,
+  useMlGnssQuality: true,
   hmmMatch: false,
   hmmConfig: {},
   residualConfig: DEFAULT_RESIDUAL_CONFIG,
@@ -570,10 +594,15 @@ export class NavigationEngine {
     raw: null,
   };
   private lastMotionState: MotionState | null = null;
+  private lastReportedQuality: GnssQuality | null = null;
   private motionInferences = 0;
   private potholesRejected = 0;
   /** Last conditioned acceleration, held across a rejected pothole sample. */
   private lastGoodAccel: { forward: number; lateral: number } | null = null;
+  /** Phase 13, Model 4. Inert until a classifier is supplied. */
+  private gnssQualityClassifier: GnssQualityClassifier = new NullGnssQualityClassifier();
+  private readonly gnssQualityTracker = new GnssQualityTracker();
+  private lastGnssQuality: GnssQualityPrediction | null = null;
   /** Phase 13, Model 3. Inert until a corrector is supplied. */
   private residualCorrector: ResidualCorrector = new NullResidualCorrector();
   private lastResidual: DriftResidual | null = null;
@@ -713,6 +742,9 @@ export class NavigationEngine {
     motionInferences: number;
     /** IMU samples discarded as pothole impulses this session. */
     potholesRejected: number;
+    /** Phase 13, Model 4: what the classifier thinks of the last fix. */
+    gnssQuality: GnssQuality | null;
+    gnssQualityConfidence: number;
     /** Barometric altitude relative to a slowly-tracked reference, m. */
     baroRelativeM: number | null;
     /** Climb or descent over the last ~20 s, m. What detects a flyover. */
@@ -725,6 +757,8 @@ export class NavigationEngine {
       motionReady: this.motionClassifier.isReady(),
       motionInferences: this.motionInferences,
       potholesRejected: this.potholesRejected,
+      gnssQuality: this.lastGnssQuality?.quality ?? null,
+      gnssQualityConfidence: this.lastGnssQuality?.confidence ?? 0,
       baroRelativeM: this.lastAltitude?.relativeM ?? null,
       baroChangeM: this.lastAltitude?.changeM ?? null,
       zuptTriggers: this.zupt.triggerCount,
@@ -868,6 +902,22 @@ export class NavigationEngine {
   /** What the residual model last predicted, for the debug panel. */
   get residualPrediction(): DriftResidual | null {
     return this.lastResidual;
+  }
+
+  /**
+   * Supply Phase 13's GNSS quality classifier.
+   *
+   * Fourth model, fourth loader, failing independently of the other three.
+   */
+  setGnssQualityClassifier(classifier: GnssQualityClassifier | null): void {
+    this.gnssQualityClassifier = classifier ?? new NullGnssQualityClassifier();
+    this.gnssQualityTracker.reset();
+    this.lastGnssQuality = null;
+  }
+
+  /** What Model 4 thinks of the last fix. Advisory — nothing gates on it. */
+  get gnssQuality(): GnssQualityPrediction | null {
+    return this.lastGnssQuality;
   }
 
   /** The classifier's current verdict, for the debug panel. */
@@ -1700,6 +1750,50 @@ export class NavigationEngine {
     //     inertial state and reports disagreement, and NOTHING downstream
     //     consults it. Detection that gated the fix would turn a false
     //     positive into a navigation failure — see detect/spoofing.ts.
+    // ★ PHASE 13, MODEL 4 — ALONGSIDE THE RULES, NOT INSTEAD OF THEM ★
+    //
+    // Phase 9D's three rules stay enabled and keep their veto-free status. What
+    // this adds is the ability to combine weak evidence: multipath in an urban
+    // canyon trips no single rule — the satellite count is a little low, the
+    // C/N0 a little poor, the fix jitters a little more, the IMU disagrees a
+    // little — and four "a littles" under four thresholds are together
+    // unmistakable.
+    if (this.config.useMlGnssQuality && this.gnssQualityClassifier.isReady() && sample.gnss) {
+      const features = this.gnssQualityTracker.push({
+        t: sample.t,
+        lat: sample.gnss.lat,
+        lon: sample.gnss.lon,
+        accuracyM: sample.gnss.accuracyM,
+        ...(sample.gnss.satCount !== undefined ? { satCount: sample.gnss.satCount } : {}),
+        ...(sample.gnss.meanCn0 !== undefined ? { meanCn0: sample.gnss.meanCn0 } : {}),
+        drSpeedMps: this.dr.current.speedMps,
+      });
+      if (features) {
+        try {
+          this.lastGnssQuality = this.gnssQualityClassifier.predict(features);
+        } catch (err) {
+          this.log.push({
+            t: sample.t,
+            type: 'ML_ERROR',
+            message: `GNSS quality model threw: ${(err as Error).message}`,
+          });
+          this.gnssQualityClassifier = new NullGnssQualityClassifier();
+          this.lastGnssQuality = null;
+        }
+        if (this.lastGnssQuality && this.lastGnssQuality.quality !== this.lastReportedQuality) {
+          this.lastReportedQuality = this.lastGnssQuality.quality;
+          this.log.push({
+            t: sample.t,
+            type: 'GNSS_ANOMALY',
+            message: `fix quality: ${this.lastGnssQuality.quality} (${(
+              this.lastGnssQuality.confidence * 100
+            ).toFixed(0)}%) — advisory, the fix is not gated`,
+            data: { kind: this.lastGnssQuality.quality },
+          });
+        }
+      }
+    }
+
     const anomaly = this.spoofing.update({
       t: sample.t,
       ...(sample.gnss ? { gnss: sample.gnss } : {}),
@@ -2576,8 +2670,24 @@ export class NavigationEngine {
     const alignmentPenalty =
       this.config.autoAlign && this.autoAlign.state.status === 'REALIGNING' ? 0.5 : 1;
 
-    if (mode === 'GNSS') return 1;
-    if (mode === 'GNSS_DEGRADED') return 0.7;
+    // ★ MODEL 4'S ONLY EFFECT ON ANYTHING ★ It lowers the number on the
+    // confidence bar and nothing else — not the position, not the mode, not
+    // what the estimator integrates. A learned detector with a veto is a
+    // learned detector that can cause a navigation failure from a false
+    // positive, which is exactly what detect/spoofing.ts refuses to do with
+    // three rules that are far easier to audit.
+    const q = this.config.useMlGnssQuality ? this.lastGnssQuality : null;
+    const qualityPenalty =
+      q && q.confidence >= 0.7
+        ? q.quality === 'GOOD'
+          ? 1
+          : q.quality === 'MULTIPATH'
+            ? 0.75
+            : 0.5
+        : 1;
+
+    if (mode === 'GNSS') return 1 * qualityPenalty;
+    if (mode === 'GNSS_DEGRADED') return 0.7 * qualityPenalty;
     if (mode === 'INITIALIZING') return 0;
     const drElapsedMs =
       this.drStartedAtMs === null ? 0 : Math.max(0, tMs - this.drStartedAtMs);
@@ -2718,6 +2828,9 @@ export class NavigationEngine {
     this.potholesRejected = 0;
     this.lastGoodAccel = null;
     this.lastResidual = null;
+    this.gnssQualityTracker.reset();
+    this.lastGnssQuality = null;
+    this.lastReportedQuality = null;
     this.outageStart = { distanceM: 0, turns: 0, zupts: 0 };
     this.turnCount = 0;
     this.planeAccelDcF = 0;

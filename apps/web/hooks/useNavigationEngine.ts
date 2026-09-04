@@ -19,6 +19,7 @@ import {
 import { loadRoadGraphFor, type RoadGraphEntry } from '@/lib/roadGraph';
 import { EMPTY_MODEL_INFO, WebSpeedPredictor, type ModelInfo } from '@/lib/ml/speedModel';
 import { WebMotionClassifier } from '@/lib/ml/motionModel';
+import { WebGnssQualityClassifier } from '@/lib/ml/gnssQualityModel';
 
 /**
  * Target UI emit period. The engine itself consumes every sample; this only
@@ -90,6 +91,9 @@ export interface EngineDiagnostics {
   alignment: AutoAlignState;
   /** Phase 13 — the motion classifier's accepted state and its evidence. */
   motionState: MotionState | null;
+  /** Phase 13, Model 4 — what the classifier thinks of the last fix. */
+  gnssQuality: string | null;
+  gnssQualityConfidence: number;
   motionConfidence: number;
   motionReady: boolean;
   motionInferences: number;
@@ -132,6 +136,8 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   modeReason: null,
   speedSource: 'NONE',
   motionState: null,
+  gnssQuality: null,
+  gnssQualityConfidence: 0,
   motionConfidence: 0,
   motionReady: false,
   motionInferences: 0,
@@ -183,6 +189,10 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // Phase 13, Model 4. ON, and inert until the model loads. ADVISORY ONLY: it
+  // lowers the confidence bar and may never gate a fix — see the long argument
+  // in detect/spoofing.ts, which applies to a learned detector with more force.
+  useMlGnssQuality: true,
   // Phase 14. OFF: measured 10.5% mean drift against the greedy matcher's
   // 9.2%, and a flat parameter sweep saying these routes contain no geometry
   // its transition term can discriminate. The capability is real and is
@@ -330,6 +340,22 @@ export function useNavigationEngine(): NavEngineOutput {
       engineRef.current?.setMotionClassifier(null);
       classifier.dispose();
       motionRef.current = null;
+    };
+  }, []);
+
+  // ── Phase 13, Model 4: the GNSS quality classifier ──────────────────────
+  // Fourth model, fourth effect, failing independently of the other three.
+  useEffect(() => {
+    let cancelled = false;
+    const classifier = new WebGnssQualityClassifier();
+    void classifier.load().then((ok) => {
+      if (cancelled || !ok) return;
+      engineRef.current?.setGnssQualityClassifier(classifier);
+    });
+    return () => {
+      cancelled = true;
+      engineRef.current?.setGnssQualityClassifier(null);
+      classifier.dispose();
     };
   }, []);
 

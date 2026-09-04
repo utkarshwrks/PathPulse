@@ -330,6 +330,15 @@ function SensorsTab({
         />
         <Row k="INFERENCES" v={String(diagnostics.motionInferences)} />
         <Row
+          k="FIX QUALITY"
+          v={
+            diagnostics.gnssQuality
+              ? `${diagnostics.gnssQuality} (${(diagnostics.gnssQualityConfidence * 100).toFixed(0)}%)`
+              : '—'
+          }
+          warn={diagnostics.gnssQuality !== null && diagnostics.gnssQuality !== 'GOOD'}
+        />
+        <Row
           k="POTHOLES REJECTED"
           v={String(diagnostics.potholesRejected)}
           accent={diagnostics.potholesRejected > 0}
@@ -487,6 +496,11 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
   { key: 'lowPass', label: 'Low-pass filter', hint: 'Removes engine and road vibration before integration.' },
   { key: 'medianFilter', label: 'Median filter', hint: 'Rejects pothole spikes.' },
   { key: 'adaptiveTimeout', label: 'Adaptive GNSS timeout', hint: 'Track the receiver’s real fix rate instead of assuming 1 Hz.' },
+  {
+    key: 'useMlGnssQuality',
+    label: 'AI fix-quality classifier',
+    hint: 'Classifies each fix GOOD / MULTIPATH / SPOOFED / LOST from eleven features the receiver already reports. ADVISORY: it lowers the confidence bar and can never reject a fix — a detector that gates the fix it distrusts turns a false positive into a navigation failure.',
+  },
   {
     key: 'hmmMatch',
     label: 'HMM map matching (off — see benchmarks)',

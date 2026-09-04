@@ -464,3 +464,71 @@ a misleading row.
 Re-run this check after any change to the simulator's IMU synthesis. If the
 numbers ever come good, the simulator has become realistic enough to carry an
 ML row, and the ablation should gain one.
+
+---
+
+# Phase 13, Model 4 — the GNSS quality classifier
+
+The fourth and last model the problem statement asks for. Eleven features the
+receiver already reports — satellite count and its drop from baseline, mean
+C/N0 and its spread, accuracy and its ratio to baseline, jump distance, implied
+speed, IMU disagreement, fix interval, HDOP — in; **GOOD / MULTIPATH / SPOOFED
+/ LOST** out. 988 parameters, 6.1 KB.
+
+```bash
+pnpm eval:gnss-dataset
+python ml/train_gnss_quality.py
+python ml/export_gnss_quality.py
+```
+
+## What it adds over the three rules it sits beside
+
+Phase 9D's `SpoofingDetector` is three hand-written rules, each a statement
+about physics a judge can read and check. It stays, enabled.
+
+What three thresholds cannot do is **combine weak evidence**. Multipath in an
+urban canyon trips none of them: the satellite count is a little low, the C/N0 a
+little poor, the fix jitters a little more, the IMU disagrees a little. Four
+"a littles", each under its threshold, together unmistakable.
+
+## ★ It scores ~0.99 macro-F1, and that number means almost nothing ★
+
+Log-disjoint, both directions: 0.995 and 0.988 against a 0.250 chance baseline.
+
+**That is not evidence the model works on real GNSS.** It is evidence that four
+*modelled* failure modes are separable — which they are, by construction,
+because the same repository contains the function that generates them. The
+classifier has learned that function, not the physics of an urban canyon.
+
+Severity is randomised so mild cases overlap, and it barely moves the score:
+even a mild multipath raises HDOP and C/N0 spread while a mild spoof lowers
+both, so the classes stay in distinct regions however weak the corruption. That
+is a property of the generator, and no amount of tuning it turns a synthetic
+benchmark into a statement about real multipath.
+
+**What it does establish:** the feature contract, the pipeline, the export and
+the engine integration are correct and ready for real labelled data.
+
+## The bug a unit test caught, which is the interesting part
+
+The first dataset gave each label its own pass over the whole log. The
+tracker's baselines then adapted to the corruption — a log that is `LOST`
+throughout has a baseline satellite count of one, so `satDropFromBaseline` is
+*zero* and `accuracyRatio` is *one*. The model learned that LOST means
+"everything is terrible **and has always been terrible**".
+
+At inference the baselines carry a healthy history and then a sudden collapse,
+which is the opposite feature vector. A test that fed it an obviously dead
+receiver got back **SPOOFED**.
+
+Every pass now drives good for a randomised first stretch and degrades for the
+rest, and only the degraded stretch carries the label. The baselines see what
+they will see in the field: a transition.
+
+## What it is allowed to do
+
+**Advisory.** It lowers the confidence bar and touches nothing else — not the
+position, not the mode, not what the estimator integrates. `detect/spoofing.ts`
+carries the argument: a detector that rejects the fix it is suspicious of
+converts a false positive into a navigation failure. That applies to a learned
+detector with *more* force, not less. Asserted by a test, not trusted.

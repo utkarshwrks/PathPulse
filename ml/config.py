@@ -161,3 +161,12 @@ MOTION_POTHOLE_MPS2 = 3.5        # impulse above the local mean of |a|
 # dropped, loudly. It costs most of the dataset and buys labels that mean what
 # they say.
 MOTION_RIGID_MIN_CORR = 0.5
+
+
+# ── Phase 13, Model 4: the GNSS quality classifier ───────────────────────────
+#
+# ★ THIS ORDER IS A CONTRACT ★
+# It must match GNSS_QUALITY_CLASSES in
+# packages/nav-core/src/ml/gnssQualityModel.ts. A reordered list still runs,
+# still looks confident, and calls a good fix spoofed.
+GNSS_QUALITY_CLASSES = ["GOOD", "MULTIPATH", "SPOOFED", "LOST"]

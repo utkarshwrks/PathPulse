@@ -11,6 +11,7 @@
     "alignment": "tsx src/alignment.ts",
     "offroad": "tsx src/offroad.ts",
     "drift-dataset": "tsx src/drift-dataset.ts",
+    "gnss-dataset": "tsx src/gnss-quality-dataset.ts",
     "record": "tsx src/record.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

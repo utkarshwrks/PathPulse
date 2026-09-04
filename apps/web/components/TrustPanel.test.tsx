@@ -23,6 +23,8 @@ afterEach(cleanup);
 
 const DIAGNOSTICS: EngineDiagnostics = {
   motionState: 'BRAKING',
+  gnssQuality: 'GOOD',
+  gnssQualityConfidence: 0.93,
   motionConfidence: 0.82,
   motionReady: true,
   motionInferences: 120,
