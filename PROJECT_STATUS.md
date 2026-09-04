@@ -1,8 +1,8 @@
 # PROJECT STATUS
 
-**CURRENT PHASE:** Phase 17 — map-aided particle filter and turn relocalisation ✅
+**CURRENT PHASE:** Phase 18B/18A — two-wheeler support and the field protocol ✅
 **LAST UPDATED:** 2026-09-04
-**NEXT PHASE:** Phase 18 — real-drive validation, two-wheeler support, NavIC. Needs a car.
+**NEXT PHASE:** Drive the routes in docs/field-protocol.md. Everything buildable is built.
 
 > Phases 0-9 are complete; Phase 10 is under way. The ISRO screening artefact — a position plot
 > inferenced from IO-VNBD — now exists at `ml/results/position_plot.png`.
@@ -2358,6 +2358,63 @@ teleport nothing would ever pull back.
 
 **Tests:** 1444 passing (was 1415; +29), including two new Golden Rule #6 cases
 for the two components that can move the marker independently of the estimator.
+
+### Phase 18B — two-wheelers, which lean ✅  (+ 18A protocol, 18C NavIC)
+
+The PS names them: "millions of two-wheelers (motorcycles/scooters)". Every
+constraint in this engine was written for a car.
+
+★ THE THING THAT BREAKS IS THE ATTITUDE REFERENCE, NOT NHC ★
+
+AttitudeEstimator finds "down" by tracking the measured specific force. In a
+steady turn a motorcycle leans until the resultant of gravity and centripetal
+acceleration runs straight down its OWN axis — that is what leaning is, and it
+is why a rider feels pressed into the seat rather than sideways. So a phone on
+a leaning bike reads a force that NEVER MOVES in its own frame: the engine
+takes the leaned axis for down, and the yaw rate it recovers is the true rate
+times cos(lean).
+
+The bike turns MORE than the engine believes. A 25 degree lean is cos 25 =
+0.906: eight degrees lost on a 90 degree corner, and eight degrees over a
+kilometre of tunnel is 140 m of cross-track error from ONE roundabout.
+
+The fix needs no extra sensor. tan(lean) = v*w_true/g and w_measured =
+w_true*cos(lean); substituting eliminates the unknown:
+
+    sin(lean) = v * w_measured / g        w_true = w_measured / cos(lean)
+
+★ TELLING A BIKE FROM A CAR — THE OBVIOUS METHOD FAILS ★
+
+"A bike leans, so look for roll" does not work: the specific force tilts by the
+SAME angle in both. A car at 4.5 m/s^2 lateral has a resultant 25 degrees off
+vertical, exactly as a bike leaning 25 degrees does. Same trajectory, same
+forces. The tilt tells you about the corner, not the vehicle.
+
+What differs is whether the SENSOR follows it. A car stays level so the force
+swings sideways in the phone's frame; a bike rolls until the force runs down
+its own axis so it does not move at all, only gets heavier. Compare measured
+tilt against expected tilt: car ~1, bike ~0.
+
+★ AND A CLAIM MY OWN TEST DISPROVED ★
+
+The comment in lean.ts claimed the compensation was safe to leave on for a car
+— with no lean, cos(0) is 1. Wrong, and instructively so: the function cannot
+TELL whether the vehicle leaned, it INFERS a lean from speed and yaw rate, and
+a car cornering briskly presents identical inputs. At 15 m/s and 0.35 rad/s it
+invents a 32 degree lean and inflates the turn by 18%. Hence the gate, and
+hence the detector's default: a wrong bike verdict inflates every corner for
+the rest of the drive; a wrong car verdict merely costs the compensation.
+
+18A — docs/field-protocol.md: five routes, three runs, two mount positions,
+both kinds of ground truth (software outage vs real tunnel) and why they will
+disagree. Written to be executed, not read.
+
+18C — NavIC: already real since Phase 15. GnssStatus gives measured
+constellation counts, so ForegroundSource is the only source that can set
+constellationsSimulated: false.
+
+**Tests:** 1464 passing (was 1444; +20). Ablation unchanged at 9.2% — the
+detector correctly never fires on car logs.
 
 ## NEXT PHASE
 

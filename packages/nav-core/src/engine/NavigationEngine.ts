@@ -5,6 +5,8 @@ import { haversineDistance } from '../geo/distance.js';
 import { AttitudeEstimator } from '../alignment/attitude.js';
 import { SimpleAlignment } from '../alignment/simpleAlignment.js';
 import { BarometricAltimeter } from '../alignment/altimeter.js';
+import { VehicleTypeDetector, type VehicleType, type VehicleTypeState } from '../twowheeler/VehicleTypeDetector.js';
+import { leanAngleRad, leanCompensatedYawRate, turnRadiusFromLeanM } from '../twowheeler/lean.js';
 import { AutoAlignment, type AutoAlignState } from '../alignment/autoAlign.js';
 import { StationarityDetector, type StationarityResult } from '../filters/stationarity.js';
 import { Vec3LowPassFilter, Vec3MedianFilter } from '../filters/index.js';
@@ -311,6 +313,24 @@ export interface ConstraintFlags {
    * and is why TurnRelocaliser declines far more often than it answers.
    */
   turnRelocalisation: boolean;
+  /**
+   * ★ PHASE 18B ★ Detect a two-wheeler and compensate for its lean.
+   *
+   * The problem statement names them — "millions of two-wheelers
+   * (motorcycles/scooters)" — and every constraint in this engine was written
+   * for a car. The one that breaks is the attitude reference: a leaning bike's
+   * accelerometer reads a specific force that never moves in its own frame, so
+   * the estimator takes the leaned axis for "down" and the yaw rate it recovers
+   * is the true rate times cos(lean). The bike turns MORE than the engine
+   * believes, by eight degrees on a 90-degree corner at a 25-degree lean.
+   *
+   * ON by default and safe, because the compensation is applied only once
+   * `VehicleTypeDetector` has actually decided TWO_WHEELER — which it will
+   * never do in a car, and which it declines to do without real cornering
+   * evidence. The detection itself is free: it reads samples the engine
+   * already has.
+   */
+  twoWheeler: boolean;
 }
 
 export interface EngineConfig extends ConstraintFlags {
@@ -445,6 +465,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   hmmMatch: false,
   particleFilter: false,
   turnRelocalisation: false,
+  twoWheeler: true,
   hmmConfig: {},
   residualConfig: DEFAULT_RESIDUAL_CONFIG,
   trustedAccuracyM: 20,
@@ -604,6 +625,10 @@ export class NavigationEngine {
    * existed and neither of which had anything to consume — see `feedAltitude`.
    */
   private readonly altimeter = new BarometricAltimeter();
+  /** Phase 18B. Runs always; its verdict is acted on only when it has one. */
+  private readonly vehicleType = new VehicleTypeDetector();
+  private lastLeanRad = 0;
+  private lastVehicleType: VehicleType = 'UNKNOWN';
   private lastAltitude: { relativeM: number; changeM: number } | null = null;
   /** Phase 14. Built lazily beside the RoadIndex, from the same graph. */
   private topology: RoadTopology | null = null;
@@ -783,6 +808,10 @@ export class NavigationEngine {
     motionInferences: number;
     /** IMU samples discarded as pothole impulses this session. */
     potholesRejected: number;
+    /** Phase 18B: what kind of vehicle this looks like, and its lean. */
+    vehicleType: VehicleTypeState;
+    leanDeg: number;
+    turnRadiusM: number;
     /** Phase 17: the particle cloud's summary, when it is running. */
     particles: ParticleEstimate | null;
     /** Times a turn sequence recognised a place this session. */
@@ -804,6 +833,9 @@ export class NavigationEngine {
       motionReady: this.motionClassifier.isReady(),
       motionInferences: this.motionInferences,
       potholesRejected: this.potholesRejected,
+      vehicleType: this.vehicleType.state,
+      leanDeg: (this.lastLeanRad * 180) / Math.PI,
+      turnRadiusM: turnRadiusFromLeanM(this.dr.current.speedMps, this.lastLeanRad),
       particles: this.lastParticleEstimate,
       relocalisations: this.relocalisations,
       particleDivergences: this.particleDivergences,
@@ -1358,6 +1390,44 @@ export class NavigationEngine {
         forwardAccel = h.forward - this.forwardAccelDc;
       } else {
         forwardAccel = h.forward;
+      }
+
+      // ★ PHASE 18B — THE LEAN, BEFORE ANYTHING INTEGRATES THE YAW RATE ★
+      //
+      // The detector reads the RAW specific force against the slowly-tracked
+      // vertical: during a corner, a car's phone sees the force swing sideways
+      // by the full tilt, and a bike's sees it stay exactly where it was and
+      // merely get heavier. That difference is the vehicle, and it is the only
+      // thing in the two signals that is.
+      if (this.config.twoWheeler) {
+        const verdict = this.vehicleType.push(
+          [ax, ay, az],
+          this.attitude.upVector,
+          this.dr.current.speedMps,
+          yawRate,
+        );
+        if (verdict.type !== this.lastVehicleType) {
+          this.lastVehicleType = verdict.type;
+          this.log.push({
+            t: sample.t,
+            type: 'VEHICLE_TYPE',
+            message:
+              verdict.type === 'TWO_WHEELER'
+                ? `two-wheeler detected — lean compensation on (follow ratio ${verdict.followRatio.toFixed(2)})`
+                : `vehicle type: ${verdict.type.toLowerCase()} (follow ratio ${verdict.followRatio.toFixed(2)})`,
+            data: { type: verdict.type },
+          });
+        }
+
+        if (verdict.type === 'TWO_WHEELER') {
+          this.lastLeanRad = leanAngleRad(this.dr.current.speedMps, yawRate);
+          // Everything downstream — the heading integration, the turn
+          // detector, the ESKF, the particle filter — reads `yawRate`. There
+          // is exactly one place to correct it, and this is it.
+          yawRate = leanCompensatedYawRate(this.dr.current.speedMps, yawRate);
+        } else {
+          this.lastLeanRad = 0;
+        }
       }
 
       this.dr.setGyroBias(this.zaru.gyroBias as [number, number, number]);
@@ -3099,6 +3169,9 @@ export class NavigationEngine {
     this.particleOffset = { e: 0, n: 0 };
     this.altimeter.reset();
     this.lastAltitude = null;
+    this.vehicleType.reset();
+    this.lastLeanRad = 0;
+    this.lastVehicleType = 'UNKNOWN';
     this.zupt.reset();
     this.zaru.reset();
     this.forwardBias.reset();

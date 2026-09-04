@@ -330,6 +330,15 @@ function SensorsTab({
         />
         <Row k="INFERENCES" v={String(diagnostics.motionInferences)} />
         <Row
+          k="VEHICLE"
+          v={
+            diagnostics.vehicleType === 'TWO_WHEELER'
+              ? `two-wheeler · lean ${diagnostics.leanDeg.toFixed(0)}°`
+              : diagnostics.vehicleType.toLowerCase()
+          }
+          accent={diagnostics.vehicleType === 'TWO_WHEELER'}
+        />
+        <Row
           k="FIX QUALITY"
           v={
             diagnostics.gnssQuality
@@ -496,6 +505,21 @@ const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }>
   { key: 'lowPass', label: 'Low-pass filter', hint: 'Removes engine and road vibration before integration.' },
   { key: 'medianFilter', label: 'Median filter', hint: 'Rejects pothole spikes.' },
   { key: 'adaptiveTimeout', label: 'Adaptive GNSS timeout', hint: 'Track the receiver’s real fix rate instead of assuming 1 Hz.' },
+  {
+    key: 'particleFilter',
+    label: 'Particle filter (off — city only)',
+    hint: '500 hypotheses over the road graph instead of one, so a junction taken during an outage need not be guessed when it is reached. Measured: city 15.1% → 13.3%, highway 3.2% → 12.8%. Helps exactly where junction ambiguity exists.',
+  },
+  {
+    key: 'turnRelocalisation',
+    label: 'Turn relocalisation (needs the particle filter)',
+    hint: 'Searches the road graph for the sequence of turns just driven. A unique match collapses the cloud onto it — recognition rather than smoothing, so a long outage can end MORE accurate than it began.',
+  },
+  {
+    key: 'twoWheeler',
+    label: 'Two-wheeler lean compensation',
+    hint: 'A leaning bike’s accelerometer never sees the force move, so the engine mistakes the leaned axis for “down” and reads the yaw rate times cos(lean) — the bike turns MORE than it thinks. Applied only once the vehicle is actually detected as a two-wheeler.',
+  },
   {
     key: 'useMlGnssQuality',
     label: 'AI fix-quality classifier',

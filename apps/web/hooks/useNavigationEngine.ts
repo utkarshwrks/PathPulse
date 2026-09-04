@@ -91,6 +91,10 @@ export interface EngineDiagnostics {
   alignment: AutoAlignState;
   /** Phase 13 — the motion classifier's accepted state and its evidence. */
   motionState: MotionState | null;
+  /** Phase 18B — car or two-wheeler, and how far it is leaning. */
+  vehicleType: string;
+  vehicleTypeConfidence: number;
+  leanDeg: number;
   /** Phase 13, Model 4 — what the classifier thinks of the last fix. */
   gnssQuality: string | null;
   gnssQualityConfidence: number;
@@ -136,6 +140,9 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   modeReason: null,
   speedSource: 'NONE',
   motionState: null,
+  vehicleType: 'UNKNOWN',
+  vehicleTypeConfidence: 0,
+  leanDeg: 0,
   gnssQuality: null,
   gnssQualityConfidence: 0,
   motionConfidence: 0,
@@ -189,6 +196,18 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // Phase 17. OFF: measured 13.0% mean overall against the shipped chain's
+  // 9.2% — but that average hides the finding. City 15.1% -> 13.3% (it helps),
+  // highway 3.2% -> 12.8% (it hurts), which is exactly what a filter built for
+  // junction ambiguity should do. Toggleable so the particle cloud can be
+  // shown forking and collapsing, which is the demo.
+  particleFilter: false,
+  turnRelocalisation: false,
+  // Phase 18B. ON and safe: the lean compensation is applied only once the
+  // detector has actually decided TWO_WHEELER, which it never does in a car
+  // and declines to do without real cornering evidence. Detection itself is
+  // free — it reads samples the engine already has.
+  twoWheeler: true,
   // Phase 13, Model 4. ON, and inert until the model loads. ADVISORY ONLY: it
   // lowers the confidence bar and may never gate a fix — see the long argument
   // in detect/spoofing.ts, which applies to a learned detector with more force.
@@ -426,6 +445,9 @@ export function useNavigationEngine(): NavEngineOutput {
       const s = engine.stationarityState;
       setDiagnostics({
         ...d,
+        vehicleType: d.vehicleType.type,
+        vehicleTypeConfidence: d.vehicleType.confidence,
+        leanDeg: d.leanDeg,
         isStationary: s.isStationary,
         accelVariance: s.accelVariance,
         gyroMean: s.gyroMean,

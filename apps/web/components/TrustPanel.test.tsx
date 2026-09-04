@@ -23,6 +23,9 @@ afterEach(cleanup);
 
 const DIAGNOSTICS: EngineDiagnostics = {
   motionState: 'BRAKING',
+  vehicleType: 'TWO_WHEELER',
+  vehicleTypeConfidence: 0.8,
+  leanDeg: 24,
   gnssQuality: 'GOOD',
   gnssQualityConfidence: 0.93,
   motionConfidence: 0.82,
@@ -589,5 +592,22 @@ describe('TrustPanel — Phase 13 motion classifier', () => {
       },
     });
     expect(screen.getByText('motion_model.json: HTTP 404')).toBeTruthy();
+  });
+});
+
+describe('TrustPanel — Phase 18B two-wheeler', () => {
+  it('shows the detected vehicle and its lean', () => {
+    // ★ A RIDER MUST BE ABLE TO SEE THIS ★ The lean compensation changes every
+    // heading after it engages. A mode that alters the estimate and is
+    // invisible is one nobody can debug on the road.
+    openPanel();
+    expect(screen.getByText(/two-wheeler · lean 24°/)).toBeTruthy();
+  });
+
+  it('says plainly when it has not decided', () => {
+    openPanel({
+      diagnostics: { ...DIAGNOSTICS, vehicleType: 'UNKNOWN', leanDeg: 0 },
+    });
+    expect(screen.getByText('unknown')).toBeTruthy();
   });
 });

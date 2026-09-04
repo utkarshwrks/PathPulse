@@ -50,6 +50,12 @@ export type NavEventType =
    * it carries the fit and the margin over the runner-up.
    */
   | 'RELOCALISED'
+  /**
+   * Phase 18B: the engine decided what kind of vehicle it is riding in. A
+   * two-wheeler turns the lean compensation on, and that changes every heading
+   * afterwards, so it is never silent.
+   */
+  | 'VEHICLE_TYPE'
   | 'WARNING';
 
 export interface NavEvent {

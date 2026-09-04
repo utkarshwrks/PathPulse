@@ -27,4 +27,5 @@ export * from './motion/index.js';
 export * from './ml/index.js';
 export * from './eskf/index.js';
 export * from './particle/index.js';
+export * from './twowheeler/index.js';
 export * from './engine/index.js';

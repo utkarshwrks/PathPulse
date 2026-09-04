@@ -56,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1444) |
+| `pnpm test` | All workspace tests (1464) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
@@ -554,6 +554,62 @@ it backwards.
 
 **Before a demo, in the actual room: open Offline, tap Download, then go into
 aeroplane mode.** That is now a complete preparation rather than a partial one.
+
+### Phase 18B — two-wheelers, which lean
+
+`twowheeler/lean.ts`, `twowheeler/VehicleTypeDetector.ts`.
+
+The problem statement names them: *"millions of two-wheelers (motorcycles /
+scooters)"*. India has more of them than everything else combined, and every
+constraint in this engine was written for a car.
+
+**The thing that breaks is not the non-holonomic constraint.** It is the
+attitude reference. `AttitudeEstimator` finds "down" by tracking the measured
+specific force — correct for a vehicle that stays level, wrong for one that
+does not. In a steady turn a motorcycle leans until the resultant of gravity
+and centripetal acceleration runs straight down its own axis. That is what
+leaning *is*, and it is why a rider feels pressed into the seat rather than
+sideways.
+
+So a phone strapped to a leaning bike reads a specific force that **never moves
+in its own frame**. The engine takes the leaned axis for down, and the yaw rate
+it recovers by projecting the gyro onto it is the true rate × cos(lean).
+
+**The bike turns more than the engine believes.** A 25° lean is cos 25° = 0.906
+— eight degrees lost on a 90° corner, and eight degrees over a kilometre of
+tunnel is **140 m of cross-track error, from one roundabout.**
+
+The correction needs no extra sensor. A bike in a steady turn satisfies
+`tan(lean) = v·ω_true/g`, and the gyro reads `ω_measured = ω_true·cos(lean)`.
+Substituting one into the other eliminates the unknown entirely:
+
+```
+sin(lean) = v · ω_measured / g          ω_true = ω_measured / cos(lean)
+```
+
+Closed form, from quantities already on hand.
+
+**Telling a bike from a car is the subtle half, and the obvious method fails.**
+"A bike leans, so look for roll" does not work: the specific force tilts by the
+*same* angle in both vehicles — a car cornering at 4.5 m/s² has a resultant 25°
+off vertical, exactly as a bike leaning 25° does. Same trajectory, same forces.
+Measuring the tilt tells you about the corner, not the vehicle.
+
+What differs is whether the **sensor follows it**. A car stays level, so in the
+phone's frame the force swings sideways by the full tilt. A bike rolls until the
+force runs down its own axis, so in the phone's frame it does not move at all —
+it only gets heavier. Compare how far the force actually moved against how far
+the corner says it should have: a car scores ~1, a bike ~0.
+
+**And it must be gated.** An earlier version of the comment in `lean.ts`
+claimed the compensation was safe to leave on for a car, reasoning that with no
+lean `cos 0 = 1`. A test disproved it on the first run: the function cannot
+*tell* whether the vehicle leaned — it infers a lean from speed and yaw rate,
+and a car cornering briskly presents the same inputs. At 15 m/s and 0.35 rad/s
+it invents a 32° lean and inflates the turn by 18 %. So the compensation fires
+only on a detected two-wheeler, and the detector defaults to CAR and needs real
+cornering evidence to leave it — a wrong bike verdict inflates every corner for
+the rest of the drive, while a wrong car verdict merely costs the compensation.
 
 ### Phase 17 — the particle filter, and the thing no single hypothesis can do
 
