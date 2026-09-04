@@ -149,6 +149,20 @@ export class ForegroundSource implements SensorSource {
       }
     }
 
+    const baro = raw['baro'] as Record<string, unknown> | undefined;
+    if (baro) {
+      const pressureHpa = num(baro['pressureHpa']);
+      // A phone barometer reports hectopascals; a value in the hundreds of
+      // thousands is pascals and would be read as a hundred kilometres of
+      // altitude change. Range-checked here as well as in the altimeter,
+      // because a unit mix-up crossing a bridge is exactly the kind of thing
+      // that gets fixed on one side and forgotten on the other.
+      if (pressureHpa !== null && pressureHpa > 500 && pressureHpa < 1100) {
+        sample.baro = { pressureHpa };
+        this.capabilities.hasBaro = true;
+      }
+    }
+
     const gnss = raw['gnss'] as Record<string, unknown> | undefined;
     if (gnss) {
       const lat = num(gnss['lat']);
@@ -186,7 +200,7 @@ export class ForegroundSource implements SensorSource {
       }
     }
 
-    if (sample.imu || sample.gnss) this.emit(sample);
+    if (sample.imu || sample.gnss || sample.baro) this.emit(sample);
   }
 
   /** Live counters, including the rate the NATIVE side measured for itself. */

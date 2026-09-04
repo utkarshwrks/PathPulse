@@ -56,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1372) |
+| `pnpm test` | All workspace tests (1383) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
@@ -554,6 +554,51 @@ it backwards.
 
 **Before a demo, in the actual room: open Offline, tap Download, then go into
 aeroplane mode.** That is now a complete preparation rather than a partial one.
+
+### The barometer, and the two things that were waiting for it
+
+`alignment/altimeter.ts`.
+
+Two pieces of the estimator existed, were tested, and had **never once run**,
+because nothing in the project produced a pressure reading:
+
+- The ESKF's `updateAltitude`, written in Phase 11. Without it the filter's
+  vertical position random-walked on accelerometer bias for a whole outage,
+  held only by NHC's assertion that vertical *velocity* is zero — a constraint
+  on the derivative, not on the value.
+- Phase 14's flyover term, which is written to do nothing without an altitude,
+  because a rule that fires on absent data is a rule that invents evidence.
+
+Phase 15's native loop can read `TYPE_PRESSURE`, so both are now connected.
+
+**What a phone barometer can and cannot do.** It cannot tell you your altitude:
+sea-level pressure moves tens of hPa with the weather, which is hundreds of
+metres of apparent height, and the sensor has no idea what today's value is.
+Any absolute altitude from one is a guess dressed as a measurement. What it is
+superb at is **change over minutes** — about a metre of resolution, and weather
+does not move inside a thirty-second window. So the altimeter reports height
+relative to a slowly-tracked reference, and says so in the type.
+
+The one parameter is the reference time constant, and it makes the whole trade:
+too slow and a two-hour drive banks the day's weather as apparent climb, too
+fast and a real climb is absorbed into the reference and disappears — the same
+failure the acceleration high-pass would have with too short a constant, and
+the same fix. Ten minutes: far longer than a flyover ramp or a car-park spiral,
+far shorter than a weather front. There is a test that drives two hours through
+6 hPa of weather and then a six-metre flyover, and asserts the first vanishes
+and the second does not.
+
+**One bug worth recording.** The change term first kept a single "pressure a
+window ago" and replaced it when the window expired. That is a sawtooth: the
+moment it rolls over, the reference becomes the *current* pressure and the
+change collapses to zero — in the middle of the very ramp it exists to detect.
+A simulated six-metre flyover reported **0.6 m**. A short timestamped history
+costs a few hundred bytes and gives a continuous answer.
+
+The graph builders now also carry OSM's `layer` tag as `layerM`, so the flyover
+term has something to compare against. `layer` is an *ordering*, not a height —
+five metres a level is the usual road-bridge clearance and is a modelled
+estimate, which is why the field is `layerM` and not `altitudeM`.
 
 ### Phase 15 — the sensor loop that survives the screen going off
 

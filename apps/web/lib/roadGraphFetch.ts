@@ -140,6 +140,13 @@ export function osmToGraph(osm: { elements?: OsmElement[] }, b: BBox): RoadGraph
     if (tags.oneway === 'yes' || tags.oneway === 'true' || tags.oneway === '1') {
       way.oneway = true;
     }
+    // OSM's `layer` is an ordering, not a height: it says which way is on top
+    // where two cross and nothing about how far. Five metres a level is the
+    // usual road-bridge clearance and is a modelled estimate — hence layerM,
+    // not altitudeM. Kept identical to scripts/build-road-graph.mjs, because a
+    // downloaded graph and a committed one must describe the same world.
+    const layer = Number(tags.layer);
+    if (Number.isFinite(layer) && layer !== 0) way.layerM = layer * 5;
     ways.push(way);
   }
   return {

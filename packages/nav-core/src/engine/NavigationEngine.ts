@@ -4,6 +4,7 @@ import { enuToLatLon, latLonToEnu } from '../geo/enu.js';
 import { haversineDistance } from '../geo/distance.js';
 import { AttitudeEstimator } from '../alignment/attitude.js';
 import { SimpleAlignment } from '../alignment/simpleAlignment.js';
+import { BarometricAltimeter } from '../alignment/altimeter.js';
 import { AutoAlignment, type AutoAlignState } from '../alignment/autoAlign.js';
 import { StationarityDetector, type StationarityResult } from '../filters/stationarity.js';
 import { Vec3LowPassFilter, Vec3MedianFilter } from '../filters/index.js';
@@ -539,6 +540,16 @@ export class NavigationEngine {
   private drStartedAtMs: number | null = null;
   /** Phase 11. Runs on every sample; read only when `config.eskf` is on. */
   private readonly eskf = new ErrorStateKalmanFilter();
+  /**
+   * Barometric altitude, relative and slowly re-referenced.
+   *
+   * Runs whenever a sample carries pressure, which today is only the Phase 15
+   * native source: browsers expose no barometer, and the one that existed was
+   * removed from the platform years ago. Two consumers, both of which already
+   * existed and neither of which had anything to consume — see `feedAltitude`.
+   */
+  private readonly altimeter = new BarometricAltimeter();
+  private lastAltitude: { relativeM: number; changeM: number } | null = null;
   /** Phase 14. Built lazily beside the RoadIndex, from the same graph. */
   private topology: RoadTopology | null = null;
   private hmm: HmmMapMatcher | null = null;
@@ -702,6 +713,10 @@ export class NavigationEngine {
     motionInferences: number;
     /** IMU samples discarded as pothole impulses this session. */
     potholesRejected: number;
+    /** Barometric altitude relative to a slowly-tracked reference, m. */
+    baroRelativeM: number | null;
+    /** Climb or descent over the last ~20 s, m. What detects a flyover. */
+    baroChangeM: number | null;
   } {
     return {
       alignment: this.autoAlign.state,
@@ -710,6 +725,8 @@ export class NavigationEngine {
       motionReady: this.motionClassifier.isReady(),
       motionInferences: this.motionInferences,
       potholesRejected: this.potholesRejected,
+      baroRelativeM: this.lastAltitude?.relativeM ?? null,
+      baroChangeM: this.lastAltitude?.changeM ?? null,
       zuptTriggers: this.zupt.triggerCount,
       zaruTriggers: this.zaru.triggerCount,
       accelBias: this.zupt.accelBias,
@@ -930,6 +947,16 @@ export class NavigationEngine {
       this.measuredRateHz =
         this.measuredRateHz === 0 ? instantHz : this.measuredRateHz * 0.99 + instantHz * 0.01;
       this.accelLowPass.setSampleRate(this.measuredRateHz);
+    }
+
+    // ★ BAROMETER FIRST ★ Both consumers below — the ESKF's vertical channel
+    // and the HMM's flyover term — want this sample's altitude, not the
+    // previous one's.
+    if (sample.baro) {
+      const reading = this.altimeter.push(sample.baro.pressureHpa, sample.t);
+      this.lastAltitude = reading.isReady
+        ? { relativeM: reading.relativeM, changeM: reading.changeM }
+        : null;
     }
 
     // 2-4. Condition the IMU and read out motion state.
@@ -2053,6 +2080,15 @@ export class NavigationEngine {
             headingDeg: this.dr.current.headingDeg,
             sigmaM: Math.max(this.covarianceCrossM, this.covarianceAlongM),
             travelledM: travelled,
+            // ★ THE FLYOVER TERM, FINALLY CONNECTED ★ It has been in the
+            // matcher since Phase 14 and inert, because `altitudeM` was never
+            // supplied and the term is written to do nothing without it — a
+            // rule that fires on absent data is a rule that invents evidence.
+            // The CHANGE, not the relative height: a flyover is six metres
+            // acquired over a twenty-second ramp, and the graph's `layerM` is
+            // height above the surrounding ground rather than above our
+            // arbitrary ENU datum.
+            ...(this.lastAltitude ? { altitudeM: this.lastAltitude.changeM } : {}),
           });
           if (hmmMatch) match = hmmMatch;
         }
@@ -2305,6 +2341,24 @@ export class NavigationEngine {
     // order to let a returning fix correct hard.
     const speedSigma = Math.min(6, 0.15 + input.chainSpeedUnaidedMs / 20_000);
     this.eskf.updateForwardSpeed(input.chainSpeedMps, speedSigma);
+
+    // ★ THE VERTICAL CHANNEL HAD NO MEASUREMENT AT ALL ★
+    //
+    // `updateAltitude` has existed and been tested since Phase 11 and was
+    // never called, because nothing produced an altitude. So the filter's
+    // vertical position random-walked on accelerometer bias for the whole of
+    // an outage, held in check only by NHC's assertion that vertical velocity
+    // is zero — which is a constraint on the derivative, not on the value.
+    //
+    // Relative altitude is the right input here: the ESKF's z is metres above
+    // the ENU origin, which is itself an arbitrary datum, so a measurement
+    // relative to a tracked reference is exactly as meaningful as an absolute
+    // one would be and is the only one a barometer can honestly supply.
+    if (this.lastAltitude) {
+      // 1.5 m, matching DEFAULT_ESKF_CONFIG.baroSigmaM: about a metre of
+      // sensor resolution plus the reference's slow drift.
+      this.eskf.updateAltitude(this.lastAltitude.relativeM, 1.5);
+    }
 
     if (input.trusted && input.gnssEnu) {
       const accuracy = input.gnssAccuracyM ?? this.config.trustedAccuracyM;
@@ -2673,6 +2727,8 @@ export class NavigationEngine {
     this.wideSnapCount = 0;
     this.hmm?.reset();
     this.lastHmmEnu = null;
+    this.altimeter.reset();
+    this.lastAltitude = null;
     this.zupt.reset();
     this.zaru.reset();
     this.forwardBias.reset();

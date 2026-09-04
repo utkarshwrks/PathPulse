@@ -127,6 +127,7 @@ public class SensorLoopService extends Service implements SensorEventListener, L
     private final List<Map<String, Object>> buffer = new ArrayList<>();
     private final float[] lastGyro = new float[3];
     private boolean haveGyro = false;
+    private float lastPressureHpa = Float.NaN;
     private Location lastLocation = null;
     private long lastLocationNanos = 0;
     private final Map<String, Integer> constellations = new HashMap<>();
@@ -241,8 +242,16 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         if (sensorManager == null) return;
         Sensor accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         Sensor gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+        Sensor pressure = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE);
         if (accel != null) sensorManager.registerListener(this, accel, IMU_PERIOD_US, sensorHandler);
         if (gyro != null) sensorManager.registerListener(this, gyro, IMU_PERIOD_US, sensorHandler);
+        // ★ THE BAROMETER IS SLOW ON PURPOSE ★ 5 Hz, not 100. It measures a
+        // quantity that changes over tens of seconds — a flyover ramp, a
+        // multi-storey car park — and a MEMS barometer polled at 100 Hz
+        // returns the same value a hundred times while drawing power to do it.
+        if (pressure != null) {
+            sensorManager.registerListener(this, pressure, 200_000, sensorHandler);
+        }
     }
 
     private void registerLocation() {
@@ -317,6 +326,10 @@ public class SensorLoopService extends Service implements SensorEventListener, L
             haveGyro = true;
             return;
         }
+        if (event.sensor.getType() == Sensor.TYPE_PRESSURE) {
+            lastPressureHpa = event.values[0];
+            return;
+        }
         if (event.sensor.getType() != Sensor.TYPE_ACCELEROMETER) return;
 
         // ★ ONE SAMPLE PER ACCELEROMETER EVENT ★
@@ -343,6 +356,15 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         imu.put("gz", haveGyro ? lastGyro[2] : 0f);
         imu.put("hasGyro", haveGyro);
         sample.put("imu", imu);
+
+        // Attached to every sample rather than to its own, because the engine
+        // reads pressure off whatever sample carries it and a barometer-only
+        // sample would have no IMU for the estimator to step on.
+        if (!Float.isNaN(lastPressureHpa)) {
+            Map<String, Object> baro = new HashMap<>();
+            baro.put("pressureHpa", lastPressureHpa);
+            sample.put("baro", baro);
+        }
 
         Location fix = lastLocation;
         if (fix != null) {
@@ -437,6 +459,7 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         out.put("droppedSamples", droppedSamples);
         out.put("bootEpochMs", bootEpochMs);
         out.put("hasGyro", haveGyro);
+        out.put("hasBaro", !Float.isNaN(lastPressureHpa));
         return out;
     }
 

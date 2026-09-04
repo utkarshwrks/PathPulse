@@ -161,6 +161,14 @@ function toGraph(osm, bbox, meta) {
     if (tags.oneway === 'yes' || tags.oneway === 'true' || tags.oneway === '1') {
       way.oneway = true;
     }
+    // ★ OSM's `layer` IS AN ORDERING, NOT A HEIGHT ★ It says which way is on
+    // top where two cross, and nothing about how far. Five metres a level is
+    // the usual clearance for a road bridge and is a modelled estimate, which
+    // is why the field is named layerM and not altitudeM. Phase 14's HMM uses
+    // it only to separate a flyover from the road beneath it, where being
+    // roughly right is enough and being absent is fatal.
+    const layer = Number(tags.layer);
+    if (Number.isFinite(layer) && layer !== 0) way.layerM = layer * 5;
     ways.push(way);
   }
   return { bbox: bbox.map((v) => Number(v.toFixed(7))), ways, meta };
