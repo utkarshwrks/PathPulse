@@ -139,11 +139,27 @@ export class NavigationStateMachine {
       // is not missed by waiting a few more seconds before calling it.
       return Math.max(this.config.noFixTimeoutMs, this.config.warmupTimeoutMs);
     }
+    // ★ THE MEDIAN IS THE WRONG STATISTIC FOR "IS THIS GAP ABNORMAL?" ★
+    //
+    // This used the median gap times the factor. That answers "is this longer
+    // than a typical gap?", which is not the question. A handset indoors does
+    // not deliver fixes evenly: it delivers a burst a second apart, then a hole
+    // of eight seconds, then another burst. The median of that is about a
+    // second, so the timeout became 2.5 s, and every ordinary hole tripped
+    // DEAD RECKONING. Measured on a Redmi on a desk with location on and fixes
+    // arriving the whole time: the mode flipped to dead reckoning and back
+    // roughly every fifteen seconds, for five minutes, with nothing wrong.
+    //
+    // The question is "is this longer than this receiver's normal WORST gap?",
+    // and the statistic for that is a high percentile. p90 tracks the hole
+    // rather than the burst, so a jittery receiver stops being called an
+    // outage while a real one — a tunnel, where gaps go to infinity — still is.
+    // The clamps are unchanged, so nothing can run away.
     const sorted = [...this.fixIntervals].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)]!;
+    const p90 = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.9) - 1)]!;
     return Math.min(
       this.config.maxAdaptiveTimeoutMs,
-      Math.max(this.config.noFixTimeoutMs, median * this.config.noFixIntervalFactor),
+      Math.max(this.config.noFixTimeoutMs, p90 * this.config.noFixIntervalFactor),
     );
   }
 

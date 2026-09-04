@@ -29,7 +29,7 @@ describe('only one panel can be open', () => {
   });
 
   it('every panel is rendered by comparing that one value', () => {
-    for (const name of ['menu', 'sources', 'debug', 'offline', 'benchmarks', 'pitch', 'device']) {
+    for (const name of ['menu', 'sources', 'debug', 'offline', 'benchmarks', 'device']) {
       expect(PAGE, name).toContain(`panel === '${name}'`);
     }
   });

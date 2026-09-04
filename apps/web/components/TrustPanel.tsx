@@ -467,86 +467,105 @@ function SensorsTab({
 
 /* ---------------------------------------------------------------- 5C */
 
-const TOGGLES: Array<{ key: keyof EngineControls; label: string; hint: string }> = [
-  { key: 'nhc', label: 'NHC', hint: 'A vehicle cannot slide sideways. Kills cross-track drift.' },
-  { key: 'zupt', label: 'ZUPT', hint: 'Stopped means speed exactly zero, and free accel calibration.' },
-  { key: 'zaru', label: 'ZARU', hint: 'Stopped means the gyro reading is pure bias. Stops heading drift.' },
+/**
+ * Grouped, not trimmed.
+ *
+ * Every switch here is a real ablation a judge can run live, and the four that
+ * ship OFF are published negative results — the most defensible thing in the
+ * panel. But as one flat list of nineteen, opening this reads as a wall of
+ * settings rather than a claim anyone can check.
+ *
+ * `core` is the shipping configuration and the switches worth flipping during a
+ * demo. `advanced` holds the niche refinements and the measured-worse
+ * components, folded away by default and one tap from view. Nothing removed.
+ */
+type ToggleGroup = 'core' | 'advanced';
+
+const TOGGLES: Array<{
+  key: keyof EngineControls;
+  label: string;
+  hint: string;
+  group: ToggleGroup;
+}> = [
+  { key: 'nhc', group: 'core', label: 'NHC', hint: 'A vehicle cannot slide sideways. Kills cross-track drift.' },
+  { key: 'zupt', group: 'core', label: 'ZUPT', hint: 'Stopped means speed exactly zero, and free accel calibration.' },
+  { key: 'zaru', group: 'core', label: 'ZARU', hint: 'Stopped means the gyro reading is pure bias. Stops heading drift.' },
   {
-    key: 'roadSnap',
+    key: 'roadSnap', group: 'core',
     label: 'Road snapping',
     hint: 'Pulls the estimate across onto the nearest plausible road. Cross-track only — never along it.',
   },
   {
-    key: 'useMlSpeed',
+    key: 'useMlSpeed', group: 'core',
     label: 'AI speed model',
     hint: 'The IO-VNBD-trained CNN, used for speed when GNSS is gone. Inert until the model loads — see the SENSORS tab.',
   },
   {
-    key: 'mlVehicleOnly',
+    key: 'mlVehicleOnly', group: 'advanced',
     label: 'AI model: vehicle only',
     hint: 'The model was trained on car data. On foot it saturated the ceiling and the HUD read a flat 11 km/h. Off puts that back.',
   },
   {
-    key: 'pedestrianHeadingFromGnss',
+    key: 'pedestrianHeadingFromGnss', group: 'advanced',
     label: 'On foot: course from GNSS',
     hint: 'A hand is not a chassis. Off integrates device yaw on foot, which drew the star-shaped trail over a straight footpath.',
   },
   {
-    key: 'accelHighPass',
+    key: 'accelHighPass', group: 'advanced',
     label: 'Accel high-pass',
     hint: 'Removes the slow mean of forward acceleration — the tilt error that makes DR speed run away.',
   },
   {
-    key: 'forwardBias',
+    key: 'forwardBias', group: 'advanced',
     label: 'Forward bias (off — measured worse)',
     hint: 'Learns mount tilt from GNSS Doppler. Superseded by the high-pass: 12.7% drift without it, 19.1% with. Left here to demonstrate.',
   },
-  { key: 'speedClamp', label: 'Speed clamp', hint: 'Plausibility ceiling plus decay of a stale unaided estimate.' },
-  { key: 'lowPass', label: 'Low-pass filter', hint: 'Removes engine and road vibration before integration.' },
-  { key: 'medianFilter', label: 'Median filter', hint: 'Rejects pothole spikes.' },
-  { key: 'adaptiveTimeout', label: 'Adaptive GNSS timeout', hint: 'Track the receiver’s real fix rate instead of assuming 1 Hz.' },
+  { key: 'speedClamp', group: 'core', label: 'Speed clamp', hint: 'Plausibility ceiling plus decay of a stale unaided estimate.' },
+  { key: 'lowPass', group: 'advanced', label: 'Low-pass filter', hint: 'Removes engine and road vibration before integration.' },
+  { key: 'medianFilter', group: 'advanced', label: 'Median filter', hint: 'Rejects pothole spikes.' },
+  { key: 'adaptiveTimeout', group: 'core', label: 'Adaptive GNSS timeout', hint: 'Track the receiver’s real fix rate instead of assuming 1 Hz.' },
   {
-    key: 'particleFilter',
+    key: 'particleFilter', group: 'advanced',
     label: 'Particle filter (off — city only)',
     hint: '500 hypotheses over the road graph instead of one, so a junction taken during an outage need not be guessed when it is reached. Measured: city 15.1% → 13.3%, highway 3.2% → 12.8%. Helps exactly where junction ambiguity exists.',
   },
   {
-    key: 'turnRelocalisation',
+    key: 'turnRelocalisation', group: 'advanced',
     label: 'Turn relocalisation (needs the particle filter)',
     hint: 'Searches the road graph for the sequence of turns just driven. A unique match collapses the cloud onto it — recognition rather than smoothing, so a long outage can end MORE accurate than it began.',
   },
   {
-    key: 'twoWheeler',
+    key: 'twoWheeler', group: 'advanced',
     label: 'Two-wheeler lean compensation',
     hint: 'A leaning bike’s accelerometer never sees the force move, so the engine mistakes the leaned axis for “down” and reads the yaw rate times cos(lean) — the bike turns MORE than it thinks. Applied only once the vehicle is actually detected as a two-wheeler.',
   },
   {
-    key: 'useMlGnssQuality',
+    key: 'useMlGnssQuality', group: 'advanced',
     label: 'AI fix-quality classifier',
     hint: 'Classifies each fix GOOD / MULTIPATH / SPOOFED / LOST from eleven features the receiver already reports. ADVISORY: it lowers the confidence bar and can never reject a fix — a detector that gates the fix it distrusts turns a false positive into a navigation failure.',
   },
   {
-    key: 'hmmMatch',
+    key: 'hmmMatch', group: 'advanced',
     label: 'HMM map matching (off — see benchmarks)',
     hint: 'Newson-Krumm over a sliding window. Picks the most likely road SEQUENCE rather than the nearest road, so it can reject a parallel service road, the opposite carriageway or a flyover — all of which are close but unreachable. Measured slightly worse on our routes, which contain none of those.',
   },
   {
-    key: 'useMlResidual',
+    key: 'useMlResidual', group: 'advanced',
     label: 'AI drift correction (off — measured worse)',
     hint: 'Predicts the estimator’s own error and subtracts it. Route-disjoint evaluation: 3-8× worse on an unseen route type, because city and highway features barely overlap and the network extrapolates. Inert without a model; kept so the negative result can be shown.',
   },
   {
-    key: 'useMlMotion',
+    key: 'useMlMotion', group: 'core',
     label: 'AI motion classifier',
     hint: 'Eight-class 1D-CNN over one second of IMU. Fires ZUPT on a confident stop, rejects pothole impulses, and freezes the tilt estimate through corners. Inert until the model loads — see the SENSORS tab.',
   },
   {
-    key: 'autoAlign',
+    key: 'autoAlign', group: 'core',
     label: 'Automatic alignment',
     hint: 'Works out which way the phone is pointing relative to the car, from straight-line driving. Off assumes the phone’s +Y axis points along the bonnet — true of a demo cradle and of nothing else.',
   },
   {
-    key: 'eskf',
+    key: 'eskf', group: 'advanced',
     label: 'ESKF (off — better tail, worse mean)',
     hint: '15-state error-state Kalman filter for position during an outage. Measured: 10.8% mean vs 10.0%, but 17.8% p90 vs 22.7%. On is not simply better, and that is the point.',
   },
@@ -632,7 +651,7 @@ function ConstraintsTab({
 
       <AlignmentCard alignment={alignment} onRecalibrate={onRecalibrate} enabled={controls.autoAlign} />
 
-      {TOGGLES.map((t) => (
+      {TOGGLES.filter((t) => t.group === 'core').map((t) => (
         <Toggle
           key={t.key}
           label={t.label}
@@ -641,6 +660,26 @@ function ConstraintsTab({
           onChange={(v) => onChange({ [t.key]: v } as Partial<EngineControls>)}
         />
       ))}
+
+      <details className="mt-2 border-t border-white/10 pt-2">
+        <summary className="cursor-pointer list-none text-[10px] uppercase tracking-widest text-neutral-500 hover:text-neutral-300">
+          advanced ({TOGGLES.filter((t) => t.group === 'advanced').length} more)
+        </summary>
+        <p className="pb-1.5 pt-1.5 text-[9.5px] leading-snug text-neutral-500">
+          Refinements, and the components that ship off because they measured
+          worse. All still live and switchable. See docs/benchmarks.md for the
+          numbers behind every one that is off.
+        </p>
+        {TOGGLES.filter((t) => t.group === 'advanced').map((t) => (
+          <Toggle
+            key={t.key}
+            label={t.label}
+            hint={t.hint}
+            checked={Boolean(controls[t.key])}
+            onChange={(v) => onChange({ [t.key]: v } as Partial<EngineControls>)}
+          />
+        ))}
+      </details>
 
       <div className="mt-2 border-t border-white/10 pt-2">
         <Toggle

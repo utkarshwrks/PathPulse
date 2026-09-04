@@ -28,7 +28,6 @@ import MatchedRoadLayer from '@/components/MatchedRoadLayer';
 import ConfidenceEllipse from '@/components/ConfidenceEllipse';
 import OfflinePanel from '@/components/OfflinePanel';
 import DemoBar from '@/components/DemoBar';
-import PitchScreen from '@/components/PitchScreen';
 import Welcome from '@/components/Welcome';
 import Splash from '@/components/Splash';
 import AppMenu from '@/components/AppMenu';
@@ -57,7 +56,6 @@ type Panel =
   | 'debug'
   | 'offline'
   | 'benchmarks'
-  | 'pitch'
   | 'device';
 
 export default function Home() {
@@ -467,13 +465,6 @@ export default function Home() {
                 onSelect: () => setPanel('benchmarks'),
               },
               {
-                id: 'pitch',
-                icon: '📈',
-                label: 'The pitch',
-                hint: 'Five slides: problem, approach, results, model, compliance.',
-                onSelect: () => setPanel('pitch'),
-              },
-              {
                 id: 'device',
                 icon: '📱',
                 label: 'Device & build',
@@ -493,12 +484,6 @@ export default function Home() {
       ) : null}
 
       {panel === 'benchmarks' ? <Benchmarks onClose={closePanel} /> : null}
-
-      {panel === 'pitch' ? (
-        <ErrorBoundary area="Pitch">
-          <PitchScreen onClose={closePanel} />
-        </ErrorBoundary>
-      ) : null}
 
       {panel === 'offline' ? (
         <OfflinePanel

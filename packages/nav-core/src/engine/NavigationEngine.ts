@@ -11,6 +11,7 @@ import { AutoAlignment, type AutoAlignState } from '../alignment/autoAlign.js';
 import { StationarityDetector, type StationarityResult } from '../filters/stationarity.js';
 import { Vec3LowPassFilter, Vec3MedianFilter } from '../filters/index.js';
 import { DeadReckoningEngine } from '../deadreckoning/DeadReckoningEngine.js';
+import { formatDrift } from '../state/drift.js';
 import { NavigationStateMachine } from '../state/NavigationStateMachine.js';
 import { EventLog } from '../state/events.js';
 import { RecoveryBlender } from '../fusion/RecoveryBlender.js';
@@ -2089,10 +2090,7 @@ export class NavigationEngine {
         this.log.push({
           t: sample.t,
           type: 'DRIFT_MEASURED',
-          message: `${drift.toFixed(1)}m over ${this.dr.current.distanceTravelledM.toFixed(0)}m (${(
-            (drift / Math.max(1, this.dr.current.distanceTravelledM)) *
-            100
-          ).toFixed(2)}%)`,
+          message: formatDrift(drift, this.dr.current.distanceTravelledM),
           data: { driftM: drift, distanceM: this.dr.current.distanceTravelledM },
         });
       }

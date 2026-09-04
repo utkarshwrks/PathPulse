@@ -1,6 +1,7 @@
 'use client';
 
 import type { MotionContext, NavEvent, NavigationState, SpeedSource } from '@pathpulse/nav-core';
+import { driftRatioPct } from '@pathpulse/nav-core';
 import { MODE_COLORS, MODE_LABELS } from '@/config/modes';
 
 interface HudProps {
@@ -66,11 +67,13 @@ export default function Hud({
   const isDr = mode === 'DEAD_RECKONING';
 
   // Drift as a percentage of distance travelled — the problem statement's own
-  // metric. Guarded against the first metre, where the ratio is meaningless.
-  const driftPct =
-    navState && navState.distanceTravelledM > 1
-      ? (navState.estimatedDriftM / navState.distanceTravelledM) * 100
-      : 0;
+  // metric, and null until there is enough distance to divide by. The old guard
+  // was one metre, which is not a guard: parked on a desk this cell read
+  // 1067.9 %, then 228 %, then 236 %, purely because the denominator was noise.
+  // See nav-core/state/drift.ts.
+  const driftPct = navState
+    ? driftRatioPct(navState.estimatedDriftM, navState.distanceTravelledM)
+    : null;
 
   const lastDrift = [...events].reverse().find((e) => e.type === 'DRIFT_MEASURED');
   const hzLow = updateHz > 0 && updateHz < 10;
@@ -178,7 +181,17 @@ export default function Hud({
             </div>
 
             <div className="tabular mt-3 grid grid-cols-2 gap-x-5 gap-y-0.5 border-t border-white/[0.07] pt-2.5 font-mono text-[11px] leading-relaxed text-neutral-300">
-              <Cell label="drift %" value={`${driftPct.toFixed(1)} %`} accent={isDr} />
+              {/* Metres when the ratio has no denominator yet: the honest
+                  quantity at that scale, and it never reads as a failure. */}
+              <Cell
+                label={driftPct === null ? 'drift est' : 'drift %'}
+                value={
+                  driftPct === null
+                    ? `${(navState?.estimatedDriftM ?? 0).toFixed(1)} m`
+                    : `${driftPct.toFixed(1)} %`
+                }
+                accent={isDr}
+              />
               <Cell label="distance" value={`${navState.distanceTravelledM.toFixed(0)} m`} />
               <Cell
                 label="no gnss"

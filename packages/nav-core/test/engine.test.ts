@@ -238,14 +238,49 @@ describe('NavigationStateMachine — hysteresis', () => {
   });
 
   it('waits the full degraded window before dead reckoning', () => {
+    // Every gap is 1000 ms on purpose. This test is about hysteresis, and it
+    // used to end with a 1100 ms gap by accident — the loop leaves `t` one step
+    // ahead — which quietly made it an assertion about WHICH percentile the
+    // adaptive timeout uses. A uniform cadence makes median and p90 agree, so
+    // the test measures the thing it is named after.
     const sm = new NavigationStateMachine();
     let t = 0;
     for (let i = 0; i < 5; i++, t += 1000) sm.update(t, { hasFix: true, accuracyM: 4, satCount: 9 });
-    sm.update((t += 100), { hasFix: true, accuracyM: 40, satCount: 9 });
+    sm.update(t, { hasFix: true, accuracyM: 40, satCount: 9 });
     expect(sm.current).toBe('GNSS_DEGRADED');
     sm.update((t += 1000), { hasFix: false });
     expect(sm.current).toBe('GNSS_DEGRADED');
     sm.update((t += 1500), { hasFix: false });
+    expect(sm.current).toBe('DEAD_RECKONING');
+  });
+
+  it('★ does not call a bursty indoor receiver an outage', () => {
+    // The bug this was written for. A handset indoors does not deliver fixes
+    // evenly: a burst one second apart, then a hole of several seconds, then
+    // another burst. Judged against the MEDIAN gap the hole is an outage, so
+    // the app flipped to DEAD RECKONING and back every few seconds with
+    // location switched on and fixes arriving the whole time. Judged against
+    // the receiver's own p90 gap, a hole that size is simply how this receiver
+    // behaves.
+    const sm = new NavigationStateMachine();
+    const good = { hasFix: true, accuracyM: 6, satCount: 9 };
+    let t = 0;
+    // Bimodal cadence: mostly 1 s, with 6 s holes — median 1 s, p90 6 s.
+    for (const gap of [1000, 1000, 1000, 6000, 1000, 1000, 1000, 6000, 1000, 1000]) {
+      t += gap;
+      sm.update(t, good);
+    }
+    expect(sm.current).toBe('GNSS');
+    // One more hole of the size this receiver produces routinely.
+    sm.update(t + 6000, { hasFix: false });
+    expect(sm.current).toBe('GNSS');
+
+    // A hole far beyond anything it has ever produced is still an outage. Two
+    // steps, because the machine goes through GNSS_DEGRADED and holds there for
+    // degradedToDrMs before it will free-run — the hysteresis above.
+    sm.update(t + 25_000, { hasFix: false });
+    expect(sm.current).toBe('GNSS_DEGRADED');
+    sm.update(t + 28_000, { hasFix: false });
     expect(sm.current).toBe('DEAD_RECKONING');
   });
 

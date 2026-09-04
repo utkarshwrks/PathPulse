@@ -107,8 +107,22 @@ describe('Hud — the numbers a judge reads', () => {
   });
 
   it('does not divide by zero before the vehicle has moved', () => {
+    // ★ 0.0 % WAS THE WRONG ANSWER, NOT A SAFE ONE ★
+    // It reads as "no drift", which is the flattering interpretation of "no
+    // denominator". Parked, the real HUD showed 1067.9 %, then 228 %, then
+    // 236 % — the guard was one metre, so any creep in the distance produced a
+    // ratio. Below the floor there is now no percentage at all: the cell
+    // relabels to "drift est" and shows metres, which is true at that scale.
     renderHud({ navState: state({ distanceTravelledM: 0, estimatedDriftM: 5 }) });
-    expect(screen.getByText('0.0 %')).toBeTruthy();
+    expect(screen.queryByText('0.0 %')).toBeNull();
+    expect(screen.getByText('5.0 m')).toBeTruthy();
+    expect(screen.getByText('drift est')).toBeTruthy();
+  });
+
+  it('shows a percentage once there is enough distance to divide by', () => {
+    renderHud({ navState: state({ distanceTravelledM: 400, estimatedDriftM: 20 }) });
+    expect(screen.getByText('5.0 %')).toBeTruthy();
+    expect(screen.getByText('drift %')).toBeTruthy();
   });
 
   it('shows confidence as a percentage', () => {
