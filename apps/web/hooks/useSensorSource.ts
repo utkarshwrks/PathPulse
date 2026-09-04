@@ -365,7 +365,35 @@ export function useSensorSource(
         setState((p) => ({ ...p, sourceName: src.capabilities.name }));
         if (pendingPlayRef.current) {
           pendingPlayRef.current = false;
-          void startSource(src);
+          void startSource(src).catch(() => {
+            /**
+             * ★ AVAILABLE IS NOT THE SAME AS STARTABLE ★
+             *
+             * isAvailable() answers "is the plugin in this build?", and the
+             * ladder above trusted that to mean the source would run. It does
+             * not. Android can refuse to start the foreground service at the
+             * moment it is asked — MIUI and HyperOS refuse routinely, and for
+             * apps that are visibly in the foreground — and no check made
+             * beforehand can predict it.
+             *
+             * So the ladder now has a rung after the attempt as well. Losing
+             * the native loop costs the screen-off sample rate and nothing
+             * else: WebSource reads the same sensors through the WebView, and
+             * Live works. Refusing to fall back cost the entire feature.
+             */
+            if (cancelled) return;
+            const fallback = new WebSource();
+            fallback.onSample(handleSample);
+            webRef.current = fallback;
+            setState((p) => ({
+              ...p,
+              // Named for what it is. The native loop was asked for and
+              // refused, and a panel that hides that is how a demo-day
+              // question about screen-off behaviour gets the wrong answer.
+              sourceName: `${fallback.capabilities.name} (native loop refused)`,
+            }));
+            void startSource(fallback);
+          });
         }
       });
       return () => {

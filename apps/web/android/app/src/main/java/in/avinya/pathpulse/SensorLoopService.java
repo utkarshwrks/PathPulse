@@ -285,14 +285,71 @@ public class SensorLoopService extends Service implements SensorEventListener, L
             Log.w(TAG, "no fine location permission — GNSS will not be collected");
             return;
         }
+        /*
+         * ★ GPS_PROVIDER ALONE IS NOT "WHERE AM I" ★
+         *
+         * This asked for the raw GPS provider and nothing else. Outdoors with a
+         * clear sky that is the right answer and the only one worth navigating
+         * on. Indoors — which is where the app is opened, demonstrated and
+         * judged — it delivers nothing at all, for minutes or for ever. The
+         * WebView's own navigator.geolocation returned a 20 m fix in about a
+         * second on the same handset at the same moment, because it asks the
+         * fused provider, which blends WiFi and cell.
+         *
+         * So the symptom was: IMU at 127 Hz, GNSS at 0.00 Hz, mode stuck on
+         * ACQUIRING, and a map that never moved. Every part of the estimator
+         * was working and it had never been told where it was.
+         *
+         * Ask all three. GPS stays authoritative — see onLocationChanged, which
+         * refuses to let a coarse network fix overwrite a recent satellite one —
+         * but a coarse fix is still enough to put the marker in the right city
+         * and start the map, which is the difference between "acquiring" and
+         * "broken" to everyone watching.
+         */
+        boolean any = false;
+        any |= requestFrom(LocationManager.GPS_PROVIDER);
+        any |= requestFrom(LocationManager.NETWORK_PROVIDER);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            any |= requestFrom(LocationManager.FUSED_PROVIDER);
+        }
+        if (!any) Log.w(TAG, "no location provider accepted a request");
+
         try {
-            locationManager.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER, 0L, 0f, this, sensorThread.getLooper());
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 locationManager.registerGnssStatusCallback(gnssCallback, sensorHandler);
             }
         } catch (SecurityException | IllegalArgumentException e) {
-            Log.w(TAG, "could not start GNSS: " + e.getMessage());
+            Log.w(TAG, "could not register GnssStatus: " + e.getMessage());
+        }
+
+        /*
+         * Seed from the last known fix so the map can move before the first
+         * live update arrives. Marked as seeded rather than measured: it may be
+         * minutes old, and the engine must not mistake it for a fresh fix.
+         */
+        try {
+            for (String p : new String[] { LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER }) {
+                Location last = locationManager.getLastKnownLocation(p);
+                if (last != null) {
+                    onLocationChanged(last);
+                    break;
+                }
+            }
+        } catch (SecurityException | IllegalArgumentException ignored) {
+            // Nothing to seed with is not an error.
+        }
+    }
+
+    /** Request updates from one provider. Returns whether it took. */
+    private boolean requestFrom(String provider) {
+        try {
+            if (!locationManager.isProviderEnabled(provider)) return false;
+            locationManager.requestLocationUpdates(provider, 0L, 0f, this, sensorThread.getLooper());
+            return true;
+        } catch (SecurityException | IllegalArgumentException e) {
+            // A provider this device does not have is normal, not a failure.
+            Log.w(TAG, "provider " + provider + " unavailable: " + e.getMessage());
+            return false;
         }
     }
 
@@ -480,12 +537,32 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         // engine's own bias estimators are the answer to that, not a restart.
     }
 
+    /** Elapsed-realtime nanos of the most recent GPS_PROVIDER fix, 0 if none. */
+    private long lastGpsNanos = 0L;
+
+    /** A satellite fix stays authoritative for this long against a coarse one. */
+    private static final long GPS_HOLD_NANOS = 10_000_000_000L;
+
     @Override
     public void onLocationChanged(Location location) {
-        lastLocation = location;
-        lastLocationNanos = Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
+        final long nanos = Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
                 ? location.getElapsedRealtimeNanos()
                 : SystemClock.elapsedRealtimeNanos();
+        final boolean isGps = LocationManager.GPS_PROVIDER.equals(location.getProvider());
+
+        /*
+         * ★ NEVER LET A COARSE FIX OVERWRITE A GOOD ONE ★
+         * Now that three providers are registered, they interleave. A network
+         * fix is typically hundreds of metres wide and arrives on its own
+         * schedule; letting one land on top of a 5 m satellite fix would drag
+         * the estimate sideways and hand the road snapper a position on the
+         * wrong street. While GPS is producing, GPS wins.
+         */
+        if (!isGps && lastGpsNanos != 0L && nanos - lastGpsNanos < GPS_HOLD_NANOS) return;
+
+        if (isGps) lastGpsNanos = nanos;
+        lastLocation = location;
+        lastLocationNanos = nanos;
         gnssCount++;
     }
 

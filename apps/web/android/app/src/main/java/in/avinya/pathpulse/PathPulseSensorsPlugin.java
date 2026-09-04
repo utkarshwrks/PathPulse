@@ -45,10 +45,39 @@ public class PathPulseSensorsPlugin extends Plugin {
 
         SensorLoopService.setListener(this::emit);
         Intent intent = new Intent(getContext(), SensorLoopService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getContext().startForegroundService(intent);
-        } else {
-            getContext().startService(intent);
+        /*
+         * ★ A REFUSED SERVICE MUST NOT KILL THE APP ★
+         *
+         * startForegroundService() throws. On Android 12+ it is
+         * ForegroundServiceStartNotAllowedException; MIUI and HyperOS refuse
+         * more often still, and refuse it for apps that are plainly in the
+         * foreground. This ran unguarded on the CapacitorPlugins handler
+         * thread, so the throw was an uncaught exception on a background
+         * thread: process dead, no dialog, no log the user can see. Measured
+         * on a Redmi running Android 16 — tapping "This phone" returned the
+         * device to its home screen every time.
+         *
+         * The refusal itself is survivable: it costs the screen-off sample
+         * rate, and nothing else. WebSource reads the same sensors through the
+         * WebView. So report it as a failed call and let the caller pick
+         * something that works, which is what the three-source ladder in
+         * useSensorSource.ts already exists to do.
+         *
+         * Catching Exception rather than the specific type on purpose: the
+         * exception class is API 31+, this builds against older, and the
+         * vendor variants are not all the documented one.
+         */
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                getContext().startForegroundService(intent);
+            } else {
+                getContext().startService(intent);
+            }
+        } catch (Exception e) {
+            SensorLoopService.setListener(null);
+            running = false;
+            call.reject("FOREGROUND_SERVICE_REFUSED: " + e.getMessage(), e);
+            return;
         }
         running = true;
         call.resolve(new JSObject().put("started", true).put("alreadyRunning", false));
