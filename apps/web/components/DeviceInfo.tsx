@@ -67,7 +67,7 @@ export default function DeviceInfo({ imuHz, gnssHz, sourceName, onClose }: Devic
                 : 'unknown'
             }
           />
-          <Row k="phase" v="4 — dead reckoning + recovery" />
+          <Row k="phase" v={process.env.NEXT_PUBLIC_PHASE ?? 'unknown'} />
         </Section>
 
         <Section title="Platform">

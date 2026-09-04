@@ -31,6 +31,11 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_BUILD_ID: buildStamp(),
     NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
+    // ★ ONE PLACE, BECAUSE THE LAST ONE WENT STALE ★ The Device screen read a
+    // hardcoded "phase 4" for fourteen phases. That screen exists to answer
+    // "am I running the new build?", so a wrong answer there is worse than no
+    // answer: it is the one label a judge would take at face value.
+    NEXT_PUBLIC_PHASE: '18 — two-wheeler, edge engine, particle filter',
   },
   webpack: (config) => {
     // nav-core uses explicit .js specifiers because that is what real ESM
