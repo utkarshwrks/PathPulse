@@ -205,3 +205,56 @@ describe('the bridge', () => {
     expect(source.status.running).toBe(false);
   });
 });
+
+describe('the signals only this source can supply', () => {
+  it('★ carries C/N0 mean AND spread, which nothing else can', () => {
+    // Phase 13's Model 4 reads both, and neither alone separates a reflected
+    // signal from a spoofed one: multipath lowers the mean and WIDENS the
+    // spread, a spoofer raises the mean and COLLAPSES it. The WebView reports
+    // a satellite count and nothing else, so without GnssStatus these two
+    // features are permanently absent and the model runs on defaults.
+    return connected().then(({ samples }) => {
+      send([
+        {
+          t: 9000,
+          imu: { ax: 0, ay: 0, az: 9.8 },
+          gnss: { lat: 23.16, lon: 79.93, accuracyM: 4, satCount: 11, meanCn0: 41.2, cn0Spread: 2.6 },
+        },
+      ]);
+      expect(samples[0]!.gnss!.meanCn0).toBeCloseTo(41.2, 5);
+      expect(samples[0]!.gnss!.cn0Spread).toBeCloseTo(2.6, 5);
+    });
+  });
+
+  it('treats a zero C/N0 as "not reported", not as a dead sky', () => {
+    // 0 dB-Hz is not a plausible reading. Passed through it would look like
+    // the worst possible signal on every phone that omits the field.
+    return connected().then(({ samples }) => {
+      send([
+        {
+          t: 9100,
+          imu: { ax: 0, ay: 0, az: 9.8 },
+          gnss: { lat: 23.16, lon: 79.93, accuracyM: 4, meanCn0: 0 },
+        },
+      ]);
+      expect(samples[0]!.gnss!.meanCn0).toBeUndefined();
+    });
+  });
+
+  it('carries a barometric pressure through', () => {
+    return connected().then(({ samples }) => {
+      send([{ t: 9200, imu: { ax: 0, ay: 0, az: 9.8 }, baro: { pressureHpa: 1008.4 } }]);
+      expect(samples[0]!.baro!.pressureHpa).toBeCloseTo(1008.4, 5);
+    });
+  });
+
+  it('rejects a pressure in pascals', () => {
+    // 101325 Pa is 1013.25 hPa. Read as hPa it is a hundred kilometres of
+    // altitude, and a unit mix-up crossing a bridge is exactly the kind of
+    // thing that gets fixed on one side and forgotten on the other.
+    return connected().then(({ samples }) => {
+      send([{ t: 9300, imu: { ax: 0, ay: 0, az: 9.8 }, baro: { pressureHpa: 101_325 } }]);
+      expect(samples[0]!.baro).toBeUndefined();
+    });
+  });
+});

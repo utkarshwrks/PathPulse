@@ -176,6 +176,12 @@ export class ForegroundSource implements SensorSource {
         if (heading !== null) fix.headingDeg = heading;
         const sats = num(gnss['satCount']);
         if (sats !== null) fix.satCount = sats;
+        // Phase 13's Model 4 reads both. Only this source can supply them:
+        // the WebView reports a satellite count and nothing else.
+        const meanCn0 = num(gnss['meanCn0']);
+        if (meanCn0 !== null && meanCn0 > 0) fix.meanCn0 = meanCn0;
+        const cn0Spread = num(gnss['cn0Spread']);
+        if (cn0Spread !== null && cn0Spread >= 0) fix.cn0Spread = cn0Spread;
 
         const constellations = gnss['constellations'] as Record<string, unknown> | undefined;
         if (constellations) {

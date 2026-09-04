@@ -7,11 +7,13 @@
  * "The final deliverable must be a working mobile application AND an Edge
  * deployable software engine."
  */
-import { writeFileSync } from 'node:fs';
 import { runEdge } from './runner.js';
 import { GRADES, gyroBiasDegPerHour, parseGrade, type ImuGrade } from './grades.js';
 import { FogSimulatorSource } from './sources/FogSimulatorSource.js';
 import { ReplayFileSource } from './sources/ReplayFileSource.js';
+import { UdpImuSource } from './sources/UdpImuSource.js';
+import { SerialImuSource } from './sources/SerialImuSource.js';
+import { FanOutSink, FileSink, StdoutSink, UdpSink, type StateSink } from './output.js';
 import type { EdgeSource } from './sources/types.js';
 import type { NavigationState } from '@pathpulse/nav-core';
 
@@ -41,14 +43,26 @@ USAGE
   pnpm edge --grade FOG --rate 200 --seconds 60
   pnpm edge --replay ../../data/replay/sim_city_4242.jsonl --rate 200
   pnpm edge --grade TACTICAL --rate 100 --seconds 30 --json out.jsonl
+  pnpm edge --udp-in 5555 --rate 200 --udp-out 5556
+  pnpm edge --serial /dev/ttyUSB0 --baud 921600 --rate 200 --stdout | jq .
+
+INPUT  (exactly one; defaults to the simulator)
+  --grade <name>     PHONE_MEMS | TACTICAL | FOG        (default FOG)
+  --replay <file>    .jsonl or .csv of recorded IMU data
+  --udp-in <port>    listen for JSON IMU datagrams
+  --serial <path>    read an IMU from a serial port (needs the serialport pkg)
+  --baud <rate>      serial baud rate                   (default 921600)
+
+OUTPUT  (any combination; defaults to none but the summary)
+  --json <file>      NavigationState as JSON lines
+  --stdout           NavigationState as JSON lines on stdout, for piping
+  --udp-out <port>   broadcast each NavigationState as a JSON datagram
+  --udp-host <host>  where to send them                 (default 127.0.0.1)
 
 OPTIONS
-  --grade <name>     PHONE_MEMS | TACTICAL | FOG        (default FOG)
   --rate <hz>        target output rate                 (default: grade nominal)
   --seconds <s>      how much stream to run             (default 60)
-  --replay <file>    .jsonl or .csv of recorded IMU data instead of the simulator
   --gnss <ms>        emit a simulated fix this often; 0 = pure INS  (default 0)
-  --json <file>      write every NavigationState as JSON lines
   --quiet            report only, no per-second progress
   --list-grades      print the sensor models and exit
   --help
@@ -94,7 +108,19 @@ async function main(): Promise<void> {
 
   let source: EdgeSource;
   let maxSamples = 0;
-  if (replay) {
+  if (args['udp-in']) {
+    // A live stream has no natural end, so the sample budget still bounds the
+    // run — otherwise `--seconds` would be silently ignored on the one input
+    // where a user is most likely to want it.
+    source = new UdpImuSource(Number(args['udp-in']));
+    maxSamples = Math.round(seconds * rateHz);
+  } else if (args.serial) {
+    source = new SerialImuSource({
+      path: String(args.serial),
+      ...(args.baud ? { baudRate: Number(args.baud) } : {}),
+    });
+    maxSamples = Math.round(seconds * rateHz);
+  } else if (replay) {
     source = new ReplayFileSource(replay);
   } else {
     source = new FogSimulatorSource({
@@ -105,26 +131,33 @@ async function main(): Promise<void> {
     maxSamples = Math.round(seconds * rateHz);
   }
 
-  const jsonPath = args.json ? String(args.json) : null;
-  const jsonLines: string[] = [];
-  const onState = jsonPath
-    ? (s: NavigationState) => {
-        jsonLines.push(JSON.stringify(s));
-      }
-    : undefined;
+  // ★ SINKS ARE STREAMED, NOT ACCUMULATED ★ The first version collected every
+  // NavigationState in an array and wrote it at the end. At 200 Hz a ten-minute
+  // run is 120,000 objects held in memory for no reason, and a run that is
+  // interrupted — which a live UDP or serial stream frequently is — wrote
+  // nothing at all. Each sink now writes as it goes.
+  const sinks: StateSink[] = [];
+  if (args.json) sinks.push(new FileSink(String(args.json)));
+  if (args.stdout) sinks.push(new StdoutSink());
+  if (args['udp-out']) {
+    sinks.push(
+      new UdpSink(Number(args['udp-out']), args['udp-host'] ? String(args['udp-host']) : undefined),
+    );
+  }
+  const sink: StateSink | null = sinks.length === 0 ? null : new FanOutSink(sinks);
+  const onState = sink ? (s: NavigationState) => sink.write(s) : undefined;
 
   console.log(
     `\n  pathpulse-edge  ·  ${GRADES[grade].label}  ·  target ${rateHz} Hz  ·  ${source.name}`,
   );
-  if (!replay) {
+  if (sink) console.log(`  output → ${sink.name}`);
+  if (!replay && !args['udp-in'] && !args.serial) {
     console.log(`  SIMULATED inertial stream — not a recording of real hardware.`);
   }
 
   const report = await runEdge({ source, grade, rateHz, maxSamples, ...(onState ? { onState } : {}) });
 
-  if (jsonPath) {
-    writeFileSync(jsonPath, jsonLines.join('\n') + '\n');
-  }
+  sink?.close();
 
   const f = (n: number, d = 2) => (Number.isFinite(n) ? n.toFixed(d) : 'n/a');
   console.log('');
@@ -141,7 +174,7 @@ async function main(): Promise<void> {
     console.log(`  final mode                ${report.finalState.mode}`);
     console.log(`  distance travelled        ${f(report.finalState.distanceTravelledM, 1)} m`);
   }
-  if (jsonPath) console.log(`  wrote                     ${jsonPath}`);
+  if (sink) console.log(`  output written to         ${sink.name}`);
 
   const meets = report.achievedRateHz >= rateHz;
   console.log('');

@@ -14,6 +14,8 @@
   },
   "scripts": {
     "edge": "tsx src/cli.ts",
+    "docker:build": "docker build -f Dockerfile -t pathpulse-edge ../..",
+    "docker:run": "docker run --rm pathpulse-edge --grade FOG --rate 200 --seconds 30",
     "bench": "tsx src/bench.ts",
     "test": "vitest run",
     "test:watch": "vitest",

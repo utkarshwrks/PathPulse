@@ -1,0 +1,12 @@
+# Build context is the repository root, so this keeps the image small and the
+# build fast. node_modules in particular is several hundred megabytes and is
+# reinstalled inside the image anyway.
+**/node_modules
+**/.next
+**/out
+**/dist
+**/.venv
+apps/web/android
+ml/data
+ml/.venv
+data/replay/*.jsonl

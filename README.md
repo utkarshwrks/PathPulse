@@ -56,7 +56,7 @@ pnpm build        # static export into apps/web/out
 | --- | --- |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` | Static export to `apps/web/out` (this is what Capacitor wraps) |
-| `pnpm test` | All workspace tests (1383) |
+| `pnpm test` | All workspace tests (1418) |
 | `pnpm eval:alignment` | Phase 12: drift vs mount angle, with alignment on and off |
 | `pnpm eval:offroad` | How far the drawn marker is from the nearest road |
 | `pnpm typecheck` | `tsc --noEmit` across every package |
@@ -554,6 +554,92 @@ it backwards.
 
 **Before a demo, in the actual room: open Offline, tap Download, then go into
 aeroplane mode.** That is now a complete preparation rather than a partial one.
+
+## Edge deployment
+
+> *"The final deliverable must be a working mobile application **and** an Edge
+> deployable software engine."* — SIH26168
+
+Not "or". Both, and they are the same estimator.
+
+```
+              nav-core  (pure TypeScript, zero I/O, zero dependencies)
+                                    │
+        ┌───────────────────────────┴───────────────────────────┐
+        │                                                       │
+   Capacitor APK                                          Node edge engine
+   phone MEMS, ~10 Hz                                  external IMU, 200 Hz
+        │                                                       │
+   SensorManager                                    UDP · serial · replay · sim
+   GnssStatus                                                   │
+   foreground service                              file · stdout · UDP broadcast
+```
+
+`packages/edge-engine` contains **no navigation mathematics of its own**. It is
+adapters, a driven loop and a report; every line of estimation is the
+byte-for-byte code the handset runs. That is what Golden Rule #1 was protecting
+all along, and it is why this phase took days rather than weeks.
+
+### Running it
+
+```bash
+pnpm edge --grade FOG --rate 200 --seconds 60          # no hardware needed
+pnpm edge --udp-in 5555 --rate 200 --udp-out 5556      # external IMU on the wire
+pnpm edge --serial /dev/ttyUSB0 --baud 921600 --stdout | jq .
+pnpm edge --replay data/replay/sim_city_4242.jsonl --json out.jsonl
+```
+
+| Input | | Output | |
+| --- | --- | --- | --- |
+| `--grade` | simulated IMU at one of three grades | `--json` | JSON lines to a file |
+| `--replay` | a recorded `.jsonl`/`.csv` | `--stdout` | JSON lines, for piping |
+| `--udp-in` | JSON datagrams from real hardware | `--udp-out` | broadcast to a bus or display |
+| `--serial` | UART, JSON or `t,ax,ay,az,gx,gy,gz` | | |
+
+**UDP is the right wire for an inertial stream**, and TCP is the wrong one: a
+retransmitted IMU sample arrives late, and the engine treats an out-of-order
+timestamp as a clock jump and discards it. The retransmission costs latency and
+buys nothing. Dropping it is correct, and the achieved-rate line says so.
+
+`serialport` is an **optional** dependency. It compiles a native addon, and
+making it required would mean every clone, every CI run and every Docker build
+builds a C++ module in order to run tests that never open a port.
+
+### In a container
+
+```bash
+docker build -f packages/edge-engine/Dockerfile -t pathpulse-edge .
+docker run --rm -p 5555:5555/udp pathpulse-edge --udp-in 5555 --rate 200
+```
+
+Measured inside the image on an M-series Mac:
+
+```
+samples processed         4000
+SUSTAINED RATE            49001 Hz
+target rate               200 Hz
+mean update latency       0.0195 ms
+p99 update latency        0.0896 ms
+✔ sustains 200 Hz — 245x headroom on this machine
+```
+
+The guide's budget is under 5 ms per update. The p99 is **0.09 ms**, about
+fifty times inside it, on a laptop — which is the honest way to read that
+figure: it says the estimator is nowhere near being the bottleneck, not that
+any particular embedded board will hit 200 Hz.
+
+### Sensor grades
+
+The same estimator, told the truth about three different sensors. Only the
+noise and bias model changes between rows; not one line of navigation
+mathematics differs — which is the claim, and `docs/edge-benchmarks.md` is the
+measurement.
+
+> ⚠️ **We do not own a fibre-optic or tactical-grade IMU.** Those rows are
+> datasheet-class noise models driving a simulator, not recordings of hardware.
+> They demonstrate that sensor grade is a *configuration* of this engine. They
+> are not a measurement of any real external unit, and the report says so on
+> every page it appears.
 
 ### The barometer, and the two things that were waiting for it
 

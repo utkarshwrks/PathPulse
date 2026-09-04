@@ -1766,6 +1766,8 @@ export class NavigationEngine {
         accuracyM: sample.gnss.accuracyM,
         ...(sample.gnss.satCount !== undefined ? { satCount: sample.gnss.satCount } : {}),
         ...(sample.gnss.meanCn0 !== undefined ? { meanCn0: sample.gnss.meanCn0 } : {}),
+        ...(sample.gnss.cn0Spread !== undefined ? { cn0Spread: sample.gnss.cn0Spread } : {}),
+        ...(sample.gnss.hdop !== undefined ? { hdop: sample.gnss.hdop } : {}),
         drSpeedMps: this.dr.current.speedMps,
       });
       if (features) {

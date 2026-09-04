@@ -35,6 +35,23 @@ export interface SensorSample {
     /** Mean carrier-to-noise density, dB-Hz. Low values imply multipath. */
     meanCn0?: number;
     /**
+     * Standard deviation of C/N0 across tracked satellites, dB-Hz.
+     *
+     * ★ THE SPREAD SAYS SOMETHING THE MEAN DOES NOT ★ A signal that has
+     * bounced off a building arrives weak while its neighbours arrive normally,
+     * so multipath WIDENS the spread even as it lowers the mean. A spoofer
+     * transmitting one clean signal to every channel does the opposite: the
+     * spread collapses. Phase 13's Model 4 reads both, and neither alone
+     * separates the two cases.
+     *
+     * Requires Android's GnssStatus — the WebView reports a satellite count
+     * and nothing else — so this is absent on every source but the Phase 15
+     * native loop.
+     */
+    cn0Spread?: number;
+    /** Horizontal dilution of precision, when the receiver reports it. */
+    hdop?: number;
+    /**
      * Tracked satellites per constellation, when the platform reports them.
      *
      * The Capacitor WebView reports none of this — it needs Android's

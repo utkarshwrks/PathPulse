@@ -132,6 +132,10 @@ public class SensorLoopService extends Service implements SensorEventListener, L
     private long lastLocationNanos = 0;
     private final Map<String, Integer> constellations = new HashMap<>();
     private int satellitesInView = 0;
+    private float meanCn0 = Float.NaN;
+    private float cn0Spread = Float.NaN;
+    private final float[] lastMag = new float[3];
+    private boolean haveMag = false;
 
     private long imuCount = 0;
     private long gnssCount = 0;
@@ -243,6 +247,7 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         Sensor accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         Sensor gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
         Sensor pressure = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE);
+        Sensor magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
         if (accel != null) sensorManager.registerListener(this, accel, IMU_PERIOD_US, sensorHandler);
         if (gyro != null) sensorManager.registerListener(this, gyro, IMU_PERIOD_US, sensorHandler);
         // ★ THE BAROMETER IS SLOW ON PURPOSE ★ 5 Hz, not 100. It measures a
@@ -251,6 +256,25 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         // returns the same value a hundred times while drawing power to do it.
         if (pressure != null) {
             sensorManager.registerListener(this, pressure, 200_000, sensorHandler);
+        }
+        // ★ THE MAGNETOMETER IS COLLECTED AND NOT USED, ON PURPOSE ★
+        //
+        // The build guide asks for it and it is cheap to read, so it is read —
+        // at 10 Hz, since a magnetic field does not change faster than that in
+        // a car. Nothing in the estimator consumes it, and that is a decision
+        // rather than an omission: a vehicle is a steel box, its own body
+        // distorts the field by tens of degrees, and the distortion changes
+        // with heading. A magnetic heading in a car is not a heading, it is a
+        // heading plus an unknown function of where you are pointing.
+        //
+        // AttitudeEstimator gets its vertical from gravity and its yaw from
+        // the gyroscope, which has no such problem over the minutes an outage
+        // lasts. What the magnetometer IS good for is spotting disturbance —
+        // a field magnitude far from the local 25-65 uT is a nearby motor or a
+        // steel bridge — and that is surfaced as a diagnostic rather than fed
+        // to anything.
+        if (magnetometer != null) {
+            sensorManager.registerListener(this, magnetometer, 100_000, sensorHandler);
         }
     }
 
@@ -287,17 +311,45 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         public void onSatelliteStatusChanged(GnssStatus status) {
             Map<String, Integer> counts = new HashMap<>();
             int inView = 0;
+            // ★ C/N0 OVER THE SATELLITES ACTUALLY USED IN THE FIX ★
+            // Averaging every satellite in view includes ones the receiver
+            // already rejected, which is the population whose weakness is the
+            // reason they were rejected — it would report the sky as worse
+            // than the fix actually is, permanently.
+            double sum = 0;
+            double sumSq = 0;
+            int used = 0;
             for (int i = 0; i < status.getSatelliteCount(); i++) {
                 inView++;
                 if (!status.usedInFix(i)) continue;
                 String name = constellationName(status.getConstellationType(i));
                 Integer previous = counts.get(name);
                 counts.put(name, previous == null ? 1 : previous + 1);
+
+                float cn0 = status.getCn0DbHz(i);
+                if (!Float.isNaN(cn0) && cn0 > 0) {
+                    sum += cn0;
+                    sumSq += cn0 * cn0;
+                    used++;
+                }
             }
             synchronized (constellations) {
                 constellations.clear();
                 constellations.putAll(counts);
                 satellitesInView = inView;
+                if (used > 0) {
+                    double mean = sum / used;
+                    meanCn0 = (float) mean;
+                    // Population standard deviation. Clamped at zero because
+                    // floating point can make a variance of exactly zero come
+                    // out very slightly negative, and sqrt of that is NaN.
+                    cn0Spread = used > 1
+                            ? (float) Math.sqrt(Math.max(0, sumSq / used - mean * mean))
+                            : 0f;
+                } else {
+                    meanCn0 = Float.NaN;
+                    cn0Spread = Float.NaN;
+                }
             }
         }
     };
@@ -324,6 +376,13 @@ public class SensorLoopService extends Service implements SensorEventListener, L
             lastGyro[1] = event.values[1];
             lastGyro[2] = event.values[2];
             haveGyro = true;
+            return;
+        }
+        if (event.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
+            lastMag[0] = event.values[0];
+            lastMag[1] = event.values[1];
+            lastMag[2] = event.values[2];
+            haveMag = true;
             return;
         }
         if (event.sensor.getType() == Sensor.TYPE_PRESSURE) {
@@ -360,6 +419,14 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         // Attached to every sample rather than to its own, because the engine
         // reads pressure off whatever sample carries it and a barometer-only
         // sample would have no IMU for the estimator to step on.
+        if (haveMag) {
+            Map<String, Object> mag = new HashMap<>();
+            mag.put("mx", lastMag[0]);
+            mag.put("my", lastMag[1]);
+            mag.put("mz", lastMag[2]);
+            sample.put("mag", mag);
+        }
+
         if (!Float.isNaN(lastPressureHpa)) {
             Map<String, Object> baro = new HashMap<>();
             baro.put("pressureHpa", lastPressureHpa);
@@ -379,6 +446,12 @@ public class SensorLoopService extends Service implements SensorEventListener, L
                 if (!constellations.isEmpty()) {
                     gnss.put("constellations", new HashMap<>(constellations));
                 }
+                // Phase 13's Model 4 reads both. Neither alone separates a
+                // reflected signal from a spoofed one: multipath lowers the
+                // mean and WIDENS the spread, a spoofer raises the mean and
+                // COLLAPSES it.
+                if (!Float.isNaN(meanCn0)) gnss.put("meanCn0", meanCn0);
+                if (!Float.isNaN(cn0Spread)) gnss.put("cn0Spread", cn0Spread);
             }
             // The fix's own timestamp, on the same monotonic clock, so the web
             // side can tell a held fix from a fresh one.
@@ -460,6 +533,8 @@ public class SensorLoopService extends Service implements SensorEventListener, L
         out.put("bootEpochMs", bootEpochMs);
         out.put("hasGyro", haveGyro);
         out.put("hasBaro", !Float.isNaN(lastPressureHpa));
+        out.put("hasMag", haveMag);
+        out.put("meanCn0", Float.isNaN(meanCn0) ? 0.0 : meanCn0);
         return out;
     }
 

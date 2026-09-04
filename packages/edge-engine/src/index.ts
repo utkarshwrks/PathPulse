@@ -20,3 +20,6 @@ export * from './runner.js';
 export * from './sources/types.js';
 export * from './sources/FogSimulatorSource.js';
 export * from './sources/ReplayFileSource.js';
+export * from './sources/UdpImuSource.js';
+export * from './sources/SerialImuSource.js';
+export * from './output.js';

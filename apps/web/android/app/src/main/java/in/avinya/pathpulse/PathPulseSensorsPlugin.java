@@ -78,6 +78,7 @@ public class PathPulseSensorsPlugin extends Plugin {
         out.put("hasAccelerometer", manager != null && manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null);
         out.put("hasGyroscope", manager != null && manager.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null);
         out.put("hasBarometer", manager != null && manager.getDefaultSensor(Sensor.TYPE_PRESSURE) != null);
+        out.put("hasMagnetometer", manager != null && manager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD) != null);
         // GnssStatus, and therefore a measured constellation breakdown rather
         // than a labelled-simulated one, needs API 24.
         out.put("hasGnssStatus", Build.VERSION.SDK_INT >= Build.VERSION_CODES.N);
