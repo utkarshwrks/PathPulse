@@ -555,11 +555,23 @@ export default function Home() {
                 // how "I chose Live and nothing happened" happened.
                 if (next === 'live') live.start();
                 source.play();
+                // ★ AND GET OUT OF THE WAY ★
+                // The sheet covers the bottom of the map, so starting a source
+                // and leaving it up means the user is watching a panel while
+                // the thing they asked for happens behind it. Reported from the
+                // field as "it doesn't go to my live location": it does, and
+                // the sheet was over it. Only the ✕ closed it.
+                //
+                // Simulation is the exception, and only because picking it
+                // reveals a Route selector — a second decision, in this sheet,
+                // that closing would hide.
+                if (next !== 'simulation') closePanel();
               }}
               onRouteChange={setRouteKey}
               onPlay={() => {
                 if (kind === 'live') live.start();
                 source.play();
+                closePanel();
               }}
               onPause={source.pause}
               onReset={() => {
@@ -568,6 +580,9 @@ export default function Home() {
                 setTrail([]);
                 setFollowing(true);
                 source.play();
+                // Restart is the other half of the same report. It restarts,
+                // then leaves you looking at the panel instead of the run.
+                closePanel();
               }}
             />
           </Sheet>

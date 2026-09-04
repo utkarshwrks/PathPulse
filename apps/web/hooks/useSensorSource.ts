@@ -311,6 +311,28 @@ export function useSensorSource(
     } else {
       let cancelled = false;
       /**
+       * ★ CLEAR THE OUTGOING SOURCE'S STATE FIRST ★
+       * The simulation and replay branches both reset `fix`, `mode` and
+       * `progress` synchronously. This one did not, and it is the only branch
+       * that resolves its source asynchronously — so for the whole of that
+       * await the panel still showed the simulation's last fix and mode, under
+       * the heading "This phone".
+       *
+       * `gnssAvailable` is deliberately NOT cleared here. It means "this source
+       * can produce fixes", startSource() sets it from the real capabilities the
+       * moment the source exists, and page.tsx renders a "Location is off"
+       * banner when it is false. Clearing it during the await would flash that
+       * alarm on every switch to Live, before anything had gone wrong.
+       */
+      setState((p) => ({
+        ...p,
+        fix: null,
+        mode: 'INITIALIZING',
+        sourceName: 'This phone — starting…',
+        isRunning: false,
+        progress: 0,
+      }));
+      /**
        * ★ PHASE 15 — THREE SOURCES, MOST CAPABLE FIRST ★
        *
        * ForegroundSource is the native SensorManager loop inside a foreground

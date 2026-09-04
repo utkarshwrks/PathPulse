@@ -225,7 +225,11 @@ describe('useSensorSource — simulation', () => {
 describe('useSensorSource — live', () => {
   it('resolves a live source without a route', async () => {
     const { result } = renderHook(() => useSensorSource('live', 'city'));
-    await waitFor(() => expect(result.current.sourceName).not.toBe(''));
+    // Waits for the RESOLVED name, not merely a non-empty one. The branch now
+    // shows "This phone — starting…" during the await — deliberately, so the
+    // panel stops showing the outgoing simulation's name under the heading
+    // "This phone" — and an emptiness check would pass on that placeholder.
+    await waitFor(() => expect(result.current.sourceName).toMatch(/browser|capacitor/i));
     // In jsdom this is the browser source; inside the APK it resolves to the
     // Capacitor one. Same interface either way.
     expect(result.current.sourceName).toMatch(/browser|capacitor/i);
