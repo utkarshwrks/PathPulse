@@ -432,3 +432,35 @@ guard was written before the model was measured, and it held.
 
 The mechanism, the bound, the feature contract and the training pipeline are
 all in place and tested. What is missing is data worth training on.
+
+
+---
+
+# Do the models transfer to our simulated logs?
+
+```bash
+python ml/check_sim_transfer.py
+```
+
+**No, and that is why `docs/benchmarks.md` has no AI row.**
+
+| | on SIMULATED logs | on held-out REAL data |
+|---|---|---|
+| Speed regressor | 8.0–20.7 m/s MAE, correlation +0.02 to +0.21 | **2.93 m/s MAE, R² 0.79** |
+| Motion classifier | 12.8 % accuracy (predicts IDLING 64–85 % of the time) | **57.4 % accuracy, 0.480 macro-F1** |
+
+The speed model answers roughly the same speed whether the simulated vehicle is
+doing 34 or 81 km/h. The classifier calls almost everything IDLING. Both key on
+a road-and-tyre vibration spectrum, and the simulator's IMU is one 20 Hz sine
+plus Gaussian noise — the signal they were trained to read is simply not there.
+
+**★ This is a statement about the logs, not about the models. ★** Both are
+measured properly on held-out real journeys, and those are the numbers quoted
+everywhere else. Publishing an ablation row from simulated logs would produce
+something that looks like a benchmark and is not one — the same trap the
+alignment evaluation avoids by measuring on rotated real IMU rather than adding
+a misleading row.
+
+Re-run this check after any change to the simulator's IMU synthesis. If the
+numbers ever come good, the simulator has become realistic enough to carry an
+ML row, and the ablation should gain one.
