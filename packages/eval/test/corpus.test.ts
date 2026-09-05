@@ -15,7 +15,7 @@ import { listLogs, readLog } from '../src/paths.js';
  * This happened: the Phase 10 backup log, which has a 60 s outage baked in,
  * was written into data/replay/. The headline moved from 10.0% mean / 22.6%
  * p90 to 19.0% / 53.7% and nothing failed. It was caught by the final audit
- * comparing the generated table against the figure in PROJECT_STATUS.md — one
+ * comparing the generated table against the figure in MASTER.md — one
  * step later and it would have been on a slide.
  */
 

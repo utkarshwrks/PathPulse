@@ -162,7 +162,7 @@ gap between them is the drift.
 These need a phone and a stopwatch — no test can do them.
 
 ☐ **Battery.** Note %, run the simulation continuously for 30 minutes with the
-screen on, note % again. Record the drop in `PROJECT_STATUS.md`.
+screen on, note % again. Record the drop in your field notes.
 ☐ **Backup recording.** Screen-record one clean full run (§2) and keep the file
 somewhere that does not need a network to reach.
 

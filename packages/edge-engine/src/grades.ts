@@ -55,7 +55,7 @@ export const GRADES: Record<ImuGrade, GradeProfile> = {
     grade: 'PHONE_MEMS',
     label: 'Phone MEMS',
     // What a WebView actually delivers, not what the chip can do. The handset
-    // build measures ~50-60 Hz and PROJECT_STATUS records the reasons.
+    // build measures ~50-60 Hz and MASTER.md records the reasons.
     nominalRateHz: 50,
     gyroNoiseRadS: 0.002,
     // ~206 deg/hr. This is the number that makes unaided heading hopeless

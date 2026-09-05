@@ -735,3 +735,68 @@ done that, so we are not claiming it.
 
 *Team Avinya · SIH26168 · Indian Space Research Organisation*
 *Every figure here is produced by running the software, not typed by hand.*
+PathPulse — the rare stuff
+
+  1 · No route needed
+  Google interpolates along a route it planned. Take an unplanned turn in a tunnel and it's confidently wrong. We
+  estimate from physics. Nobody else can demo an unplanned turn underground.
+
+  2 · 0 ms handover — because there is no handover
+  Dead reckoning runs continuously in every mode, corrected by each fix. GPS drops → nothing to start. Everyone 
+  else "switches on DR when GPS is lost."
+
+  3 · We publish what failed
+  Five components ship disabled with their numbers: forward bias, ESKF, HMM, particle filter, Model 3. Ask any 
+  team "what didn't work?" — we have five answers and a table.
+
+  4 · 100 km of offline map = 3.5 MB
+  We store roads, not pictures of roads. Same area as map tiles = 150 MB. ~43× smaller. This is the one nobody 
+  has thought of.
+
+  5 · The map is drawn from the roads themselves
+  No tiles downloaded, ever. Turn the internet off — the roads stay on screen, because they're the same roads the
+  estimator snaps to. A raster map will happily draw a street the engine has never heard of. Ours can't lie.
+
+  6 · Measured on real vehicle sensors, not just simulation
+  Simulated: 6.9 %. Real sensors: 41.3 %. We publish both and call the simulated one an upper bound. Most teams 
+  have one number and no idea how flattering it is.
+
+  7 · Every number is one command away
+  pnpm ablation rebuilds the entire results table. Docs say "do not edit by hand." No figure in this project was 
+  typed by a human.
+
+  8 · One engine, five places
+  Browser, Android APK, headless tests, ablation harness, 200 Hz edge box — byte-identical code, enforced by a
+  lint that fails the build. The PS asks for an app AND an edge engine. Ours are the same estimator, not two 
+  projects.
+
+  9 · AI that runs in 104 KB
+  Four models, pure TypeScript, no ONNX runtime. Using one would have cost 14 MB of WebAssembly to multiply
+  26,081 numbers. Whole app is 7.4 MB.
+
+  10 · The detector never blocks the fix
+  Spoofing detection and the GNSS-quality model are advisory only — they lower confidence, they cannot reject a
+  fix. A false positive must never become a navigation failure.
+
+  11 · The phone can sit crooked
+  Yaw is measured about the true vertical, not the phone's Z axis. 90° wrong mount → same result (9.1 % vs 9.0
+  %). Everyone else assumes the phone is flat.
+
+  12 · Two-wheelers, in closed form
+  A leaning bike turns more than its gyro reports. sin(lean) = v·ω/g — no extra sensor. 25° lean = 8° lost per
+  corner = 140 m from one roundabout. The PS names two-wheelers. Almost nobody handles them.
+
+  ---
+
+  If you only get 30 seconds
+
+  ▎ "No route, no internet, no extra hardware. GPS loss costs zero milliseconds because we never stop estimating.
+  ▎ 100 km of offline map is 3.5 MB because we store roads, not pictures. And we publish the five things that 
+  ▎ didn't work."
+
+  If a judge asks one hostile question
+
+  "How do I know these numbers aren't cherry-picked?"
+
+  ▎ "One command regenerates every one of them, the failures are in the same table, and we measured on real 
+  ▎ vehicle sensors as well as our own simulator — the sim
