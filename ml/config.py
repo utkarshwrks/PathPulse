@@ -26,18 +26,54 @@ EXPORT = ROOT / "export"
 # vibration features the guide hopes to capture are not there to capture.
 #
 # We train at the dataset's native rate and decimate the phone's stream to
-# match at inference. The window is still 2 seconds, which is what actually
-# matters. This also happens to be the rate the engine emits at.
+# match at inference. This also happens to be the rate the engine emits at.
 SAMPLE_RATE_HZ = 10
-WINDOW_SECONDS = 2.0
-WINDOW_SAMPLES = int(SAMPLE_RATE_HZ * WINDOW_SECONDS)  # 20
-WINDOW_STRIDE = WINDOW_SAMPLES // 2                    # 50 % overlap
+
+# ★ SIX SECONDS, NOT TWO — AND ONLY BECAUSE OF THE DERIVED CHANNELS ★
+#
+# The window was 2 s because the build guide said so. Measured on the committed
+# sequence-disjoint split, longer is better, but ONLY once the model is given
+# mount-invariant channels to look at:
+#
+#   channels        window    test MAE     r2
+#   raw              2 s      2.909 m/s   0.788      <- what shipped
+#   raw + derived    2 s      2.909       0.787
+#   raw              6 s      2.994       0.781      <- longer, and WORSE
+#   raw + derived    6 s      2.758       0.814      <- what ships now
+#
+# The raw-only row at 6 s is the interesting one. More of a signal the model
+# cannot align is not more information: without a gravity reference the extra
+# four seconds are four more seconds of an unknown rotation, and the model does
+# worse than it did with two. The two changes are not independent and must not
+# be reasoned about separately.
+#
+# 6 s of history is also what the phone must buffer before the model answers at
+# all. That is 6 s of a cold start, against 2 s before — acceptable because the
+# engine holds the GNSS speed for up to 12 s anyway and only consults this
+# model during an outage, by which time the buffer has long been full.
+WINDOW_SECONDS = 6.0
+WINDOW_SAMPLES = int(SAMPLE_RATE_HZ * WINDOW_SECONDS)  # 60
+WINDOW_STRIDE = SAMPLE_RATE_HZ                         # 1 s
 
 # ── Channels ─────────────────────────────────────────────────────────────────
 # Order is a contract. It matches SensorSample.imu in packages/nav-core:
 # specific force in m/s^2 (gravity included), angular rate in rad/s.
-CHANNELS = ["ax", "ay", "az", "gx", "gy", "gz"]
-N_CHANNELS = len(CHANNELS)
+RAW_CHANNELS = ["ax", "ay", "az", "gx", "gy", "gz"]
+
+# ★ WHAT THE MODEL READS, BEYOND WHAT THE SENSOR REPORTS ★
+#
+# Six more channels, derived from the six above, every one of them invariant to
+# how the phone is held. See ml/derived.py for the arithmetic and for why it is
+# the same arithmetic the engine already performs.
+#
+# THIS ORDER IS A CONTRACT with ML_DERIVED_CHANNEL_NAMES in
+# packages/nav-core/src/ml/speedModel.ts. Reordering it leaves a model that
+# still runs, still looks confident, and reads yaw rate as an acceleration.
+DERIVED_CHANNELS = ["a_mag", "a_vert", "a_horiz", "w_mag", "w_vert", "w_horiz"]
+
+CHANNELS = RAW_CHANNELS + DERIVED_CHANNELS
+N_CHANNELS = len(CHANNELS)          # 12, what the network sees
+N_RAW_CHANNELS = len(RAW_CHANNELS)  # 6, what the sensor gives
 
 # ── Split ────────────────────────────────────────────────────────────────────
 # SEQUENCE-WISE, never random. Windows overlap by 50 %, so a random split would

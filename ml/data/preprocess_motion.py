@@ -45,7 +45,7 @@ from config import (  # noqa: E402
     MOTION_TURN_RATE_RADS,
     MOTION_WINDOW_SAMPLES,
     MOTION_WINDOW_STRIDE,
-    N_CHANNELS,
+    N_RAW_CHANNELS,
     PROCESSED,
     RAW,
     SEED,
@@ -321,7 +321,7 @@ def window(seq: dict) -> tuple[np.ndarray, np.ndarray]:
     labels = label_sequence(seq)
     starts = range(0, len(x) - MOTION_WINDOW_SAMPLES + 1, MOTION_WINDOW_STRIDE)
     if not starts:
-        return np.empty((0, MOTION_WINDOW_SAMPLES, N_CHANNELS)), np.empty(0, dtype=np.int64)
+        return np.empty((0, MOTION_WINDOW_SAMPLES, N_RAW_CHANNELS)), np.empty(0, dtype=np.int64)
 
     X = np.stack([x[s : s + MOTION_WINDOW_SAMPLES] for s in starts])
     y = [
@@ -436,7 +436,7 @@ def main() -> None:
 
     # The scaler is fit on TRAIN ONLY. Fitting it on everything leaks the test
     # set's distribution into training and flatters every number after it.
-    flat = Xtr.reshape(-1, N_CHANNELS)
+    flat = Xtr.reshape(-1, N_RAW_CHANNELS)
     mean = flat.mean(axis=0)
     std = flat.std(axis=0)
     std[std == 0] = 1.0

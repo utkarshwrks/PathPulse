@@ -2,9 +2,9 @@
  * The SpeedCNN forward pass, in pure TypeScript (Phase 8B).
  *
  * ★ WHY NOT ONNX RUNTIME? ★
- * Because it costs 14 MB of WebAssembly to evaluate 26081 parameters. That
+ * Because it costs 14 MB of WebAssembly to evaluate 27041 parameters. That
  * takes the APK from 5.4 MB to roughly 20 MB — for a model whose weights are
- * 104 KB — and onnxruntime-web additionally fails Next's Terser pass, so it
+ * 108 KB — and onnxruntime-web additionally fails Next's Terser pass, so it
  * does not even build. Three convolutions and two dense layers do not need a
  * general-purpose graph runtime.
  *
@@ -23,7 +23,7 @@
  * which is exact and removes a layer that is easy to get wrong at inference.
  */
 
-import { ML_CHANNELS, ML_SAMPLE_RATE_HZ, ML_WINDOW_SAMPLES } from './speedModel.js';
+import { ML_MODEL_CHANNELS, ML_SAMPLE_RATE_HZ, ML_WINDOW_SAMPLES } from './speedModel.js';
 
 /** One layer of the exported network. Mirrors `export_folded_weights()`. */
 export type SpeedCnnLayer =
@@ -318,7 +318,10 @@ export function parseCnnWeights(
       `rate mismatch: model wants ${sampleRateHz} Hz, engine decimates to ${ML_SAMPLE_RATE_HZ}`,
     );
   }
-  const wantChannels = expect.channels ?? ML_CHANNELS;
+  // The width the NETWORK reads, not the width the ring stores. Those differ
+  // now that six channels are derived from the six the sensor gives, and
+  // validating against the ring's width would reject every real model file.
+  const wantChannels = expect.channels ?? ML_MODEL_CHANNELS;
   const channels = j['channels'];
   if (!Array.isArray(channels) || channels.length !== wantChannels) {
     throw new Error(

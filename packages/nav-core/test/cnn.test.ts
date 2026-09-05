@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   decodeFloat32,
-  ML_CHANNELS,
+  ML_MODEL_CHANNELS,
   ML_WINDOW_SAMPLES,
   parseSpeedCnnWeights,
   runSpeedCnn,
@@ -49,9 +49,9 @@ describe('decodeFloat32', () => {
 describe('SpeedCNN weights', () => {
   it('loads with the shape the engine expects', () => {
     expect(weights.windowSamples).toBe(ML_WINDOW_SAMPLES);
-    expect(weights.channels).toHaveLength(ML_CHANNELS);
+    expect(weights.channels).toHaveLength(ML_MODEL_CHANNELS);
     expect(weights.sampleRateHz).toBe(10);
-    expect(weights.scaler.mean).toHaveLength(ML_CHANNELS);
+    expect(weights.scaler.mean).toHaveLength(ML_MODEL_CHANNELS);
   });
 
   it('has the architecture the guide specifies: 3 convs, 2 pools, 2 dense', () => {
@@ -136,7 +136,7 @@ describe('runSpeedCnn vs PyTorch', () => {
   });
 
   it('produces a finite answer for an all-zero window', () => {
-    const z = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES);
+    const z = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES);
     expect(Number.isFinite(runSpeedCnn(weights, z))).toBe(true);
   });
 });
@@ -145,7 +145,7 @@ describe('CnnSpeedPredictor', () => {
   it('satisfies the SpeedPredictor contract', () => {
     const p = new CnnSpeedPredictor(weights);
     expect(p.isReady()).toBe(true);
-    expect(p.scaler.mean).toHaveLength(ML_CHANNELS);
+    expect(p.scaler.mean).toHaveLength(ML_MODEL_CHANNELS);
     expect(Number.isFinite(p.predict(new Float32Array(probes.inputs[0]!)))).toBe(true);
   });
 

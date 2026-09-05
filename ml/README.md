@@ -50,21 +50,24 @@ sequences asked for, rather than cloning 40 hours of driving.
 
 | guide says | we did | why |
 | --- | --- | --- |
-| resample to 50 Hz, 100-sample window | **10 Hz, 20-sample window** | IO-VNBD's phone log *is* 10 Hz. Upsampling would make 80 of every 100 samples interpolation — no information above 5 Hz exists to recover. The window is still 2 s, which is what matters, and the app decimates to match. |
+| resample to 50 Hz, 100-sample window | **10 Hz, 60-sample window** | IO-VNBD's phone log *is* 10 Hz. Upsampling would make 80 of every 100 samples interpolation — no information above 5 Hz exists to recover. The window is 6 s rather than the guide's 2 s, measured; the app decimates to match. |
+| six raw IMU channels | **six raw + six derived** | The derived channels are mount-invariant and are what the engine already computes at runtime. Without them the longer window makes the model worse rather than better. |
 | Conv/pool stack unpadded | same layers, `padding='same'` | Two unpadded pools on 20 samples leave 2 timesteps before a kernel of 3. It would not run. |
 | 36 statistical features | **42** | The guide lists seven statistics across six axes. 7 × 6 = 42; the list won over the arithmetic. |
-| export ONNX **and** TFLite | **ONNX + a pure-TS runtime** | ONNX Runtime needs 14 MB of WASM to evaluate 26081 parameters — the APK would go from 5.4 MB to ~20 MB — and it fails Next's Terser pass. nav-core evaluates the network itself instead. ONNX is still exported and verified; it is the interoperable artefact and the reference the TypeScript is tested against. TensorFlow has no Python 3.14 wheel, so no TFLite. |
+| export ONNX **and** TFLite | **ONNX + a pure-TS runtime** | ONNX Runtime needs 14 MB of WASM to evaluate 27041 parameters — the APK would go from 5.4 MB to ~20 MB — and it fails Next's Terser pass. nav-core evaluates the network itself instead. ONNX is still exported and verified; it is the interoperable artefact and the reference the TypeScript is tested against. TensorFlow has no Python 3.14 wheel, so no TFLite. |
 
 ## Pipeline
 
 ```
 data/download.py      LFS-aware fetch of the subset
 data/preprocess.py    windows, augmentation, sequence-wise split, scaler
-models/speed_cnn.py   the CNN (26081 params) + a ridge baseline
-train.py              Huber + Adam + cosine, early stopping
+derived.py            the six mount-invariant channels (twin of speedModel.ts)
+models/speed_cnn.py   the CNN (27041 params) + a ridge baseline
+train.py              Huber + Adam + cosine, early stopping ON DRIFT
 evaluate_position.py  ★ the position plot
 export.py             ONNX + int8, verified against PyTorch
 check_sim_transfer.py why there is no full_ml ablation row
+experiments/          the measurements behind the window and the channels
 ```
 
 ### Splits are sequence-wise, never random
@@ -104,26 +107,84 @@ identical run. Gravity is the one absolute reference in a window, and a
 uniform rotation — which puts the phone upside-down as often as upright —
 destroys it while posing a harder problem than reality ever will.
 
+## What the model reads
+
+Twelve channels over a **six-second** window, not six over two.
+
+The six raw device-frame channels are still there. Beside them are six derived
+from them, every one invariant to how the phone is held — `|a|`, the component
+of `a` along gravity, the magnitude of what is left in the horizontal plane,
+and the same three for the gyroscope. `ml/derived.py` has the arithmetic.
+
+The point is that this was information the model was being denied. It read the
+raw device frame and had to LEARN rotation invariance from the mounting
+augmentation — a geometry problem with a closed-form answer — while
+`AttitudeEstimator`, in nav-core, computes that answer every sample at runtime
+because dead reckoning cannot work without it.
+
+The two changes are not separable, and the ablation says so:
+
+| channels | window | test MAE | R² |
+| --- | --- | --- | --- |
+| raw | 2 s | 2.909 m/s | 0.788 |
+| raw + derived | 2 s | 2.909 | 0.787 |
+| raw | 6 s | **2.994** | 0.781 |
+| **raw + derived** | **6 s** | **2.758** | **0.814** |
+
+Longer alone is *worse*: more of a signal the model cannot align is not more
+information. Capacity does not help either — 59k and 103k parameters both score
+worse than 27k on 40k training windows. See `experiments/README.md`.
+
 ## Results
 
-Held out: `Vw02` and `S1`, 10443 windows, never trained on.
+Held out: `Vw02` and `S1`, never trained on.
 
-| model | MAE | RMSE | R² |
-| --- | --- | --- | --- |
-| constant (training mean) | 7.24 m/s | 8.46 | −0.00 |
-| ridge, 42 statistics | 4.29 m/s | 5.28 | 0.61 |
-| **SpeedCNN (26081 params)** | **2.93 m/s** | **3.91** | **0.79** |
+| model | MAE | RMSE | R² | stopped-window MAE | 30 s drift | signed |
+| --- | --- | --- | --- | --- | --- | --- |
+| constant (training mean) | 7.24 m/s | 8.46 | −0.00 | 12.71 m/s | 89.7 % | +56.6 % |
+| ridge, 42 statistics | 3.78 m/s | 4.83 | 0.67 | 6.47 m/s | 44.1 % | +38.9 % |
+| **SpeedCNN (27041 params)** | **2.94 m/s** | **3.85** | **0.79** | **1.41 m/s** | **19.5 %** | **+0.4 %** |
 
-The deep model earns its place — it beats the linear baseline by 32 % — and both
-comfortably beat answering with the mean.
+### ★ MAE IS NOT WHAT A DEAD-RECKONING SYSTEM PAYS FOR ★
 
-**2.93 m/s is 10.5 km/h, and the guide's bar is "under 2 m/s is good".** We do
-not meet it, and the reason is physical rather than a tuning failure: the signal
-that encodes absolute speed is tyre and road vibration, most of which lives
-above the 5 Hz Nyquist limit of a 10 Hz recording. An in-sequence upper bound —
-training and testing on the same routes, which leaks route identity and is
-therefore optimistic — reaches only 2.50 m/s. That is the ceiling this data
-supports, not the ceiling of the method.
+The last two columns are new, and they are the reason this model was retrained
+at all. The engine INTEGRATES this output. Over a 30 s outage a zero-mean 3 m/s
+error largely cancels; a 1 m/s BIAS does not — it is 30 metres of invented
+distance, every time, and it is what puts the marker in a field. MAE scores
+those two models identically.
+
+That was not hypothetical. Measured directly against the weights that had been
+shipping, on these same held-out sequences:
+
+| | shipped | now |
+| --- | --- | --- |
+| MAE | 2.929 m/s | 2.942 m/s |
+| stopped-window MAE | 1.570 | **1.413** |
+| mean 30 s drift | 21.60 % | **19.48 %** |
+| p90 30 s drift | 43.44 % | **38.12 %** |
+| **signed 30 s drift** | **+8.53 %** | **+0.38 %** |
+
+The MAE did not move. The systematic over-statement of distance — eight and a
+half percent on every thirty-second stretch of a held-out journey — did, and
+nothing in the old metrics could see it.
+
+Two changes got it there. The derived channels, which cut stopped-window error;
+and **early stopping on drift rather than on validation loss**, because the
+epoch with the best per-window score is not the epoch that drifts least, and
+choosing on loss was choosing the biased one.
+
+The ridge baseline is refit on the same windows and its numbers move too — and
+the gap widens where it matters: the deep model beats it by 22 % on MAE and by
+56 % on drift.
+
+**2.94 m/s is 10.6 km/h, and the guide's bar is "under 2 m/s is good".** We
+still do not meet it, and the reason is physical rather than a tuning failure:
+the signal that encodes absolute speed is tyre and road vibration, most of which
+lives above the 5 Hz Nyquist limit of a 10 Hz recording. An in-sequence upper
+bound — training and testing on the same routes, which leaks route identity and
+is therefore optimistic — reaches only 2.50 m/s. That is the ceiling this data
+supports, not the ceiling of the method. What the retrain bought is not a lower
+MAE; it is the same MAE without the bias.
 
 ### The position plot
 
@@ -174,26 +235,26 @@ PyTorch** on 512 real windows.
 
 | | size | max deviation from PyTorch |
 | --- | --- | --- |
-| float32 | 103.2 KB | 7.6 × 10⁻⁶ m/s |
-| int8 | 35.2 KB | 0.588 m/s max, 0.088 mean |
+| float32 | 106.9 KB | 7.6 × 10⁻⁶ m/s |
+| int8 | 36.2 KB | 0.631 m/s max, 0.112 mean |
 
-Against a model whose own error is 2.93 m/s, an 0.088 m/s quantisation cost is
+Against a model whose own error is 2.94 m/s, an 0.112 m/s quantisation cost is
 free.
 
 **But the app does not load either of them.** ONNX Runtime costs 14 MB of
-WebAssembly to evaluate a 26081-parameter model; that alone would take the APK
+WebAssembly to evaluate a 27041-parameter model; that alone would take the APK
 from 5.4 MB to roughly 20 MB, and `onnxruntime-web` additionally breaks Next's
 Terser pass. Three convolutions and two dense layers do not need a
 general-purpose graph runtime.
 
 So `export.py` also writes **`speed_model.json`** — the same weights with
-BatchNorm folded into the preceding convolutions, base64 float32, **138 KB** —
+BatchNorm folded into the preceding convolutions, base64 float32, **140 KB** —
 and `packages/nav-core/src/ml/cnn.ts` evaluates the network in about 150 lines
-of pure TypeScript. **That JSON plus `scaler.json` is 135.8 KB, which exceeds
-the guide's 100 KB budget** — 26081 float32 weights are 104 KB before any
+of pure TypeScript. **That JSON plus `scaler.json` is 141.5 KB, which exceeds
+the guide's 100 KB budget** — 27041 float32 weights are 108 KB before any
 encoding, so the target is unreachable at this parameter count without
 quantising the shipped weights as well. `export.py` measures and reports the
-file the app actually opens rather than the 35 KB ONNX it does not. That keeps it inside nav-core, which means the Phase 16 edge
+file the app actually opens rather than the 36 KB ONNX it does not. That keeps it inside nav-core, which means the Phase 16 edge
 engine and the eval harness get inference with no new dependency: the purity
 rule paying off again.
 
@@ -446,7 +507,7 @@ python ml/check_sim_transfer.py
 
 | | on SIMULATED logs | on held-out REAL data |
 |---|---|---|
-| Speed regressor | 8.0–20.7 m/s MAE, correlation +0.02 to +0.21 | **2.93 m/s MAE, R² 0.79** |
+| Speed regressor | 8.0–20.7 m/s MAE, correlation +0.02 to +0.21 | **2.94 m/s MAE, R² 0.79, unbiased over an outage** |
 | Motion classifier | 12.8 % accuracy (predicts IDLING 64–85 % of the time) | **57.4 % accuracy, 0.480 macro-F1** |
 
 The speed model answers roughly the same speed whether the simulated vehicle is

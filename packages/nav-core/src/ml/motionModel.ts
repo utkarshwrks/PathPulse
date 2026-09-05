@@ -39,6 +39,7 @@
  */
 import { ML_CHANNELS, ML_SAMPLE_RATE_HZ } from './speedModel.js';
 import { parseCnnWeights, runCnn, type SpeedCnnWeights } from './cnn.js';
+import { ML_RAW_CHANNELS } from './speedModel.js';
 
 /**
  * One second of IMU at 10 Hz.
@@ -117,6 +118,13 @@ export function parseMotionCnnWeights(raw: unknown): SpeedCnnWeights {
   const w = parseCnnWeights(raw, {
     architecture: 'MotionCNN',
     windowSamples: MOTION_WINDOW_SAMPLES,
+    // ★ STATED, NOT INHERITED ★
+    // The parser is shared with the speed model, which reads the six raw
+    // channels PLUS six derived from them. This classifier reads only the raw
+    // six. Leaving the width to the parser's default made it the speed model's
+    // width the day that changed, and every motion model on disk was rejected
+    // as a channel mismatch — a failure in a file that had not been touched.
+    channels: ML_RAW_CHANNELS,
   });
 
   // The output layer has to have exactly one unit per class, or the argmax is

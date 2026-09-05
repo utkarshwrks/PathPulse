@@ -268,8 +268,13 @@ def main() -> None:
     #      where TS and PyTorch agree with each other and both are wrong,
     #      because the wrong weights were exported.
     #
-    # 256 windows is enough for a stable MAE and keeps the fixture ~600 KB.
-    n_probe = 256
+    # ★ SIZED AGAINST THE FIXTURE, NOT PICKED ★
+    # A window is now 12 channels x 60 samples = 720 numbers, six times what it
+    # was at 6 x 20, so the 256 windows this used to keep would be a 3.6 MB
+    # test fixture in the repo. 128 windows at four decimal places is ~650 KB
+    # and still gives a stable MAE; four places is far inside the 1e-3 the
+    # agreement test compares to, on inputs that are standardised to ~N(0,1).
+    n_probe = 128
     probes = probe[:n_probe]
     labels = npz["y_test"][:n_probe]
     with torch.no_grad():
@@ -280,7 +285,7 @@ def main() -> None:
         json.dumps(
             {
                 "note": "Inputs are already scaler-normalised, (batch, channel, time).",
-                "inputs": [[round(v, 6) for v in w] for w in probes.reshape(n_probe, -1).tolist()],
+                "inputs": [[round(v, 4) for v in w] for w in probes.reshape(n_probe, -1).tolist()],
                 "expected": [round(v, 6) for v in expected.tolist()],
                 "labels": [round(float(v), 6) for v in labels.tolist()],
                 "torchMaeMps": round(torch_mae, 6),

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   ML_CHANNELS,
+  ML_MODEL_CHANNELS,
+  ML_RAW_CHANNELS,
   ML_SAMPLE_RATE_HZ,
   ML_WINDOW_SAMPLES,
   MockSpeedPredictor,
@@ -43,9 +45,10 @@ describe('SpeedWindowBuffer', () => {
   it('decimates a 50 Hz stream to the model\'s 10 Hz', () => {
     const b = new SpeedWindowBuffer();
     let accepted = 0;
-    // 2 seconds of 50 Hz input = 100 samples.
-    for (let i = 0; i < 100; i++) if (b.push(i * 20, 1, 2, 3, 4, 5, 6)) accepted++;
-    // 10 Hz over 2 s is 20 samples, give or take the boundary.
+    // A full window of 50 Hz input: 5 raw samples per accepted one.
+    for (let i = 0; i < ML_WINDOW_SAMPLES * 5; i++) {
+      if (b.push(i * 20, 1, 2, 3, 4, 5, 6)) accepted++;
+    }
     expect(accepted).toBeGreaterThanOrEqual(ML_WINDOW_SAMPLES);
     expect(accepted).toBeLessThanOrEqual(ML_WINDOW_SAMPLES + 1);
   });
@@ -53,8 +56,8 @@ describe('SpeedWindowBuffer', () => {
   it('accepts every sample of a stream already at 10 Hz', () => {
     const b = new SpeedWindowBuffer();
     let accepted = 0;
-    for (let i = 0; i < 20; i++) if (b.push(i * 100, 1, 1, 1, 1, 1, 1)) accepted++;
-    expect(accepted).toBe(20);
+    for (let i = 0; i < ML_WINDOW_SAMPLES; i++) if (b.push(i * 100, 1, 1, 1, 1, 1, 1)) accepted++;
+    expect(accepted).toBe(ML_WINDOW_SAMPLES);
     expect(b.isFull).toBe(true);
   });
 
@@ -68,12 +71,14 @@ describe('SpeedWindowBuffer', () => {
   it('emits (channel, time) order — the layout Conv1d expects', () => {
     const b = new SpeedWindowBuffer();
     // Channel c carries the constant value c, so a correctly laid-out window is
-    // 20 zeros, then 20 ones, and so on. A (time, channel) layout would instead
-    // repeat 0..5 twenty times, which this catches.
+    // n zeros, then n ones, and so on. A (time, channel) layout would instead
+    // repeat 0..5 n times, which this catches.
     for (let i = 0; i < ML_WINDOW_SAMPLES; i++) b.push(i * 100, 0, 1, 2, 3, 4, 5);
+    // A six-entry scaler asks for the raw channels only — the derivation is
+    // driven by the scaler's width, so this exercises the raw layout alone.
     const w = b.buildWindow(ZERO_MEAN, UNIT_STD)!;
-    expect(w.length).toBe(ML_CHANNELS * ML_WINDOW_SAMPLES);
-    for (let c = 0; c < ML_CHANNELS; c++) {
+    expect(w.length).toBe(ML_RAW_CHANNELS * ML_WINDOW_SAMPLES);
+    for (let c = 0; c < ML_RAW_CHANNELS; c++) {
       for (let t = 0; t < ML_WINDOW_SAMPLES; t++) {
         expect(w[c * ML_WINDOW_SAMPLES + t]).toBe(c);
       }
@@ -128,11 +133,16 @@ describe('SpeedWindowBuffer', () => {
     expect(b.isFull).toBe(false);
   });
 
-  it('agrees with the Python side about rate and window length', () => {
+  it('agrees with the Python side about rate, window length and channels', () => {
     // These are a contract with ml/config.py and the shipped scaler.json.
     expect(ML_SAMPLE_RATE_HZ).toBe(10);
-    expect(ML_WINDOW_SAMPLES).toBe(20);
-    expect(ML_CHANNELS).toBe(6);
+    expect(ML_WINDOW_SAMPLES).toBe(60);
+    // The ring stores what the sensor gives; the network reads that plus six
+    // channels derived from it. Conflating the two is how the window ends up
+    // half-filled with garbage that still has the right length.
+    expect(ML_RAW_CHANNELS).toBe(6);
+    expect(ML_MODEL_CHANNELS).toBe(12);
+    expect(ML_CHANNELS).toBe(ML_RAW_CHANNELS);
   });
 });
 
@@ -170,7 +180,7 @@ describe('predictors', () => {
 
   it('MockSpeedPredictor records what it was asked', () => {
     const p = new MockSpeedPredictor(12);
-    const w = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES);
+    const w = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES);
     expect(p.predict(w)).toBe(12);
     expect(p.seen).toHaveLength(1);
   });

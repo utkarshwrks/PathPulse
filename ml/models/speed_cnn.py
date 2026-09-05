@@ -14,7 +14,7 @@ import torch.nn as nn
 
 
 class SpeedCNN(nn.Module):
-    """The guide's 1D-CNN, padded for a 20-sample window.
+    """The guide's 1D-CNN, padded for the window config.py defines.
 
     The published architecture assumes a 100-sample window and pools twice
     without padding, which on 20 samples leaves 2 timesteps before the third
@@ -23,7 +23,7 @@ class SpeedCNN(nn.Module):
     consequence of the dataset being 10 Hz, documented in config.py.
     """
 
-    def __init__(self, in_channels: int = 6, dropout: float = 0.2) -> None:
+    def __init__(self, in_channels: int = 12, dropout: float = 0.2) -> None:
         super().__init__()
         self.features = nn.Sequential(
             nn.Conv1d(in_channels, 32, kernel_size=5, padding=2),
@@ -78,6 +78,6 @@ def ridge_baseline(alpha: float = 1.0):
 
 if __name__ == "__main__":
     m = SpeedCNN()
-    x = torch.randn(4, 6, 20)
+    x = torch.randn(4, 12, 60)
     print(f"SpeedCNN  {m.n_params} parameters  (budget 100k)")
     print(f"  {tuple(x.shape)} -> {tuple(m(x).shape)}")

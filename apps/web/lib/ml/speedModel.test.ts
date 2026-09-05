@@ -7,12 +7,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ML_MODEL_CHANNELS, ML_WINDOW_SAMPLES } from '@pathpulse/nav-core';
 import { WebSpeedPredictor } from './speedModel';
 
 const REAL = readFileSync(
   join(process.cwd(), 'public/models/speed_model.json'),
   'utf8',
 );
+/** Parsed once, so tampered fixtures can be sized from the real thing. */
+const real = JSON.parse(REAL) as {
+  layers: Array<Record<string, number | string>>;
+};
 
 function mockFetch(impl: () => Promise<Response> | Response) {
   vi.stubGlobal('fetch', vi.fn(impl));
@@ -28,14 +33,14 @@ describe('WebSpeedPredictor', () => {
     expect(p.isReady()).toBe(true);
     expect(p.info.loaded).toBe(true);
     expect(p.info.error).toBeNull();
-    expect(p.scaler?.mean).toHaveLength(6);
+    expect(p.scaler?.mean).toHaveLength(ML_MODEL_CHANNELS);
   });
 
   it('predicts a finite speed once loaded', async () => {
     mockFetch(() => new Response(REAL, { status: 200 }));
     const p = new WebSpeedPredictor();
     await p.load();
-    const v = p.predict(new Float32Array(6 * 20));
+    const v = p.predict(new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES));
     expect(Number.isFinite(v)).toBe(true);
     expect(p.info.inferences).toBe(1);
     expect(p.info.latencyMs).toBeGreaterThanOrEqual(0);
@@ -91,7 +96,7 @@ describe('WebSpeedPredictor', () => {
   });
 
   it('refuses a weight block that decodes cleanly but is the wrong length', async () => {
-    // The nastier case: 8 valid floats where 960 are required. It decodes
+    // The nastier case: 8 valid floats where a full conv kernel is required. It decodes
     // without complaint, so only the shape check catches it — and without that
     // check the convolution reads past the end and answers NaN forever.
     const tampered = JSON.parse(REAL);
@@ -99,12 +104,19 @@ describe('WebSpeedPredictor', () => {
     mockFetch(() => new Response(JSON.stringify(tampered), { status: 200 }));
     const p = new WebSpeedPredictor();
     expect(await p.load()).toBe(false);
-    expect(p.info.error).toMatch(/expected 960 floats, got 8/i);
+    expect(p.info.error).toMatch(/expected \d+ floats, got 8/i);
   });
 
   it('refuses weights poisoned with NaN', async () => {
     const tampered = JSON.parse(REAL);
-    const poisoned = new Float32Array(960);
+    // Sized from the model's own first layer, so it stays a NaN test rather
+    // than silently becoming a length test the next time the shape changes.
+    const first = real.layers[0] as unknown as {
+      outChannels: number;
+      inChannels: number;
+      kernel: number;
+    };
+    const poisoned = new Float32Array(first.outChannels * first.inChannels * first.kernel);
     poisoned[17] = Number.NaN;
     tampered.layers[0].weight = Buffer.from(poisoned.buffer).toString('base64');
     mockFetch(() => new Response(JSON.stringify(tampered), { status: 200 }));
@@ -115,7 +127,7 @@ describe('WebSpeedPredictor', () => {
 
   it('returns NaN rather than throwing when asked to predict unloaded', () => {
     const p = new WebSpeedPredictor();
-    expect(Number.isNaN(p.predict(new Float32Array(6 * 20)))).toBe(true);
+    expect(Number.isNaN(p.predict(new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES)))).toBe(true);
   });
 
   it('a failed load leaves no stale model behind after a good one', async () => {
@@ -128,7 +140,7 @@ describe('WebSpeedPredictor', () => {
     // Critically: it must not still be answering from the old weights while
     // reporting an error — that is the worst of both worlds.
     expect(p.isReady()).toBe(false);
-    expect(Number.isNaN(p.predict(new Float32Array(6 * 20)))).toBe(true);
+    expect(Number.isNaN(p.predict(new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES)))).toBe(true);
   });
 
   it('dispose stops it answering', async () => {

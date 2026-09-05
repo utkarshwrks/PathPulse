@@ -1,8 +1,12 @@
 export {
   ImuWindowBuffer,
   ML_CHANNELS,
+  ML_DERIVED_CHANNEL_NAMES,
+  ML_MODEL_CHANNELS,
+  ML_RAW_CHANNELS,
   ML_SAMPLE_RATE_HZ,
   ML_WINDOW_SAMPLES,
+  appendDerivedChannels,
   MockSpeedPredictor,
   NullSpeedPredictor,
   SpeedSmoother,

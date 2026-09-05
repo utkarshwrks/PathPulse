@@ -772,7 +772,7 @@ PathPulse — the rare stuff
 
   9 · AI that runs in 104 KB
   Four models, pure TypeScript, no ONNX runtime. Using one would have cost 14 MB of WebAssembly to multiply
-  26,081 numbers. Whole app is 7.4 MB.
+  27,041 numbers. Whole app is 7.4 MB.
 
   10 · The detector never blocks the fix
   Spoofing detection and the GNSS-quality model are advisory only — they lower confidence, they cannot reject a

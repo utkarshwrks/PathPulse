@@ -50,9 +50,11 @@ from config import (  # noqa: E402
     SAMPLE_RATE_HZ,
     TEST_SEQUENCES,
     WINDOW_SAMPLES,
+    WINDOW_STRIDE,
 )
 from models.speed_cnn import SpeedCNN, ridge_baseline  # noqa: E402
 from preprocess import load_sequence, statistical_features  # noqa: E402
+from derived import with_derived  # noqa: E402
 
 DT = 1.0 / SAMPLE_RATE_HZ
 OUTAGE_SECONDS = [30, 60, 120, 300]
@@ -142,9 +144,15 @@ def per_sample(windowed, n):
     [k*stride + W-1, (k+1)*stride + W-1). Before the first full window there is
     no prediction; that gap takes the first one rather than zero, which would
     inject a fake standstill at the start of every run.
+
+    The stride comes from config, not from `WINDOW_SAMPLES // 2`. Those were
+    the same number while the window was 2 s at 50 % overlap and are not any
+    more, and a stride that disagrees with the one the windows were cut at
+    smears every prediction across the wrong samples — which looks like a model
+    that lags rather than like an indexing bug.
     """
     out = np.full(n, np.nan)
-    stride = WINDOW_SAMPLES // 2
+    stride = WINDOW_STRIDE
     for k, v in enumerate(windowed):
         a = k * stride + WINDOW_SAMPLES - 1
         if a < n:
@@ -206,11 +214,15 @@ def main() -> None:
     imu, truth_speed = data["imu"], data["speed"]
     m = len(imu)
 
-    stride = WINDOW_SAMPLES // 2
-    starts = list(range(0, m - WINDOW_SAMPLES + 1, stride))
+    starts = list(range(0, m - WINDOW_SAMPLES + 1, WINDOW_STRIDE))
     X = np.stack([imu[s : s + WINDOW_SAMPLES] for s in starts])
 
-    cnn = per_sample(predict_speed(model, X, mean, std, device), m)
+    # The network reads the raw channels plus six derived from them; the ridge
+    # baseline reads the raw ones only. Keeping the baseline's input as it was
+    # is what keeps it a baseline — the question it answers is whether the deep
+    # model earns its place against hand-built statistics, and quietly
+    # upgrading its features would change the question.
+    cnn = per_sample(predict_speed(model, with_derived(X), mean, std, device), m)
     ridge = ridge_baseline()
     ridge.fit(npz["F_train"], npz["y_train"])
     rdg = per_sample(np.clip(ridge.predict(statistical_features(X)), 0, None), m)

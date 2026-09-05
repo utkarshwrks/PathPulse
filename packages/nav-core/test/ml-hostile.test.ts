@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CnnSpeedPredictor,
   decodeFloat32,
-  ML_CHANNELS,
+  ML_MODEL_CHANNELS,
   ML_WINDOW_SAMPLES,
   NavigationEngine,
   parseSpeedCnnWeights,
@@ -174,8 +174,8 @@ describe('parseSpeedCnnWeights refuses what it cannot trust', () => {
 
   it('rejects a scaler containing a zero standard deviation', () => {
     // Dividing by it yields Infinity for that channel and poisons the window.
-    const mean = new Array(ML_CHANNELS).fill(0);
-    const std = new Array(ML_CHANNELS).fill(1);
+    const mean = new Array(ML_MODEL_CHANNELS).fill(0);
+    const std = new Array(ML_MODEL_CHANNELS).fill(1);
     std[2] = 0;
     expect(() => parseSpeedCnnWeights({ ...rawModel, scaler: { mean, std } })).toThrow(
       /scaler|std|zero/i,
@@ -227,19 +227,19 @@ describe('decodeFloat32 under abuse', () => {
 
 describe('runSpeedCnn under abuse', () => {
   it('returns NaN, never a number, for every wrong input length', () => {
-    for (const n of [0, 1, 119, 121, 240]) {
+    for (const n of [0, 1, ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES - 1, ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES + 1, ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES * 2]) {
       expect(Number.isNaN(runSpeedCnn(weights, new Float32Array(n)))).toBe(true);
     }
   });
 
   it('does not return a confident number when fed NaN', () => {
-    const w = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).fill(0);
+    const w = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).fill(0);
     w[5] = Number.NaN;
     expect(Number.isNaN(runSpeedCnn(weights, w))).toBe(true);
   });
 
   it('does not return a confident number when fed Infinity', () => {
-    const w = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).fill(0);
+    const w = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).fill(0);
     w[5] = Number.POSITIVE_INFINITY;
     const v = runSpeedCnn(weights, w);
     expect(Number.isNaN(v) || Number.isFinite(v)).toBe(true);
@@ -247,7 +247,7 @@ describe('runSpeedCnn under abuse', () => {
   });
 
   it('is deterministic — the same window always gives the same answer', () => {
-    const w = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
+    const w = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
       Math.sin(i * 0.37),
     );
     const first = runSpeedCnn(weights, w);
@@ -255,7 +255,7 @@ describe('runSpeedCnn under abuse', () => {
   });
 
   it('does not mutate the window it was given', () => {
-    const w = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
+    const w = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
       Math.cos(i * 0.11),
     );
     const before = Array.from(w);
@@ -264,8 +264,8 @@ describe('runSpeedCnn under abuse', () => {
   });
 
   it('responds to its input — a constant output would mean nothing is wired up', () => {
-    const a = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).fill(0);
-    const b = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
+    const a = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).fill(0);
+    const b = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
       Math.sin(i * 0.9),
     );
     expect(runSpeedCnn(weights, a)).not.toBe(runSpeedCnn(weights, b));
@@ -274,11 +274,11 @@ describe('runSpeedCnn under abuse', () => {
   it('reads every channel — zeroing any one changes the answer', () => {
     // If a channel is never read, an indexing bug has silently dropped it and
     // the model is running on five inputs while claiming six.
-    const base = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
+    const base = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
       Math.sin(i * 0.31),
     );
     const ref = runSpeedCnn(weights, base);
-    for (let c = 0; c < ML_CHANNELS; c++) {
+    for (let c = 0; c < ML_MODEL_CHANNELS; c++) {
       const m = Float32Array.from(base);
       m.fill(0, c * ML_WINDOW_SAMPLES, (c + 1) * ML_WINDOW_SAMPLES);
       expect(runSpeedCnn(weights, m)).not.toBe(ref);
@@ -286,13 +286,13 @@ describe('runSpeedCnn under abuse', () => {
   });
 
   it('reads every timestep — zeroing any one changes the answer', () => {
-    const base = new Float32Array(ML_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
+    const base = new Float32Array(ML_MODEL_CHANNELS * ML_WINDOW_SAMPLES).map((_, i) =>
       Math.sin(i * 0.53),
     );
     const ref = runSpeedCnn(weights, base);
     for (let t = 0; t < ML_WINDOW_SAMPLES; t++) {
       const m = Float32Array.from(base);
-      for (let c = 0; c < ML_CHANNELS; c++) m[c * ML_WINDOW_SAMPLES + t] = 0;
+      for (let c = 0; c < ML_MODEL_CHANNELS; c++) m[c * ML_WINDOW_SAMPLES + t] = 0;
       expect(runSpeedCnn(weights, m)).not.toBe(ref);
     }
   });

@@ -396,30 +396,38 @@ steady 50 km/h, so integration during an outage has no reference at all.
 **wheel-speed sensor**, not GPS, because GPS speed is unavailable in exactly the
 situation the model serves.
 
-Held out entirely (`Vw02`, `S1`, 10443 windows):
+Held out entirely (`Vw02`, `S1`):
 
-| model | MAE | R² |
-| --- | --- | --- |
-| constant (training mean) | 7.24 m/s | −0.00 |
-| ridge, 42 statistics | 4.29 m/s | 0.61 |
-| **SpeedCNN, 26081 params** | **2.93 m/s** | **0.79** |
+| model | MAE | R² | 30 s drift | signed |
+| --- | --- | --- | --- | --- |
+| constant (training mean) | 7.24 m/s | −0.00 | 89.7 % | +56.6 % |
+| ridge, 42 statistics | 3.78 m/s | 0.67 | 44.1 % | +38.9 % |
+| **SpeedCNN, 27041 params** | **2.94 m/s** | **0.79** | **19.5 %** | **+0.4 %** |
+
+The signed column is the one that matters, because the engine INTEGRATES this
+output. A zero-mean 3 m/s error largely cancels over a 30 s outage; a bias does
+not — it is invented distance, every time. The weights this replaced scored the
+same 2.93 m/s MAE while over-stating distance by **8.5 %** on every 30 s stretch
+of a held-out journey, and no metric the project had could see it. Fixing that
+took mount-invariant input channels and early stopping on drift rather than on
+validation loss. See [`ml/README.md`](ml/README.md).
 
 Dead-reckoned drift over real outage windows, against the recorded GPS path:
 
 | outage | perfect speed (floor) | **CNN** | ridge | constant |
 | --- | --- | --- | --- | --- |
-| 30 s | 2.2 % | **17.6 %** | 24.9 % | 45.5 % |
-| 120 s | 7.7 % | **16.1 %** | 22.7 % | 41.6 % |
-| 300 s | 14.4 % | **17.9 %** | 22.9 % | 38.7 % |
+| 30 s | 2.2 % | **15.6 %** | 26.1 % | 45.5 % |
+| 120 s | 7.7 % | **14.7 %** | 24.4 % | 41.6 % |
+| 300 s | 14.4 % | **16.9 %** | 24.3 % | 38.7 % |
 
 **On-device, no cloud API, no inference runtime.** The network is evaluated by
 150 lines of pure TypeScript in `nav-core` rather than by ONNX Runtime, which
 would have cost 14 MB of WebAssembly and taken the APK from 5.4 MB to ~20 MB for
-a 26081-parameter model. Weights ship as 135 KB of base64 float32 with BatchNorm
-folded in — over the guide's 100 KB target, which 26081 float32 parameters
+a 27041-parameter model. Weights ship as 140 KB of base64 float32 with BatchNorm
+folded in — over the guide's 100 KB target, which 27041 float32 parameters
 cannot meet before encoding, and reported as over rather than quoting the
-35 KB ONNX the app never opens; a test checks the TypeScript against probe vectors captured from
-PyTorch to 1e-3 m/s. ONNX is still exported (35 KB int8, verified) as the
+36 KB ONNX the app never opens; a test checks the TypeScript against probe vectors captured from
+PyTorch to 1e-3 m/s. ONNX is still exported (36 KB int8, verified) as the
 interoperable artefact — it just is not what runs.
 
 Because inference lives in `nav-core`, the Phase 16 edge engine and the eval

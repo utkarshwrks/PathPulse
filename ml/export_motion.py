@@ -27,7 +27,7 @@ from config import (  # noqa: E402
     EXPORT,
     MOTION_STATES,
     MOTION_WINDOW_SAMPLES,
-    N_CHANNELS,
+    N_RAW_CHANNELS,
     PROCESSED,
     RESULTS,
     SAMPLE_RATE_HZ,
@@ -66,7 +66,7 @@ def main() -> None:
     # BatchNorm folding is an arithmetic identity and is therefore exactly the
     # kind of thing that is silently wrong. Checked here rather than trusted.
     rng = np.random.default_rng(0)
-    probe = rng.standard_normal((8, N_CHANNELS, MOTION_WINDOW_SAMPLES)).astype(np.float32)
+    probe = rng.standard_normal((8, N_RAW_CHANNELS, MOTION_WINDOW_SAMPLES)).astype(np.float32)
     with torch.no_grad():
         reference = model(torch.from_numpy(probe)).numpy()
 
@@ -80,7 +80,7 @@ def main() -> None:
     onnx_path = EXPORT / "motion_model.onnx"
     torch.onnx.export(
         model,
-        torch.randn(1, N_CHANNELS, MOTION_WINDOW_SAMPLES),
+        torch.randn(1, N_RAW_CHANNELS, MOTION_WINDOW_SAMPLES),
         str(onnx_path),
         input_names=["imu_window"],
         output_names=["motion_logits"],

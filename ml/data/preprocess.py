@@ -22,10 +22,12 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from derived import with_derived  # noqa: E402
 from config import (  # noqa: E402
     CHANNELS,
     MAX_SPEED_MPS,
     N_CHANNELS,
+    N_RAW_CHANNELS,
     PROCESSED,
     RAW,
     SEED,
@@ -101,7 +103,7 @@ def window(seq_data: dict) -> tuple[np.ndarray, np.ndarray]:
     imu, speed = seq_data["imu"], seq_data["speed"]
     starts = range(0, len(imu) - WINDOW_SAMPLES + 1, WINDOW_STRIDE)
     if not starts:
-        return np.empty((0, WINDOW_SAMPLES, N_CHANNELS)), np.empty(0)
+        return np.empty((0, WINDOW_SAMPLES, N_RAW_CHANNELS)), np.empty(0)
     X = np.stack([imu[s : s + WINDOW_SAMPLES] for s in starts])
     y = np.array([speed[s + WINDOW_SAMPLES - 1] for s in starts])
     return X, y
@@ -206,8 +208,8 @@ def statistical_features(X: np.ndarray) -> np.ndarray:
 
 
 def build_split(names: list[str], augment_it: bool, rng) -> dict:
-    Xs, ys, report = [], [], []
-    for seq in names:
+    Xs, ys, ids, report = [], [], [], []
+    for si, seq in enumerate(names):
         if not (RAW / seq).exists():
             print(f"  ! {seq} not downloaded — skipping")
             continue
@@ -232,6 +234,13 @@ def build_split(names: list[str], augment_it: bool, rng) -> dict:
             continue
         Xs.append(X)
         ys.append(y)
+        # ★ WHICH SEQUENCE EACH WINDOW CAME FROM ★
+        # Windows are consecutive and WINDOW_STRIDE apart, so a run of them is
+        # a stretch of driving — which is what a drift figure is computed over.
+        # Without this a 30-window block would splice the end of one journey
+        # onto the start of another and score the join as error. See train.py's
+        # drift-based early stopping.
+        ids.append(np.full(len(X), si, dtype=np.int16))
         report.append(
             f"  {seq:8} {len(X):>6} windows  "
             f"{data['speed'].min()*3.6:5.1f}-{data['speed'].max()*3.6:5.1f} km/h  "
@@ -242,11 +251,17 @@ def build_split(names: list[str], augment_it: bool, rng) -> dict:
         raise SystemExit("no usable sequences — run ml/data/download.py first")
     X = np.concatenate(Xs)
     y = np.concatenate(ys)
+    seq_ids = np.concatenate(ids)
     if augment_it:
         X = np.concatenate([X, augment(X, rng)])
         y = np.concatenate([y, y])
+        # Offset so a block never splices an augmented window onto an
+        # unaugmented one — they are the same drive but not the same signal.
+        seq_ids = np.concatenate([seq_ids, seq_ids + 1000])
         print(f"  + augmentation -> {len(X)} windows")
-    return {"X": X, "y": y}
+    # ★ DERIVED AFTER AUGMENTATION, NEVER BEFORE ★ See derived.with_derived.
+    X = with_derived(X)
+    return {"X": X, "y": y, "s": seq_ids}
 
 
 def main() -> None:
@@ -270,7 +285,15 @@ def main() -> None:
     for name, split in (("train", train), ("val", val), ("test", test)):
         out[f"X_{name}"] = ((split["X"] - mean) / std).astype(np.float32)
         out[f"y_{name}"] = split["y"].astype(np.float32)
-        out[f"F_{name}"] = statistical_features(split["X"]).astype(np.float32)
+        out[f"s_{name}"] = split["s"]
+        # The ridge baseline reads the RAW channels only. Handing it the
+        # derived ones as well would change what it is a baseline FOR: the
+        # question it answers is "does the deep model earn its place against a
+        # linear model on hand-built statistics", and the honest comparison
+        # keeps the hand-built side as it was.
+        out[f"F_{name}"] = statistical_features(split["X"][:, :, :N_RAW_CHANNELS]).astype(
+            np.float32
+        )
     out["scaler_mean"] = mean.astype(np.float32)
     out["scaler_std"] = std.astype(np.float32)
 
