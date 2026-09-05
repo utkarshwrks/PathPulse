@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import type { MotionContext, NavEvent, NavigationState, SpeedSource } from '@pathpulse/nav-core';
 import { driftRatioPct } from '@pathpulse/nav-core';
 import { MODE_COLORS, MODE_LABELS } from '@/config/modes';
@@ -48,6 +49,59 @@ interface HudProps {
  * Monospace and tabular numerals throughout, so digits do not jitter as they
  * change — a HUD that visibly twitches reads as unstable even when it is not.
  */
+/**
+ * Where the panel sits. Four corners, chosen by dragging it.
+ *
+ * ★ WHY A CORNER AND NOT FREE POSITIONING ★
+ * Field report: "if a pointer is below that I can't see the point, and even
+ * the map is not zoomable there." The fix is to let the panel move out of the
+ * way — but free positioning on a phone means a panel half off-screen, or
+ * covering the Demo button, and it has to be re-solved on every rotation and
+ * every screen size. Four corners cannot be dropped anywhere useless, survive
+ * a rotation without arithmetic, and are reachable one-handed.
+ */
+export type HudCorner = 'tl' | 'tr' | 'bl' | 'br';
+
+const CORNER_KEY = 'pathpulse.hud.corner';
+const COLLAPSED_KEY = 'pathpulse.hud.collapsed';
+
+/**
+ * `right-16` at the top keeps clear of the menu button, which lives there.
+ * The bottom row clears the Demo button and the attribution strip.
+ */
+const CORNER_CLASS: Record<HudCorner, string> = {
+  tl: 'left-3 right-16 top-3',
+  tr: 'right-3 top-16 left-auto',
+  bl: 'left-3 right-16 bottom-24',
+  br: 'right-3 bottom-24 left-auto',
+};
+
+function readStored<T extends string>(key: string, fallback: T, valid: readonly T[]): T {
+  try {
+    const v = window.localStorage.getItem(key);
+    return v !== null && (valid as readonly string[]).includes(v) ? (v as T) : fallback;
+  } catch {
+    // Storage is fallible in this codebase by policy — a private window, a
+    // browser blocking site data. The default is always usable.
+    return fallback;
+  }
+}
+
+function store(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Losing the preference across restarts is the whole cost.
+  }
+}
+
+/** Nearest corner to a point, in viewport coordinates. */
+export function nearestCorner(x: number, y: number, width: number, height: number): HudCorner {
+  const left = x < width / 2;
+  const top = y < height / 2;
+  return left ? (top ? 'tl' : 'bl') : top ? 'tr' : 'br';
+}
+
 export default function Hud({
   modeReason,
   navState,
@@ -78,11 +132,75 @@ export default function Hud({
   const lastDrift = [...events].reverse().find((e) => e.type === 'DRIFT_MEASURED');
   const hzLow = updateHz > 0 && updateHz < 10;
 
+  const [corner, setCorner] = useState<HudCorner>('tl');
+  const [collapsed, setCollapsed] = useState(false);
+  const [dragging, setDragging] = useState(false);
+
+  // Read once on mount rather than during render: localStorage is not
+  // available during SSR and this component is part of a static export.
+  useEffect(() => {
+    setCorner(readStored<HudCorner>(CORNER_KEY, 'tl', ['tl', 'tr', 'bl', 'br']));
+    setCollapsed(readStored(COLLAPSED_KEY, 'false', ['true', 'false']) === 'true');
+  }, []);
+
+  // The write is deliberately OUTSIDE the updater. React may invoke a state
+  // updater more than once for the same transition, and an updater that also
+  // writes to storage is a side effect in a place React is entitled to repeat.
+  const toggleCollapsed = useCallback(() => {
+    const next = !collapsed;
+    setCollapsed(next);
+    store(COLLAPSED_KEY, String(next));
+  }, [collapsed]);
+
+  /*
+   * ★ SNAP ON RELEASE, DO NOT TRACK THE FINGER ★
+   * Following the pointer means re-rendering the whole HUD on every move event
+   * while the engine is also emitting at 10 Hz, and it ends with the panel
+   * wherever the finger happened to lift — including half off-screen. Reading
+   * the release point and picking a corner costs one render and cannot produce
+   * an unusable layout.
+   */
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    // Only a primary press on the grab handle; never a scroll or a second
+    // finger, which on a phone is usually the start of a pinch.
+    if (!e.isPrimary) return;
+    setDragging(true);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }, []);
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragging) return;
+    setDragging(false);
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    const w = typeof window === 'undefined' ? 0 : window.innerWidth;
+    const h = typeof window === 'undefined' ? 0 : window.innerHeight;
+    if (w === 0 || h === 0) return;
+    const next = nearestCorner(e.clientX, e.clientY, w, h);
+    setCorner(next);
+    store(CORNER_KEY, next);
+  }, [dragging]);
+
   return (
-    <div className="pointer-events-none absolute left-3 right-16 top-3 z-10 max-w-[25rem]" data-tour="hud">
-      <div className="pp-surface relative overflow-hidden px-3.5 py-3">
-        {/* Mode badge — the single most-looked-at element in the demo. */}
-        <div className="flex items-center gap-2">
+    <div
+      className={`pointer-events-none absolute z-10 max-w-[25rem] ${CORNER_CLASS[corner]}`}
+      data-tour="hud"
+      data-corner={corner}
+    >
+      <div
+        className={`pp-surface relative overflow-hidden px-3.5 py-3 ${dragging ? 'opacity-70' : ''}`}
+      >
+        {/*
+          The grab handle is the header strip itself, and the collapse control
+          sits in it. `touch-none` matters: without it the browser claims the
+          gesture for scrolling and the pointer events never arrive.
+        */}
+        <div
+          className="pointer-events-auto flex touch-none items-center gap-2"
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+          onPointerCancel={() => setDragging(false)}
+          data-testid="hud-handle"
+        >
           <span
             className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${isDr ? 'pp-beacon' : ''}`}
             style={{ backgroundColor: color, boxShadow: `0 0 12px ${color}, 0 0 3px ${color}` }}
@@ -125,9 +243,38 @@ export default function Hud({
           >
             {updateHz.toFixed(1)} Hz
           </span>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Expand the HUD' : 'Collapse the HUD'}
+            data-testid="hud-collapse"
+            className="pointer-events-auto -my-1 ml-1 rounded px-1.5 py-1 text-[11px] leading-none text-neutral-400 hover:bg-white/10 hover:text-neutral-200"
+          >
+            {collapsed ? '▾' : '▴'}
+          </button>
         </div>
 
-        {navState ? (
+        {/*
+          ★ COLLAPSED IS NOT EMPTY ★
+          Hiding everything would mean tapping twice to read the speed, which
+          is the number people look at most. Mode, speed and drift are the
+          three that answer "is it working right now"; everything else is
+          detail that can wait for a tap.
+        */}
+        {collapsed && navState ? (
+          <div className="tabular mt-2 flex items-baseline gap-3 font-mono text-[11px] text-neutral-300">
+            <span>
+              <span className="text-[1.05rem] font-semibold text-white">
+                {(navState.velocityMps * 3.6).toFixed(0)}
+              </span>{' '}
+              km/h
+            </span>
+            {driftPct !== null ? <span>drift {driftPct.toFixed(1)} %</span> : null}
+          </div>
+        ) : null}
+
+        {!collapsed && navState ? (
           <>
             {/* Speed gets the largest type: it is the number people read first. */}
             <div className="mt-3 flex items-end gap-3.5">
@@ -223,11 +370,16 @@ export default function Hud({
               </div>
             </div>
           </>
-        ) : (
+        ) : collapsed ? null : (
           <div className="mt-2 font-mono text-[11px] text-neutral-400">
             waiting for first fix…
           </div>
         )}
+
+        {/* Everything below is detail. Collapsed, the panel keeps only what
+            answers "is it working right now" — see the collapsed block above. */}
+        {!collapsed ? (
+        <>
 
         {/* ★ SAY WHY, NOT JUST WHAT ★
             Observed on a real phone indoors: "DEAD RECKONING" and
@@ -281,6 +433,8 @@ export default function Hud({
           <br />
           {mapSourceLabel}
         </div>
+        </>
+        ) : null}
       </div>
     </div>
   );

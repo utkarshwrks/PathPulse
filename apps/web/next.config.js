@@ -17,6 +17,33 @@ function buildStamp() {
   }
 }
 
+/**
+ * The app version, read from the one file that already had to be right.
+ *
+ * ★ ONE SOURCE, BECAUSE TWO WOULD DRIFT ★ `versionName` in build.gradle is
+ * what Android shows in app info and what a tester reads back over the phone,
+ * so it cannot be allowed to disagree with the screen inside the app. Copying
+ * it into a constant here would be a second place to update and therefore, on
+ * the evidence of NEXT_PUBLIC_PHASE sitting at "phase 4" for fourteen phases,
+ * a place that would eventually be wrong. Parsing it means the APK and the UI
+ * are the same number by construction.
+ */
+function appVersion() {
+  try {
+    const gradle = require('node:fs').readFileSync(
+      require('node:path').join(__dirname, 'android/app/build.gradle'),
+      'utf8',
+    );
+    const name = /versionName\s+"([^"]+)"/.exec(gradle);
+    const code = /versionCode\s+(\d+)/.exec(gradle);
+    if (name && code) return `${name[1]} (${code[1]})`;
+    if (name) return name[1];
+  } catch {
+    // The web build must not depend on the Android project being present.
+  }
+  return 'unknown';
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Capacitor needs a folder of plain static files to wrap into the APK.
@@ -29,6 +56,7 @@ const nextConfig = {
   transpilePackages: ['@pathpulse/nav-core', '@pathpulse/sensor-sources'],
   reactStrictMode: true,
   env: {
+    NEXT_PUBLIC_APP_VERSION: appVersion(),
     NEXT_PUBLIC_BUILD_ID: buildStamp(),
     NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
     // ★ ONE PLACE, BECAUSE THE LAST ONE WENT STALE ★ The Device screen read a

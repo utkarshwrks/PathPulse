@@ -1,7 +1,7 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { NavEvent, NavigationState } from '@pathpulse/nav-core';
-import Hud from './Hud';
+import Hud, { nearestCorner } from './Hud';
 import { MODE_COLORS } from '@/config/modes';
 
 /**
@@ -295,5 +295,115 @@ describe('Hud — why it is dead reckoning', () => {
   it('says nothing when the mode needs no explanation', () => {
     renderHud({ navState: state({ mode: 'GNSS' }), modeReason: null });
     expect(screen.queryByText(/accurate/)).toBeNull();
+  });
+});
+
+describe('★ W7 — the HUD gets out of the way', () => {
+  /**
+   * Field report: "that box that contain everything about drift and speed
+   * percentage is not movable — if a pointer is below that I can't see the
+   * point, and even the map is not zoomable there."
+   *
+   * Two separate complaints. The panel covers the marker, and it cannot be
+   * moved off it. Collapsing fixes the first, dragging the second.
+   */
+  /**
+   * jsdom in this setup exposes `localStorage` as a property that reads back
+   * `undefined` even with a real origin — see the same shim in lib/tour.test.ts.
+   * What is under test is this component's remembering, not whether the DOM
+   * implements the storage spec.
+   */
+  beforeEach(() => {
+    const data = new Map<string, string>();
+    Object.defineProperty(window, 'localStorage', {
+      value: {
+        getItem: (k: string) => data.get(k) ?? null,
+        setItem: (k: string, v: string) => void data.set(k, String(v)),
+        removeItem: (k: string) => void data.delete(k),
+        clear: () => data.clear(),
+        key: (i: number) => [...data.keys()][i] ?? null,
+        get length() {
+          return data.size;
+        },
+      } as Storage,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it('starts expanded in the top-left, as it always has', () => {
+    const { container } = renderHud();
+    expect(container.querySelector('[data-corner]')?.getAttribute('data-corner')).toBe('tl');
+    expect(screen.getByText('distance')).toBeTruthy();
+  });
+
+  it('★ collapses to mode, speed and drift only', () => {
+    renderHud();
+    fireEvent.click(screen.getByTestId('hud-collapse'));
+    // The three that answer "is it working right now" survive...
+    expect(screen.getByText('GNSS')).toBeTruthy();
+    expect(screen.getByText('50')).toBeTruthy(); // 13.9 m/s -> 50 km/h
+    // ...and the detail that can wait for a tap does not.
+    expect(screen.queryByText('distance')).toBeNull();
+    expect(screen.queryByText('uncert.')).toBeNull();
+    expect(screen.queryByText(/imu 37/)).toBeNull();
+  });
+
+  it('expands again', () => {
+    renderHud();
+    fireEvent.click(screen.getByTestId('hud-collapse'));
+    fireEvent.click(screen.getByTestId('hud-collapse'));
+    expect(screen.getByText('distance')).toBeTruthy();
+  });
+
+  it('★ remembers being collapsed across a restart', () => {
+    const first = renderHud();
+    fireEvent.click(screen.getByTestId('hud-collapse'));
+    first.unmount();
+    renderHud();
+    expect(screen.queryByText('distance')).toBeNull();
+  });
+
+  it('★ moves to the corner the drag ended in, and remembers it', () => {
+    const { container } = renderHud();
+    const handle = screen.getByTestId('hud-handle');
+    // Released in the bottom-right quadrant of whatever jsdom's viewport is —
+    // hardcoding 400x800 made this pass or fail on the test environment's
+    // default window size rather than on the behaviour.
+    const x = window.innerWidth - 10;
+    const y = window.innerHeight - 10;
+    fireEvent.pointerDown(handle, { isPrimary: true, pointerId: 1 });
+    fireEvent.pointerUp(handle, { isPrimary: true, pointerId: 1, clientX: x, clientY: y });
+    expect(container.querySelector('[data-corner]')?.getAttribute('data-corner')).toBe('br');
+    expect(window.localStorage.getItem('pathpulse.hud.corner')).toBe('br');
+  });
+
+  it('picks each quadrant correctly', () => {
+    expect(nearestCorner(10, 10, 400, 800)).toBe('tl');
+    expect(nearestCorner(390, 10, 400, 800)).toBe('tr');
+    expect(nearestCorner(10, 790, 400, 800)).toBe('bl');
+    expect(nearestCorner(390, 790, 400, 800)).toBe('br');
+  });
+
+  it('ignores a pointer-up that never began as a drag', () => {
+    // A stray release — the second finger of a pinch lifting over the panel —
+    // must not teleport the HUD to whichever corner it happened to be near.
+    const { container } = renderHud();
+    fireEvent.pointerUp(screen.getByTestId('hud-handle'), {
+      isPrimary: true,
+      pointerId: 2,
+      clientX: window.innerWidth - 10,
+      clientY: window.innerHeight - 10,
+    });
+    expect(container.querySelector('[data-corner]')?.getAttribute('data-corner')).toBe('tl');
+  });
+
+  it('★ leaves the map reachable outside the card', () => {
+    // The container is pointer-events-none so the map keeps every gesture that
+    // is not on the panel itself. That is what makes the area beside and below
+    // it pinch-zoomable, which was half the complaint.
+    const { container } = renderHud();
+    const outer = container.querySelector('[data-corner]') as HTMLElement;
+    expect(outer.className).toContain('pointer-events-none');
   });
 });

@@ -58,7 +58,13 @@ export default function DeviceInfo({ imuHz, gnssHz, sourceName, onClose }: Devic
         </div>
 
         <Section title="Build">
-          <Row k="version" v={process.env.NEXT_PUBLIC_BUILD_ID ?? 'unknown'} />
+          {/* Two rows, because they answer different questions. `version` is
+              what a tester reads back ("I'm on 0.19") and matches Android's
+              own app info. `build` identifies the exact commit, which is the
+              only thing that can settle "am I running the fix?" — a version
+              number cannot, because it does not change between rebuilds. */}
+          <Row k="version" v={process.env.NEXT_PUBLIC_APP_VERSION ?? 'unknown'} />
+          <Row k="build" v={process.env.NEXT_PUBLIC_BUILD_ID ?? 'unknown'} />
           <Row
             k="built"
             v={

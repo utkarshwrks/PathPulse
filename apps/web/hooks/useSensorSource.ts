@@ -182,9 +182,27 @@ export function useSensorSource(
       };
     }
 
-    const rate = (arr: number[]) => {
+    /**
+     * Arrival rate over a window that ENDS NOW, not at the last arrival.
+     *
+     * ★ A RATE COMPUTED BETWEEN ARRIVALS CANNOT FALL TO ZERO ★
+     * Measured on a real walk: the HUD read `gnss 1.00 Hz` while the banner
+     * beside it read `no fix for 76s`. Both came from the same samples and
+     * only one was true. Spanning first-to-last arrival means a receiver that
+     * stops is described by the last twenty fixes it managed, for ever — the
+     * window is full, none of it ages out, and the number freezes at whatever
+     * the rate was when the signal died. That is the single most misleading
+     * thing this HUD can do, because the whole point of the panel is that its
+     * numbers can be trusted against each other.
+     *
+     * Ending the span at the current sample instead makes silence part of the
+     * measurement, so the reading decays toward zero for exactly as long as
+     * nothing arrives. It is also still correct for a slow receiver: 20 fixes
+     * at 0.2 Hz spans 100 s either way.
+     */
+    const rate = (arr: number[], nowMs: number) => {
       if (arr.length < 2) return 0;
-      const span = (arr[arr.length - 1]! - arr[0]!) / 1000;
+      const span = (Math.max(nowMs, arr[arr.length - 1]!) - arr[0]!) / 1000;
       return span > 0 ? (arr.length - 1) / span : 0;
     };
 
@@ -199,8 +217,8 @@ export function useSensorSource(
       // outage the marker holds its last fix. Labelled DEAD_RECKONING because
       // that is the mode we are in; the estimate itself arrives in Phase 4.
       mode: inOutage ? 'DEAD_RECKONING' : s.gnss ? deriveGnssMode(s.gnss.accuracyM) : prev.mode,
-      imuHz: rate(imuTimes.current),
-      gnssHz: rate(gnssTimes.current),
+      imuHz: rate(imuTimes.current, now),
+      gnssHz: rate(gnssTimes.current, now),
       // Read on the tick rather than at start: the platform only reveals
       // whether it has a gyroscope once the first motion event arrives.
       hasGyro: webRef.current?.capabilities.hasGyro,
