@@ -42,12 +42,42 @@ import type { RoadGraph, RoadWay } from './types.js';
  *
  * ★ WHAT IS DELIBERATELY NOT PRESERVED ★
  *
- * `name` and `heightM` are dropped. Names cost more than the geometry on a
- * dense graph and nothing in the estimator reads them — only the Trust Panel
- * displays one, so a prefetched road shows as unnamed. `heightM` feeds the
- * HMM's flyover term, which ships OFF and is derived from OSM `layer` anyway,
- * so it is usually absent to begin with. Both are recoverable by bumping the
- * version if they ever earn their bytes.
+ * `heightM` is dropped. It feeds the HMM's flyover term, which ships OFF and is
+ * derived from OSM `layer` anyway, so it is usually absent to begin with.
+ * Recoverable by bumping the version if it ever earns its bytes.
+ *
+ * ★ NAMES USED TO BE DROPPED TOO, ON A CLAIM THAT DOES NOT SURVIVE MEASURING ★
+ *
+ * Version 1 dropped `name` because "names cost more than the geometry on a
+ * dense graph". Measured, dictionary-coded, they do not come close:
+ *
+ *   graph                    ways    named   unique   names    vs geometry
+ *   Jabalpur                9,462      102       42   0.8 KB          0.4 %
+ *   IO-VNBD S3C (UK)       15,022    6,381    2,560  48.2 KB          5.3 %
+ *
+ * Street names repeat: a road is many ways sharing one name, so a deduplicated
+ * table plus a one-byte index per named way is about half the cost of storing
+ * the strings inline, and a rounding error against the coordinates.
+ *
+ * They now have a reader. The offline basemap draws labels from them, which is
+ * the difference between a diagram of lines and a map you can navigate by when
+ * the network is gone — and a prefetched cell that decoded to unnamed roads
+ * meant labels appeared only inside the three bounding boxes chosen months ago.
+ *
+ * ★ THE NAME TABLE IS UTF-8, AND THE CLASS TABLE IS NOT ★
+ *
+ * `highway` values are an OSM enumeration — ASCII by construction, and worth
+ * rejecting anything else as corruption. Street names are not: `Champs-Élysées`
+ * and `छोटी लाइन` are ordinary inputs, and the ASCII writer would have thrown on
+ * them and failed the whole cell's encode. Anywhere the roads are not named in
+ * English is exactly where this is most needed.
+ *
+ * ★ VERSION 1 STILL DECODES ★
+ *
+ * Stored cells are v1 and there may be thousands of them on a device that has
+ * been prefetching. Refusing them would silently wipe someone's offline
+ * coverage — the one thing the whole feature exists to accumulate — so the
+ * reader accepts either version and only v2 carries names.
  *
  * Everything the ESTIMATOR reads is preserved exactly: id, highway, oneway,
  * maxspeed. `oneway` in particular is worth 2.2 points of mean drift through
@@ -55,9 +85,14 @@ import type { RoadGraph, RoadWay } from './types.js';
  * regression rather than a codec bug.
  */
 
-/** ASCII 'P','P','G','1'. */
+/** ASCII 'P','P','G','1'. The magic is the format, not the version. */
 const MAGIC = [0x50, 0x50, 0x47, 0x31] as const;
-const VERSION = 1;
+/** What `encodeGraph` writes. */
+const VERSION = 2;
+/** Oldest version `decodeGraph` accepts. See the note on stored cells above. */
+const MIN_VERSION = 1;
+/** First version carrying the name table. */
+const VERSION_WITH_NAMES = 2;
 
 /**
  * Coordinate quantisation, in degrees.
@@ -92,6 +127,15 @@ const F_ID_NUMERIC = 0b0001_0000;
  * this file. Hence a flag bit rather than a derived property.
  */
 const F_RENDER_ONLY = 0b0010_0000;
+/** v2+. The way carries an index into the name table. */
+const F_HAS_NAME = 0b0100_0000;
+
+/**
+ * Shared, because constructing a TextEncoder per string shows up: a dense graph
+ * has thousands of names and the encode runs on the phone while it is driving.
+ */
+const UTF8_ENCODER = new TextEncoder();
+const UTF8_DECODER = new TextDecoder();
 
 class Writer {
   private buf = new Uint8Array(1024);
@@ -139,6 +183,23 @@ class Writer {
       if (c > 0x7f) throw new Error(`non-ASCII in graph string: ${JSON.stringify(s)}`);
       this.buf[this.len++] = c;
     }
+  }
+
+  /**
+   * Length-prefixed UTF-8, the length counting BYTES rather than characters.
+   *
+   * Used for street names, which are routinely not ASCII. The byte length is
+   * what the reader needs to advance, and for a name like `छोटी लाइन` it is
+   * three times the character count — prefixing the character count would
+   * leave the reader mid-way through the next field with no error, which is
+   * the class of bug the bounds checks exist to make impossible.
+   */
+  utf8(s: string): void {
+    const bytes = UTF8_ENCODER.encode(s);
+    this.varint(bytes.length);
+    this.ensure(bytes.length);
+    this.buf.set(bytes, this.len);
+    this.len += bytes.length;
   }
 
   finish(): Uint8Array {
@@ -198,6 +259,15 @@ class Reader {
     return s;
   }
 
+  /** Length-prefixed UTF-8; the length is in bytes. See `Writer.utf8`. */
+  utf8(): string {
+    const len = this.varint();
+    this.need(len);
+    const s = UTF8_DECODER.decode(this.buf.subarray(this.pos, this.pos + len));
+    this.pos += len;
+    return s;
+  }
+
   get exhausted(): boolean {
     return this.pos >= this.buf.length;
   }
@@ -233,7 +303,21 @@ export function encodeGraph(graph: RoadGraph): Uint8Array {
     }
   }
   w.varint(classIndex.size);
-  for (const name of classIndex.keys()) w.ascii(name);
+  for (const cls of classIndex.keys()) w.ascii(cls);
+
+  // ★ ONE ENTRY PER DISTINCT STREET, NOT PER WAY ★
+  // OSM splits a road at every junction, speed-limit change and bridge, so a
+  // single named street is commonly dozens of ways. Interning turns each of
+  // those repeats into one varint — measured at roughly half the cost of
+  // writing the strings inline, and the reason names are affordable at all.
+  const nameIndex = new Map<string, number>();
+  for (const way of graph.ways) {
+    if (way.name !== undefined && way.name !== '' && !nameIndex.has(way.name)) {
+      nameIndex.set(way.name, nameIndex.size);
+    }
+  }
+  w.varint(nameIndex.size);
+  for (const name of nameIndex.keys()) w.utf8(name);
 
   w.varint(graph.ways.length);
   for (const way of graph.ways) {
@@ -251,6 +335,7 @@ export function encodeGraph(graph: RoadGraph): Uint8Array {
     if (way.highway !== undefined) flags |= F_HAS_CLASS;
     if (numericId) flags |= F_ID_NUMERIC;
     if (way.renderOnly === true) flags |= F_RENDER_ONLY;
+    if (way.name !== undefined && way.name !== '') flags |= F_HAS_NAME;
     w.byte(flags);
 
     // Every OSM way id is "w" plus digits, and storing "w101274337" as eleven
@@ -261,6 +346,7 @@ export function encodeGraph(graph: RoadGraph): Uint8Array {
     else w.ascii(way.id);
 
     if (flags & F_HAS_CLASS) w.varint(classIndex.get(way.highway!)!);
+    if (flags & F_HAS_NAME) w.varint(nameIndex.get(way.name!)!);
     if (flags & F_HAS_MAXSPEED) w.varint(Math.round(way.maxspeed!));
 
     w.varint(way.coords.length);
@@ -293,8 +379,10 @@ export function decodeGraph(bytes: Uint8Array): RoadGraph {
     if (r.byte() !== expected) throw new Error('not a PathPulse road graph: bad magic bytes');
   }
   const version = r.byte();
-  if (version !== VERSION) {
-    throw new Error(`unsupported road graph version ${version}, expected ${VERSION}`);
+  if (version < MIN_VERSION || version > VERSION) {
+    throw new Error(
+      `unsupported road graph version ${version}, expected ${MIN_VERSION}-${VERSION}`,
+    );
   }
 
   const bbox = [r.zigzag(), r.zigzag(), r.zigzag(), r.zigzag()].map((v) => v / BBOX_SCALE) as [
@@ -308,6 +396,14 @@ export function decodeGraph(bytes: Uint8Array): RoadGraph {
   const classes: string[] = [];
   for (let i = 0; i < classCount; i++) classes.push(r.ascii());
 
+  // Absent in v1, which wrote no table and set no name flags, so an empty list
+  // is the correct reading of an old cell rather than a special case.
+  const names: string[] = [];
+  if (version >= VERSION_WITH_NAMES) {
+    const nameCount = r.varint();
+    for (let i = 0; i < nameCount; i++) names.push(r.utf8());
+  }
+
   const wayCount = r.varint();
   const ways: RoadWay[] = [];
   for (let i = 0; i < wayCount; i++) {
@@ -317,9 +413,15 @@ export function decodeGraph(bytes: Uint8Array): RoadGraph {
     const way: RoadWay = { id, coords: [] };
     if (flags & F_HAS_CLASS) {
       const idx = r.varint();
-      const name = classes[idx];
-      if (name === undefined) throw new Error(`road graph references unknown class index ${idx}`);
-      way.highway = name;
+      const cls = classes[idx];
+      if (cls === undefined) throw new Error(`road graph references unknown class index ${idx}`);
+      way.highway = cls;
+    }
+    if (flags & F_HAS_NAME) {
+      const idx = r.varint();
+      const name = names[idx];
+      if (name === undefined) throw new Error(`road graph references unknown name index ${idx}`);
+      way.name = name;
     }
     if (flags & F_HAS_MAXSPEED) way.maxspeed = r.varint();
     if (flags & F_RENDER_ONLY) way.renderOnly = true;

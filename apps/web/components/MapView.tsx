@@ -42,6 +42,9 @@ export default function MapView({ children, onReady, onUserInteract }: MapViewPr
     }
 
     mapRef.current = instance;
+    // Debug handle: lets an attached devtools session read camera state on a
+    // real device. Instrumentation only — nothing in the app reads it.
+    (window as unknown as { __ppmap?: MapLibreMap }).__ppmap = instance;
 
     instance.on('load', () => {
       setMap(instance);
@@ -60,6 +63,20 @@ export default function MapView({ children, onReady, onUserInteract }: MapViewPr
         if (e.originalEvent) onUserInteract?.();
       });
     }
+
+    // ★ A PINCH IS A USER GESTURE EVEN WHEN THE CAMERA IS ALREADY MOVING ★
+    // `zoomstart` only carries an `originalEvent` when the zoom *begins* with
+    // the gesture. While follow mode was animating the camera the map was
+    // already zooming, so the pinch never produced a fresh zoomstart and
+    // following was never released — the user pinched and the camera pulled
+    // straight back. A raw two-finger touch is unambiguous: it is the user.
+    instance.getCanvasContainer().addEventListener(
+      'touchstart',
+      (e: TouchEvent) => {
+        if (e.touches.length >= 2) onUserInteract?.();
+      },
+      { passive: true },
+    );
 
     return () => {
       instance.remove();
@@ -84,12 +101,55 @@ export default function MapView({ children, onReady, onUserInteract }: MapViewPr
     );
   }
 
+  /**
+   * Zoom by a whole level, and count as a user gesture.
+   *
+   * ★ WHY BUTTONS AT ALL ★
+   * There were none. Not a broken control — no zoom control of any kind had
+   * ever been added, on a full-bleed map whose only other way in is a pinch.
+   * A judge handed the phone one-handed, or anyone whose pinch the follow
+   * camera was fighting, had no way to change the zoom at all.
+   *
+   * These go through the same `onUserInteract` path as a pinch so pressing
+   * them releases follow mode, rather than being undone by the next camera
+   * update the way a pinch used to be.
+   */
+  const nudgeZoom = (delta: number) => {
+    const m = mapRef.current;
+    if (!m) return;
+    onUserInteract?.();
+    m.easeTo({ zoom: m.getZoom() + delta, duration: 200 });
+  };
+
   return (
     <div className="absolute inset-0">
       <div
         ref={containerRef}
-        className={`absolute inset-0 ${styleInfo.needsDarkFilter ? 'map-dark-filter' : ''}`}
+        className="absolute inset-0"
       />
+
+      {/* Left edge, mid-height: clear of the HUD top-left, the menu top-right,
+          the Demo bar bottom-centre and the Recenter button bottom-right. */}
+      {map ? (
+        <div className="absolute left-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-1.5">
+          <button
+            type="button"
+            aria-label="Zoom in"
+            onClick={() => nudgeZoom(1)}
+            className="h-10 w-10 rounded-lg border border-white/15 bg-black/70 text-lg font-semibold leading-none text-neutral-100 backdrop-blur transition active:bg-white/20 hover:bg-black/85"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            aria-label="Zoom out"
+            onClick={() => nudgeZoom(-1)}
+            className="h-10 w-10 rounded-lg border border-white/15 bg-black/70 text-lg font-semibold leading-none text-neutral-100 backdrop-blur transition active:bg-white/20 hover:bg-black/85"
+          >
+            −
+          </button>
+        </div>
+      ) : null}
       <MapContext.Provider value={map}>{map ? children : null}</MapContext.Provider>
     </div>
   );

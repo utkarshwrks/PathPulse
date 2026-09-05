@@ -53,7 +53,6 @@ export default function RoadGraphMap() {
       setFailed(true);
       return;
     }
-    if (style.needsDarkFilter) host.classList.add('map-dark-filter');
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
     let cancelled = false;

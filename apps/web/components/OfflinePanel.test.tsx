@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import OfflinePanel from './OfflinePanel';
+import { RASTER_TILE_TEMPLATE } from '@/config/map';
 import type { OfflineStatus } from '@/hooks/useOfflineStatus';
 
 /**
@@ -120,8 +121,14 @@ describe('OfflinePanel', () => {
     await waitFor(() => expect(s.download).toHaveBeenCalledTimes(1));
     const urls = (s.download as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string[];
     expect(urls.length).toBeGreaterThan(0);
+    // Asserted against the shared template rather than a second copy of the
+    // host: a literal here is how the panel came to be caching OpenStreetMap
+    // while the map rendered something else, which offline looks exactly like
+    // a cache that did not work.
+    const prefix = RASTER_TILE_TEMPLATE.slice(0, RASTER_TILE_TEMPLATE.indexOf('{z}'));
     for (const u of urls) {
-      expect(u).toMatch(/^https:\/\/[a-z]\.tile\.openstreetmap\.org\/\d+\/\d+\/\d+\.png$/);
+      expect(u.startsWith(prefix)).toBe(true);
+      expect(u).toMatch(/\/\d+\/\d+\/\d+\.png$/);
     }
   });
 

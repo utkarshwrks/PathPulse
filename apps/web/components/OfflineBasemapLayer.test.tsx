@@ -184,3 +184,76 @@ describe('OfflineBasemapLayer', () => {
     expect(map.sources.size).toBe(0);
   });
 });
+
+describe('OfflineBasemapLayer — dark palette and labels', () => {
+  afterEach(cleanup);
+
+  it('★ draws roads LIGHTER than the ground, not darker', () => {
+    // This was backwards, and only looked right because a CSS filter was
+    // inverting the whole canvas. On a genuinely dark basemap (#090909
+    // measured off a CARTO tile) a #3a4250 road is very nearly invisible.
+    // Asserting the direction rather than the exact hex leaves the palette
+    // free to be retuned and catches the inversion coming back.
+    const map = makeMap(OSM_STYLE);
+    withMap(map, graphOf([{ id: 'w1', highway: 'primary', coords: [[79.9, 23.1], [79.91, 23.11]] }]));
+    const src = map.sources.get('offline-basemap')!;
+    const feature = (src.data as { features: Array<{ properties: { tone: string } }> }).features[0]!;
+    const lum = (hex: string) =>
+      [1, 3, 5].reduce((acc, i) => acc + parseInt(hex.slice(i, i + 2), 16), 0) / 3;
+    const casing = map.layers.find((l) => l.id === 'offline-basemap-casing')!;
+    expect(lum(feature.properties.tone)).toBeGreaterThan(0x30);
+    expect(lum((casing.paint as Record<string, string>)['line-color']!)).toBeLessThan(0x20);
+  });
+
+  it('ranks a service road below a trunk road, as the basemap under it does', () => {
+    const map = makeMap(OSM_STYLE);
+    withMap(
+      map,
+      graphOf([
+        { id: 'w1', highway: 'trunk', coords: [[79.9, 23.1], [79.91, 23.11]] },
+        { id: 'w2', highway: 'service', coords: [[79.9, 23.1], [79.91, 23.11]] },
+        { id: 'w3', highway: 'footway', renderOnly: true, coords: [[79.9, 23.1], [79.91, 23.11]] },
+      ]),
+    );
+    const src = map.sources.get('offline-basemap')!;
+    const tones = (src.data as { features: Array<{ properties: { tone: string } }> }).features.map(
+      (f) => parseInt(f.properties.tone.slice(1, 3), 16),
+    );
+    expect(tones[0]!).toBeGreaterThan(tones[1]!);
+    expect(tones[1]!).toBeGreaterThan(tones[2]!);
+  });
+
+  it('★ labels named roads, from names that were downloaded and discarded', () => {
+    const map = makeMap(OSM_STYLE);
+    withMap(
+      map,
+      graphOf([
+        { id: 'w1', highway: 'primary', name: 'Napier Town Road', coords: [[79.9, 23.1], [79.91, 23.11]] },
+      ]),
+    );
+    const label = map.layers.find((l) => l.id === 'offline-basemap-label');
+    expect(label).toBeDefined();
+    expect(label!.type).toBe('symbol');
+    const src = map.sources.get('offline-basemap')!;
+    const feature = (src.data as { features: Array<{ properties: { name: string } }> }).features[0]!;
+    expect(feature.properties.name).toBe('Napier Town Road');
+  });
+
+  it('★ puts the labels UNDER the tiles, or every street is named twice', () => {
+    // CARTO's tiles carry their own labels. Ours are for the holes.
+    const map = makeMap(OSM_STYLE);
+    withMap(map, graphOf([{ id: 'w1', name: 'A', coords: [[79.9, 23.1], [79.91, 23.11]] }]));
+    expect(map.insertedBefore['offline-basemap-label']).toBe('osm');
+  });
+
+  it('does not reserve label space for unnamed or render-only ways', () => {
+    // An empty text-field still takes part in collision detection, so without
+    // the filter a graph that is 99% unnamed (Jabalpur is) would crowd out the
+    // handful of real names.
+    const map = makeMap(OSM_STYLE);
+    withMap(map, graphOf([{ id: 'w1', coords: [[79.9, 23.1], [79.91, 23.11]] }]));
+    const label = map.layers.find((l) => l.id === 'offline-basemap-label')!;
+    expect(JSON.stringify(label.filter)).toContain('renderOnly');
+    expect(JSON.stringify(label.filter)).toContain('name');
+  });
+});

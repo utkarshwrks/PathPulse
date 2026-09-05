@@ -21,6 +21,22 @@
 const CACHE = 'pathpulse-tiles-v1';
 
 /**
+ * Font atlases, cached apart from the tiles.
+ *
+ * ★ WHY NOT JUST ADD THE HOST TO THE TILE LIST ★
+ * The tile cache is capped at MAX_TILES and evicts oldest-first. Glyphs are
+ * fetched once, at the very start of a session, so they would be the OLDEST
+ * entries in it — first out the moment a drive stores two thousand tiles. The
+ * symptom is street labels that work for the first few minutes of every
+ * session and are gone by the time anyone is offline and needs them.
+ *
+ * There are a handful of these (one range per script actually used, ~41 KB
+ * each), so this cache needs no cap.
+ */
+const FONT_CACHE = 'pathpulse-fonts-v1';
+const FONT_HOST = 'tiles.basemaps.cartocdn.com';
+
+/**
  * Hosts whose responses may be cached.
  *
  * An allowlist, not a pattern match on the URL. Caching by URL shape would
@@ -28,10 +44,15 @@ const CACHE = 'pathpulse-tiles-v1';
  * asset — and serve it stale for ever with no way for the user to tell.
  */
 const TILE_HOSTS = [
-  'tile.openstreetmap.org',
-  'a.tile.openstreetmap.org',
-  'b.tile.openstreetmap.org',
-  'c.tile.openstreetmap.org',
+  // Kept in step with TILE_HOSTS in apps/web/config/map.ts. A worker cannot
+  // import from the bundle, so this is a copy — if the basemap host changes
+  // and this list does not, tiles are fetched and never stored, and the
+  // aeroplane-mode demo fails with no error anywhere.
+  'a.basemaps.cartocdn.com',
+  'b.basemaps.cartocdn.com',
+  'c.basemaps.cartocdn.com',
+  'd.basemaps.cartocdn.com',
+  'basemaps.cartocdn.com',
   'api.maptiler.com',
 ];
 
@@ -53,6 +74,15 @@ function isTileRequest(url) {
   }
 }
 
+function isFontRequest(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname === FONT_HOST && u.pathname.startsWith('/fonts/');
+  } catch {
+    return false;
+  }
+}
+
 self.addEventListener('install', (event) => {
   // Take over immediately. A worker that waits for every tab to close would
   // not be active during the demo it was installed for.
@@ -65,7 +95,11 @@ self.addEventListener('activate', (event) => {
       const names = await caches.keys();
       await Promise.all(
         names
-          .filter((n) => n.startsWith('pathpulse-tiles-') && n !== CACHE)
+          .filter(
+            (n) =>
+              (n.startsWith('pathpulse-tiles-') && n !== CACHE) ||
+              (n.startsWith('pathpulse-fonts-') && n !== FONT_CACHE),
+          )
           .map((n) => caches.delete(n)),
       );
       await self.clients.claim();
@@ -83,11 +117,13 @@ async function trim(cache) {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET' || !isTileRequest(request.url)) return;
+  if (request.method !== 'GET') return;
+  const font = isFontRequest(request.url);
+  if (!font && !isTileRequest(request.url)) return;
 
   event.respondWith(
     (async () => {
-      const cache = await caches.open(CACHE);
+      const cache = await caches.open(font ? FONT_CACHE : CACHE);
       const hit = await cache.match(request);
       if (hit) return hit;
 
@@ -98,7 +134,7 @@ self.addEventListener('fetch', (event) => {
         // would repair.
         if (response && response.status === 200) {
           await cache.put(request, response.clone());
-          await trim(cache);
+          if (!font) await trim(cache);
         }
         return response;
       } catch (e) {

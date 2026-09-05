@@ -20,12 +20,13 @@ import {
 } from '@/lib/roadGraphFetch';
 import { deleteStoredGraphs, saveGraph } from '@/lib/roadGraphStore';
 import { findGraphFor } from '@/lib/roadGraph';
+import { RASTER_TILE_TEMPLATE } from '@/config/map';
 
 /** Zoom range stored for an area: wide enough to pan, sharp enough to drive. */
 export const PRECACHE_MIN_ZOOM = 12;
 export const PRECACHE_MAX_ZOOM = 16;
 
-const TILE_TEMPLATE = 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png';
+
 
 interface OfflinePanelProps {
   status: OfflineStatus;
@@ -148,7 +149,7 @@ export default function OfflinePanel({
 
     if (status.capability.active && plan && !plan.tooBig) {
       const tiles = tilesForBounds(bounds, PRECACHE_MIN_ZOOM, PRECACHE_MAX_ZOOM);
-      await status.download(tiles.map((t) => tileUrl(TILE_TEMPLATE, t)));
+      await status.download(tiles.map((t) => tileUrl(RASTER_TILE_TEMPLATE, t)));
     }
   }
 

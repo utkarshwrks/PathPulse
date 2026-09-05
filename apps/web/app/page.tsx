@@ -171,7 +171,18 @@ export default function Home() {
 
   // Which position to draw, and whether it is a navigation solution or a raw
   // fix. See lib/shownPosition.ts — this was the "Live does not find me" bug.
-  const shownPosition = resolveShownPosition(navState, nav.lastGnss?.gnss);
+  //
+  // ★ MEMOISED BECAUSE ITS IDENTITY DRIVES THE CAMERA ★
+  // `resolveShownPosition` builds a fresh object on every call, and the follow
+  // effect below depends on it. Recomputed inline it was a new reference on
+  // every render, so the effect re-ran on renders where the position had not
+  // moved at all — and one of those renders was caused by the effect itself.
+  // See the loop described on `readBounds`.
+  const lastGnssFix = nav.lastGnss?.gnss;
+  const shownPosition = useMemo(
+    () => resolveShownPosition(navState, lastGnssFix),
+    [navState, lastGnssFix],
+  );
   const hasPosition = shownPosition !== null;
 
   /*
@@ -228,6 +239,24 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, routeKey]);
 
+  /**
+   * Has the camera already been pulled in to the vehicle for this lock?
+   *
+   * ★ FOLLOWING IS ABOUT WHERE THE CAMERA POINTS, NOT HOW FAR IT IS ZOOMED ★
+   * This effect used to send `zoom: Math.max(map.getZoom(), FOLLOW_ZOOM)` on
+   * every single run, which made zooming out impossible while a source was
+   * running: the moment the user pinched out, the next camera update dragged
+   * the zoom straight back to 17. Measured on the bench at 305 easeTo calls a
+   * second, every one of them re-asserting zoom 17 — including for three full
+   * seconds after the user's own pinch had finished.
+   *
+   * Pulling in to FOLLOW_ZOOM is an *acquisition* behaviour: it belongs to the
+   * moment the app first learns where the vehicle is, and to an explicit
+   * Recenter. After that the user owns the zoom and following only ever moves
+   * the centre.
+   */
+  const zoomLockedRef = useRef(false);
+
   useEffect(() => {
     if (!following || !shownPosition) return;
     if (shownPosition.lat === 0 && shownPosition.lon === 0) return;
@@ -238,21 +267,47 @@ export default function Home() {
     // the vehicle, ease so the marker does not appear to teleport.
     const c = map.getCenter();
     const jump = shouldJumpCamera({ lat: c.lat, lon: c.lng }, shownPosition);
+    // Only claim the zoom once per lock — on acquisition, or after Recenter.
+    const takeZoom = !zoomLockedRef.current || jump;
+    zoomLockedRef.current = true;
     map.easeTo({
       center: [shownPosition.lon, shownPosition.lat],
-      zoom: Math.max(map.getZoom(), FOLLOW_ZOOM),
+      ...(takeZoom ? { zoom: Math.max(map.getZoom(), FOLLOW_ZOOM) } : {}),
       duration: jump ? 0 : 400,
     });
   }, [shownPosition, following]);
 
+  /**
+   * ★ THE FEEDBACK LOOP THIS GUARD EXISTS TO BREAK ★
+   * `handleReady` subscribes this to `moveend`, and it used to call
+   * `setMapBounds` with a freshly built object every time. Every camera move
+   * therefore re-rendered the page; that re-render rebuilt `shownPosition`
+   * with a new identity; that re-ran the follow effect; the follow effect
+   * called `easeTo`; `easeTo` fired `moveend`. Measured: 305 easeTo calls a
+   * second, a permanently animating camera, and a main thread with no room
+   * left for the engine — which is what made the app janky on the phone and
+   * the zoom impossible to hold.
+   *
+   * Bounds are only ever read to size an offline tile download, so identical
+   * numbers need not produce a new object.
+   */
   const readBounds = useCallback((map: MapLibreMap) => {
     const b = map.getBounds();
-    setMapBounds({
+    const next = {
       north: b.getNorth(),
       south: b.getSouth(),
       east: b.getEast(),
       west: b.getWest(),
-    });
+    };
+    setMapBounds((prev) =>
+      prev &&
+      prev.north === next.north &&
+      prev.south === next.south &&
+      prev.east === next.east &&
+      prev.west === next.west
+        ? prev
+        : next,
+    );
   }, []);
 
   const handleReady = useCallback(
@@ -624,7 +679,11 @@ export default function Home() {
       {!following ? (
         <button
           type="button"
-          onClick={() => setFollowing(true)}
+          onClick={() => {
+            // An explicit "put me back on the vehicle" re-takes the zoom too.
+            zoomLockedRef.current = false;
+            setFollowing(true);
+          }}
           className="absolute bottom-6 right-4 z-10 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-xs font-medium text-neutral-100 backdrop-blur transition hover:bg-black/85"
         >
           Recenter

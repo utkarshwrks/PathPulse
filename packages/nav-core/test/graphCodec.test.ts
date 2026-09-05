@@ -32,6 +32,76 @@ function graphOf(ways: RoadWay[]): RoadGraph {
   return { bbox: [79.87, 23.11, 79.99, 23.22], ways };
 }
 
+/**
+ * A minimal version 1 encoder, written out longhand.
+ *
+ * ★ THE ONLY HONEST WAY TO TEST BACKWARD COMPATIBILITY ★
+ * Asserting that v2 reads v1 is worthless if the v1 bytes were produced by the
+ * v2 encoder with a flag flipped — that tests the encoder against itself. This
+ * writes the old format directly, so if v2's reader drifts from what v1
+ * actually wrote, this fails. It is deliberately duplicated rather than shared:
+ * v1 is frozen, and a helper the production codec could refactor is not a
+ * record of what shipped.
+ */
+function encodeV1(graph: RoadGraph): Uint8Array {
+  const out: number[] = [];
+  const varint = (v: number) => {
+    let x = Math.floor(v);
+    while (x >= 0x80) {
+      out.push((x & 0x7f) | 0x80);
+      x = Math.floor(x / 128);
+    }
+    out.push(x);
+  };
+  const zigzag = (v: number) => varint(v >= 0 ? v * 2 : -v * 2 - 1);
+  const ascii = (str: string) => {
+    varint(str.length);
+    for (let i = 0; i < str.length; i++) out.push(str.charCodeAt(i));
+  };
+
+  out.push(0x50, 0x50, 0x47, 0x31, 1); // 'PPG1', version 1
+  for (const v of graph.bbox) zigzag(Math.round(v * 1e7));
+
+  const classes = new Map<string, number>();
+  for (const w of graph.ways) {
+    if (w.highway !== undefined && !classes.has(w.highway)) classes.set(w.highway, classes.size);
+  }
+  varint(classes.size);
+  for (const c of classes.keys()) ascii(c);
+  // No name table. That absence is the whole point of the fixture.
+
+  varint(graph.ways.length);
+  for (const w of graph.ways) {
+    const numericId = /^w\d+$/.test(w.id);
+    let flags = 0;
+    if (w.oneway === true) flags |= 1;
+    else if (w.oneway === false) flags |= 2;
+    if (w.maxspeed !== undefined) flags |= 0b0000_0100;
+    if (w.highway !== undefined) flags |= 0b0000_1000;
+    if (numericId) flags |= 0b0001_0000;
+    if (w.renderOnly === true) flags |= 0b0010_0000;
+    out.push(flags);
+
+    if (numericId) varint(Number(w.id.slice(1)));
+    else ascii(w.id);
+    if (w.highway !== undefined) varint(classes.get(w.highway)!);
+    if (w.maxspeed !== undefined) varint(Math.round(w.maxspeed));
+
+    varint(w.coords.length);
+    let prevLon = 0;
+    let prevLat = 0;
+    for (const [lon, lat] of w.coords) {
+      const qLon = Math.round(lon * 1e5);
+      const qLat = Math.round(lat * 1e5);
+      zigzag(qLon - prevLon);
+      zigzag(qLat - prevLat);
+      prevLon = qLon;
+      prevLat = qLat;
+    }
+  }
+  return new Uint8Array(out);
+}
+
 /** Largest distance, metres, between any original point and its round-trip. */
 function worstCoordErrorM(before: RoadGraph, after: RoadGraph): number {
   let worst = 0;
@@ -282,7 +352,96 @@ describe('graphCodec — size, on the real committed graphs', () => {
         expect(back.ways[i]!.oneway).toBe(graph.ways[i]!.oneway);
         expect(back.ways[i]!.maxspeed).toBe(graph.ways[i]!.maxspeed);
         expect(back.ways[i]!.highway).toBe(graph.ways[i]!.highway);
+        expect(back.ways[i]!.name).toBe(graph.ways[i]!.name);
       }
     }
+  });
+});
+
+describe('graphCodec — street names (v2)', () => {
+  it('★ preserves names, which the offline basemap labels roads from', () => {
+    // Dropped by v1 on a claim that measured wrong; see the note in the codec.
+    // Without this a prefetched cell decodes to unnamed roads, so labels
+    // appear only inside the three bounding boxes committed months ago —
+    // which is every place except where the user actually is.
+    const graph = graphOf([
+      way('w1', [[79.9, 23.16], [79.91, 23.17]], { name: 'Napier Town Road', highway: 'primary' }),
+      way('w2', [[79.92, 23.18], [79.93, 23.19]], { highway: 'residential' }),
+    ]);
+    const back = decodeGraph(encodeGraph(graph));
+    expect(back.ways[0]!.name).toBe('Napier Town Road');
+    // Absent stays absent rather than becoming an empty string: the basemap
+    // filters on the property existing, and '' would render a blank label.
+    expect(back.ways[1]!.name).toBeUndefined();
+  });
+
+  it('★ survives names that are not ASCII', () => {
+    // The obvious implementation reuses the ASCII writer used for the class
+    // table, which THROWS on a byte over 0x7f — so encoding a cell would fail
+    // outright anywhere the roads are not named in English, which is most of
+    // where this app is meant to work, including its own demo city.
+    const names = ['छोटी लाइन', 'Champs-Élysées', '中山路', 'Grünstraße'];
+    const graph = graphOf(
+      names.map((n, i) =>
+        way(`w${i + 1}`, [[79.9 + i / 100, 23.16], [79.91 + i / 100, 23.17]], { name: n }),
+      ),
+    );
+    const back = decodeGraph(encodeGraph(graph));
+    expect(back.ways.map((w) => w.name)).toEqual(names);
+  });
+
+  it('interns repeated names rather than storing one copy per way', () => {
+    // OSM splits a street at every junction, so this is the common shape, not
+    // a contrived one. Inline strings would make names cost what v1 assumed.
+    const many = Array.from({ length: 200 }, (_, i) =>
+      way(`w${i}`, [[79.9, 23.16 + i / 10_000], [79.9, 23.161 + i / 10_000]], {
+        name: 'Marine Drive',
+      }),
+    );
+    const shared = encodeGraph(graphOf(many)).length;
+    const distinct = encodeGraph(
+      graphOf(many.map((w, i) => ({ ...w, name: `Marine Drive ${i}` }))),
+    ).length;
+    // 200 copies of a 12-byte name against one copy plus 200 one-byte indices.
+    expect(distinct - shared).toBeGreaterThan(1500);
+  });
+
+  it('★ still decodes a version 1 buffer, or stored coverage is wiped', () => {
+    // Cells already on a device are v1, and there may be thousands of them.
+    // Rejecting them would delete exactly the offline coverage the prefetcher
+    // spent the user's data accumulating — and it would look like corruption.
+    const graph = graphOf([
+      way('w1', [[79.9, 23.16], [79.91, 23.17]], {
+        highway: 'primary',
+        oneway: true,
+        maxspeed: 60,
+      }),
+      way('w2', [[79.92, 23.18], [79.93, 23.19]], { renderOnly: true }),
+    ]);
+    const v1 = encodeV1(graph);
+    const back = decodeGraph(v1);
+    expect(back.ways).toHaveLength(2);
+    expect(back.ways[0]!.highway).toBe('primary');
+    expect(back.ways[0]!.oneway).toBe(true);
+    expect(back.ways[0]!.maxspeed).toBe(60);
+    expect(back.ways[1]!.renderOnly).toBe(true);
+    // v1 carried no names, and reading one out of an absent table would be
+    // the worst outcome — a plausible wrong street name.
+    expect(back.ways[0]!.name).toBeUndefined();
+  });
+
+  it('names cost a rounding error against the geometry on a real graph', () => {
+    // The whole justification for reversing v1's decision. If a refactor ever
+    // makes names expensive again this is where it shows up.
+    const file = join(GRAPH_DIR, 'road_graph_city.json');
+    if (!existsSync(file)) return;
+    const graph = JSON.parse(readFileSync(file).toString()) as RoadGraph;
+    const withNames = encodeGraph(graph).length;
+    const without = encodeGraph({
+      ...graph,
+      ways: graph.ways.map(({ name: _drop, ...w }) => w as RoadWay),
+    }).length;
+    expect(graph.ways.some((w) => w.name)).toBe(true);
+    expect((withNames - without) / without).toBeLessThan(0.05);
   });
 });

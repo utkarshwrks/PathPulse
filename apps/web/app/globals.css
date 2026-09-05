@@ -169,15 +169,6 @@ body {
   width: 100%;
 }
 
-/*
- * OpenStreetMap raster tiles are light. When no MapTiler key is configured we
- * darken them in CSS so the fallback still reads as a driving HUD rather than
- * a different app. Vector dark styles skip this.
- */
-.map-dark-filter .maplibregl-canvas {
-  filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.95) saturate(0.65);
-}
-
 .vehicle-marker {
   position: relative;
   display: grid;

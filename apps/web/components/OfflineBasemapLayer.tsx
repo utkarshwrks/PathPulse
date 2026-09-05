@@ -3,11 +3,13 @@
 import { useEffect, useMemo } from 'react';
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import type { RoadGraph } from '@pathpulse/nav-core';
+import { LABEL_FONT } from '@/config/map';
 import { useMap } from './MapContext';
 
 const SOURCE_ID = 'offline-basemap';
 const CASING_ID = 'offline-basemap-casing';
 const LINE_ID = 'offline-basemap-line';
+const LABEL_ID = 'offline-basemap-label';
 
 interface OfflineBasemapLayerProps {
   graph: RoadGraph | null;
@@ -62,6 +64,54 @@ interface OfflineBasemapLayerProps {
  * and needs no detection at all.
  */
 
+/**
+ * ★ THE PALETTE IS MEASURED FROM THE TILES, NOT CHOSEN ★
+ *
+ * Sampled from a CARTO dark_matter tile, by pixel share:
+ *
+ *   #090909   95 %   ground
+ *   #101010          built-up fill
+ *   #abacad          major road fill
+ *   #545556 / #414243 / #2e2f2f   descending road classes
+ *
+ * Which settles a question that used to be answered backwards. These roads
+ * were authored DARK — #3a4250 on a black casing — on the reasoning that a
+ * dark map wants dark roads. A dark basemap does the opposite: the ground is
+ * near-black and the roads are the light part. Drawn dark on #090909 they were
+ * very nearly invisible, and the only reason they showed at all was the CSS
+ * filter inverting them, which is the accident this is no longer relying on.
+ *
+ * So the tones below run light-on-dark, matched to the classes CARTO itself
+ * uses, and the casing is darker than the ground rather than equal to it —
+ * that is what separates two roads meeting at a junction.
+ */
+const ROAD_TONES = {
+  /** Motorway through secondary — CARTO's brightest road fill. */
+  major: '#abacad',
+  /** Tertiary, unclassified, residential. */
+  minor: '#6e6f70',
+  /** Service roads and car parks. Present, clearly subordinate. */
+  service: '#4a4b4c',
+  /**
+   * Footways, tracks, paths. Drawn, never matched.
+   *
+   * Dim on purpose: bright enough to recognise a neighbourhood by, never
+   * bright enough to read as a road the vehicle might be on. See renderOnly.
+   */
+  renderOnly: '#33363a',
+  /** Under everything, so junctions read as junctions rather than as a blob. */
+  casing: '#050505',
+} as const;
+
+/** Which tone a class draws in. Anything unlisted is a minor road. */
+const CLASS_TONES: Record<string, string> = {
+  motorway: ROAD_TONES.major,
+  trunk: ROAD_TONES.major,
+  primary: ROAD_TONES.major,
+  secondary: ROAD_TONES.major,
+  service: ROAD_TONES.service,
+};
+
 /** Road classes, thickest first. Anything unlisted draws as a minor road. */
 const CLASS_WIDTHS: Record<string, number> = {
   motorway: 1,
@@ -98,10 +148,21 @@ function toGeoJson(graph: RoadGraph) {
       // features, and this layer redraws on every camera move.
       properties: {
         weight: CLASS_WIDTHS[baseClass(w.highway)] ?? 0.4,
+        // Resolved here for the same reason as `weight`: one literal colour per
+        // feature beats a `match` expression evaluating a string across ~9,500
+        // features on every camera move.
+        tone:
+          w.renderOnly === true
+            ? ROAD_TONES.renderOnly
+            : (CLASS_TONES[baseClass(w.highway)] ?? ROAD_TONES.minor),
         // Drawn, never matched. A footpath at full road weight would make a
         // neighbourhood look like a motorway junction, and would also imply the
         // estimator could snap to it — which it cannot. See RoadWay.renderOnly.
         renderOnly: w.renderOnly === true ? 1 : 0,
+        // ★ THE LABEL, WHICH IS WHY THE CODEC NOW KEEPS NAMES ★
+        // Empty rather than absent: MapLibre's `text-field` renders '' as no
+        // label, so unnamed ways need no filter of their own.
+        name: w.name ?? '',
       },
       geometry: { type: 'LineString' as const, coordinates: w.coords },
     })),
@@ -147,7 +208,7 @@ export default function OfflineBasemapLayer({ graph }: OfflineBasemapLayerProps)
           source: SOURCE_ID,
           layout: { 'line-cap': 'round', 'line-join': 'round' },
           paint: {
-            'line-color': '#000000',
+            'line-color': ROAD_TONES.casing,
             'line-opacity': 0.9,
             'line-width': [
               'interpolate',
@@ -169,12 +230,10 @@ export default function OfflineBasemapLayer({ graph }: OfflineBasemapLayerProps)
           source: SOURCE_ID,
           layout: { 'line-cap': 'round', 'line-join': 'round' },
           paint: {
-            // Close to the raster basemap's own road colour, so the seam
+            // Resolved per feature in toGeoJson, from the tones measured off a
+            // real tile. Close to the basemap's own road colour, so the seam
             // between a cached tile and a drawn road is not a visible edge.
-            // Render-only ways sit back visually: present enough to recognise a
-            // neighbourhood by, never bright enough to read as a road the
-            // vehicle might be on.
-            'line-color': ['case', ['==', ['get', 'renderOnly'], 1], '#2b313b', '#3a4250'],
+            'line-color': ['get', 'tone'],
             'line-width': [
               'interpolate',
               ['exponential', 2],
@@ -184,6 +243,70 @@ export default function OfflineBasemapLayer({ graph }: OfflineBasemapLayerProps)
               17,
               ['*', ['get', 'weight'], 13],
             ],
+          },
+        },
+        before,
+      );
+
+      /*
+       * ★ THE NAMES WE WERE ALREADY DOWNLOADING AND THROWING AWAY ★
+       *
+       * `roadGraphFetch` has always asked Overpass for tags and kept
+       * `tags.name`, so every downloaded way arrived carrying its street name —
+       * and nothing had ever drawn one. Offline the map was a diagram of
+       * unlabelled lines, which tells you the shape of a junction and not which
+       * road you are on. That is the difference between a picture of a city and
+       * a map you can navigate by, and it cost no extra bytes to fetch.
+       *
+       * (It did cost bytes to STORE: the compact codec dropped names, so
+       * prefetched cells decoded unnamed. See graphCodec's v2 note — measured,
+       * they are 0.4 % of the Jabalpur graph.)
+       *
+       * ★ UNDER THE TILES, LIKE THE ROADS ★
+       * Same argument as the lines, plus one of its own: CARTO's tiles carry
+       * their own labels, so drawing ours above them would double every street
+       * name while online. Underneath, ours appear exactly where a tile did
+       * not, which is the same tile-by-tile degradation the rest of this layer
+       * is built on.
+       */
+      map.addLayer(
+        {
+          id: LABEL_ID,
+          type: 'symbol',
+          source: SOURCE_ID,
+          // Two filters. Unnamed ways carry '' and would otherwise reserve
+          // collision space for an empty label, thinning the real ones; and a
+          // footpath's name is never what you want to read while driving.
+          filter: [
+            'all',
+            ['!=', ['get', 'name'], ''],
+            ['==', ['get', 'renderOnly'], 0],
+          ],
+          layout: {
+            'text-field': ['get', 'name'],
+            'text-font': LABEL_FONT,
+            // Along the road, not across it — a street name set horizontally
+            // over a line is a label floating near a road rather than a label
+            // ON it, and on a dense graph they pile up unreadably.
+            'symbol-placement': 'line',
+            'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10, 17, 12.5],
+            // Repeated, because a long road leaving the viewport with its only
+            // label at the far end reads as unnamed.
+            'symbol-spacing': 260,
+            'text-max-angle': 35,
+            'text-padding': 4,
+            // Labels are the first thing to sacrifice when space runs out: a
+            // missing name is a small loss, an unreadable pile-up is a big one.
+            'text-allow-overlap': false,
+            'text-optional': true,
+          },
+          paint: {
+            'text-color': '#c8c9ca',
+            // A halo in the ground colour, not black: this is what keeps a
+            // name legible where it crosses its own road, which at these
+            // widths is most of the time.
+            'text-halo-color': '#090909',
+            'text-halo-width': 1.4,
           },
         },
         before,
@@ -200,6 +323,7 @@ export default function OfflineBasemapLayer({ graph }: OfflineBasemapLayerProps)
       // Guarded: the map may already be torn down, and removing a layer that
       // is not there throws rather than no-opping.
       try {
+        if (map.getLayer(LABEL_ID)) map.removeLayer(LABEL_ID);
         if (map.getLayer(LINE_ID)) map.removeLayer(LINE_ID);
         if (map.getLayer(CASING_ID)) map.removeLayer(CASING_ID);
         if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
