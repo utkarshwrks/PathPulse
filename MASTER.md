@@ -3,7 +3,7 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.22** · APK 7.41 MB · 1,588 tests · 60,224 lines
+**Build v0.22** · APK 7.41 MB · 1,620 tests · 60,224 lines
 **6.9 % mean drift on simulated logs · 41.3 % on real vehicle sensors**
 
 ---
@@ -801,7 +801,7 @@ PathPulse/
 └── docs/                        generated benchmarks + the few hand-written docs that remain
 ```
 
-**Total: 60,224 lines across 97 test files.** `nav-core/src` alone is 71 files.
+**Total: 60,224 lines across 98 test files.** `nav-core/src` alone is 71 files.
 
 ## 8.1 The 13 configurations
 
@@ -1361,15 +1361,33 @@ runtime.
 
 | Model | Task | Size | Result |
 |---|---|---|---|
-| **M1** | Speed estimation from an IMU window | **26,081 params** | **MAE 2.929 m/s, R² 0.786** |
+| **M1** | Speed estimation from an IMU window | **27,041 params** | **MAE 2.942 m/s, R² 0.792, +0.4 % 30 s drift bias** |
 | **M2** | Motion-context classification | **9,736 params** | **macro-F1 0.4795** vs 0.0884 baseline |
 | **M4** | Sensor-quality / GNSS trust gating | **988 params** | 1,430 training rows |
 | CNN | Vibration signature (experimental) | — | in `ml/cnn.ts` |
 
+**M1 is scored on drift, not only on MAE, and that changed the model.** The
+engine *integrates* this output, so a zero-mean 3 m/s error largely cancels over
+a 30 s outage while a bias does not — it is invented distance, every time. The
+weights this replaced scored the same MAE while over-stating distance by
+**8.5 %** on every 30 s stretch of a held-out journey, and no metric the project
+had could see it. Two changes fixed it: the model is now given the
+mount-invariant channels the engine already computes at runtime (previously it
+had to *learn* rotation invariance from augmentation), and training stops on
+drift rather than on validation loss, because the epoch with the best per-window
+score is not the epoch that drifts least. §13.2, `ml/experiments/README.md`.
+
+| | shipped before | now |
+|---|---|---|
+| MAE | 2.929 m/s | 2.942 m/s |
+| stopped-window MAE | 1.570 | **1.413** |
+| mean 30 s drift | 21.60 % | **19.48 %** |
+| **signed 30 s drift** | **+8.53 %** | **+0.38 %** |
+
 Training lives in `ml/` (3,481 lines of Python); inference lives in
 `packages/nav-core/src/ml/` as plain TypeScript with the weights inlined. **There
 is no TensorFlow, no ONNX runtime, no inference library in the app.** A model of
-26,081 parameters is a few matrix multiplies, and `nav-core`'s purity rule
+27,041 parameters is a few matrix multiplies, and `nav-core`'s purity rule
 (§7.1) means it could not have a runtime even if we wanted one.
 
 ## 13.1 Why these are small
@@ -1712,8 +1730,8 @@ of raster tiles — a **43× reduction**.
 | | |
 |---|---|
 | **APK** | **7.41 MB** |
-| Tests | **1,588** passing |
-| Source | **60,224 lines**, 97 test files |
+| Tests | **1,620** passing |
+| Source | **60,224 lines**, 98 test files |
 | `nav-core` runtime dependencies | **zero** |
 
 
@@ -1721,7 +1739,7 @@ of raster tiles — a **43× reduction**.
 
 # 20 · Tests
 
-**1,588 tests across 97 files.** `pnpm test` runs them; `pnpm typecheck` and
+**1,620 tests across 98 files.** `pnpm test` runs them; `pnpm typecheck` and
 `pnpm lint:core-purity` complete the gate.
 
 ## 20.1 What a test looks like here
@@ -1798,7 +1816,7 @@ Every claim this project makes, and exactly what backs it.
 | 8.03× compression | Measured | `graphCodec` tests | Real OSM extracts |
 | 3.5 MB per 100 km | Measured | Cell planning | Real Overpass responses |
 | APK 7.41 MB | Measured | Clean Gradle build | |
-| 1,588 tests | Measured | `pnpm test` | |
+| 1,620 tests | Measured | `pnpm test` | |
 | Zero deps in `nav-core` | Enforced | `pnpm lint:core-purity` | |
 
 **What we have never measured:** a drive with our own phone, in our own vehicle,
@@ -1998,7 +2016,7 @@ us to make the distinction explicit in code rather than in a convention.
 
 ```bash
 pnpm install
-pnpm test                 # 1,588 tests
+pnpm test                 # 1,620 tests
 pnpm typecheck
 pnpm lint:core-purity     # nav-core must stay pure
 
@@ -2038,7 +2056,7 @@ pnpm edge:bench        # docs/edge-benchmarks.md
 | SIH26168 requirement | Status | Evidence |
 |---|---|---|
 | In-vehicle alignment & calibration | ✅ | §10.6; **7.1 % at a 90° mount** vs 38.2 % without |
-| AI-based speed estimation | ✅ | M1: 26,081 params, MAE 2.929 m/s, R² 0.786 |
+| AI-based speed estimation | ✅ | M1: 27,041 params, MAE 2.942 m/s, R² 0.792, unbiased over an outage |
 | Vibration filtering | ✅ | `filters/`, quality grading, `filtered` ablation row |
 | Advanced map matching | ✅ | Newson–Krumm HMM + heading/one-way gates; **99.4 % snap** |
 | Kinematic constraints | ✅ | NHC, ZUPT, ZARU, speed clamp — each ablated |
@@ -2149,7 +2167,7 @@ needs a battery measurement we have not taken.
 
 ## 28.5 CI
 
-The repository has `keepalive.yml` and nothing that runs the 1,588 tests on push.
+The repository has `keepalive.yml` and nothing that runs the 1,620 tests on push.
 For a project whose entire credibility rests on those tests being green, that is
 a gap.
 
@@ -2177,7 +2195,7 @@ Every script in `package.json`.
 ## Quality gate
 | Command | Does |
 |---|---|
-| `pnpm test` | **1,588 tests** |
+| `pnpm test` | **1,620 tests** |
 | `pnpm test:watch` | `nav-core` in watch mode |
 | `pnpm typecheck` | Every package |
 | `pnpm lint:core-purity` | **Fails if `nav-core` gains an import or a dependency** |
@@ -2254,7 +2272,7 @@ alignment and 38.2 % without**. §19.4.
 
 **"Is it actually AI, or is that a label?"**
 Four small models, on-device, weights inlined in TypeScript with no inference
-runtime: speed (26,081 params, MAE 2.929 m/s, R² 0.786), context (9,736 params,
+runtime: speed (27,041 params, MAE 2.942 m/s, R² 0.792, +0.4 % drift bias), context (9,736 params,
 macro-F1 0.4795 vs 0.0884 baseline), GNSS quality (988 params). They **aid** an
 auditable filter rather than replacing it, because a network that cannot be
 down-weighted has to be right. §13, §3.2.
