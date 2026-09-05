@@ -73,8 +73,15 @@ async function connected(): Promise<{ source: ForegroundSource; samples: SensorS
   return { source, samples };
 }
 
-const send = (payload: Array<Record<string, unknown>>, status: Record<string, number | boolean> = {}) =>
-  listener?.({ samples: payload, status });
+const send = (payload: Array<Record<string, unknown>>, status: Record<string, number | boolean> = {}) => {
+  // ★ FAIL LOUDLY WHEN THE BRIDGE IS NOT CONNECTED ★
+  // This was `listener?.(...)`, and the optional call is what made a real bug
+  // intermittent instead of visible: with no listener attached the send simply
+  // did nothing, the assertion then read an empty array, and the failure
+  // pointed at C/N0 parsing rather than at the listener having been torn down.
+  if (!listener) throw new Error('send() with no listener attached — the bridge is not connected');
+  listener({ samples: payload, status });
+};
 
 describe('availability', () => {
   it('is available when the plugin is in the build', async () => {
