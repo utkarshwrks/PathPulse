@@ -36,6 +36,17 @@ interface OfflinePanelProps {
   position: { lat: number; lon: number } | null;
   /** Called after a road graph is downloaded, so the engine can pick it up. */
   onRoadGraphChanged: () => void;
+  /** Background coverage acquisition, if it is running. */
+  coverage?: {
+    fetched: number;
+    queued: number;
+    failed: number;
+    running: boolean;
+    bytesStored: number;
+    persistence: 'granted' | 'denied' | 'unsupported' | 'pending';
+    allowMetered: boolean;
+    setAllowMetered: (v: boolean) => void;
+  } | null;
   onClose: () => void;
 }
 
@@ -60,6 +71,7 @@ export default function OfflinePanel({
   mapSourceLabel,
   position,
   onRoadGraphChanged,
+  coverage = null,
   onClose,
 }: OfflinePanelProps) {
   const [roads, setRoads] = useState<RoadsState>({ kind: 'checking' });
@@ -173,6 +185,31 @@ export default function OfflinePanel({
             tone={status.online ? 'neutral' : 'good'}
           />
           <Row label="map source" value={mapSourceLabel} />
+          {coverage ? (
+            <>
+              {/* ★ VISIBLE, NOT INTRUSIVE ★ The requirement was that nobody is
+                  shown a dialog offering to download 50 MB — not that the app
+                  hides what it is doing. Anyone who opens this panel can see
+                  exactly how much has been stored and whether it is still
+                  working; nobody who does not is ever interrupted. */}
+              <Row
+                label="offline roads"
+                value={
+                  coverage.running
+                    ? `${coverage.fetched} cells, ${coverage.queued} to go`
+                    : `${coverage.fetched} cells`
+                }
+                tone={coverage.fetched > 0 ? 'good' : 'neutral'}
+              />
+              <Row label="coverage size" value={formatBytes(coverage.bytesStored)} />
+              {coverage.persistence === 'denied' ? (
+                <Row label="storage" value="may be evicted" tone="warn" />
+              ) : null}
+              {coverage.failed > 0 ? (
+                <Row label="cells failed" value={String(coverage.failed)} tone="warn" />
+              ) : null}
+            </>
+          ) : null}
           <Row
             label="tile cache"
             value={status.capability.active ? 'active' : 'unavailable'}

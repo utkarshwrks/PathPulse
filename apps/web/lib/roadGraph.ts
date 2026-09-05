@@ -1,5 +1,7 @@
 import type { RoadGraph } from '@pathpulse/nav-core';
 import { bboxContains, listStoredGraphs, loadStoredGraph } from '@/lib/roadGraphStore';
+import { cellsCovering, mergeGraphs, type Lod } from '@/lib/graphCells';
+import type { GraphCellStore } from '@/lib/graphCellStore';
 
 export interface RoadGraphEntry {
   name: string;
@@ -107,11 +109,84 @@ export async function loadRoadGraph(entry: RoadGraphEntry): Promise<RoadGraph | 
   }
 }
 
-/** Convenience: find and load in one step. */
+/**
+ * How much of the prefetched disc is actually handed to the estimator.
+ *
+ * ★ COVERAGE AND WORKING SET ARE DIFFERENT QUANTITIES ★
+ * The prefetcher acquires 100 km so the data is on the device before the signal
+ * goes. The estimator does not want 100 km: RoadIndex is rebuilt whenever the
+ * graph changes, snapping searches 50 m, and the particle filter does a
+ * positionAt lookup per particle per step. Handing it the whole disc would cost
+ * a large rebuild for roads the vehicle cannot reach for an hour.
+ *
+ * So the working set is a smaller disc that travels with the vehicle: full
+ * detail near it, majors far enough out that a motorway stays matched.
+ */
+export const FULL_WORKING_RADIUS_M = 12_000;
+export const MAJOR_WORKING_RADIUS_M = 60_000;
+
+/**
+ * Build a graph from prefetched cells, if any cover this position.
+ *
+ * Inner cells are merged first, so where a full-detail cell and a major-only
+ * cell both contain a road, the fuller copy is the one kept — see mergeGraphs,
+ * which takes the first occurrence of each way id.
+ */
+export async function loadCellGraphFor(
+  store: GraphCellStore,
+  lat: number,
+  lon: number,
+): Promise<RoadGraph | null> {
+  const parts: RoadGraph[] = [];
+  const rings: Array<{ lod: Lod; radiusM: number }> = [
+    { lod: 'full', radiusM: FULL_WORKING_RADIUS_M },
+    { lod: 'major', radiusM: MAJOR_WORKING_RADIUS_M },
+  ];
+
+  for (const { lod, radiusM } of rings) {
+    for (const cell of cellsCovering(lat, lon, radiusM, lod)) {
+      const g = await store.get(cell, lod);
+      if (g) parts.push(g);
+    }
+  }
+
+  if (parts.length === 0) return null;
+  const merged = mergeGraphs(parts);
+  return merged.ways.length > 0 ? merged : null;
+}
+
+/**
+ * Convenience: find and load in one step.
+ *
+ * ★ PREFETCHED CELLS WIN OVER A BUNDLED GRAPH ★
+ * When both cover the position, the cells are the better answer: they are
+ * centred on the vehicle rather than on whatever box someone drew at build
+ * time, they are current, and they are the mechanism that works everywhere
+ * rather than in the three areas this app happened to ship with. The bundled
+ * manifest stays as the fallback, which is what makes the app useful on first
+ * run before any prefetching has happened.
+ */
 export async function loadRoadGraphFor(
   lat: number,
   lon: number,
+  cellStore?: GraphCellStore,
 ): Promise<{ entry: RoadGraphEntry; graph: RoadGraph } | null> {
+  if (cellStore) {
+    const graph = await loadCellGraphFor(cellStore, lat, lon);
+    if (graph) {
+      return {
+        entry: {
+          name: 'offline coverage',
+          file: '',
+          bbox: graph.bbox,
+          ways: graph.ways.length,
+          sizeKb: 0,
+          source: 'downloaded',
+        },
+        graph,
+      };
+    }
+  }
   const entry = await findGraphFor(lat, lon);
   if (!entry) return null;
   const graph = await loadRoadGraph(entry);

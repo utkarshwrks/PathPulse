@@ -25,6 +25,8 @@
     "eval:offroad": "pnpm --filter @pathpulse/eval offroad",
     "eval:drift-dataset": "pnpm --filter @pathpulse/eval drift-dataset",
     "eval:gnss-dataset": "pnpm --filter @pathpulse/eval gnss-dataset",
+    "eval:tier-r": "pnpm --filter @pathpulse/eval tier-r",
+    "data:iovnbd": "node scripts/iovnbd-to-replay.mjs",
     "edge": "pnpm --filter @pathpulse/edge-engine edge",
     "edge:bench": "pnpm --filter @pathpulse/edge-engine bench",
     "eval:record": "pnpm --filter @pathpulse/eval record",

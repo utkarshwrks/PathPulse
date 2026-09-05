@@ -54,19 +54,92 @@ const HIGHWAY_CLASSES = [
   'service',
 ];
 
+/**
+ * Classes fetched to be DRAWN, never to be matched against.
+ *
+ * ★ A PRECISE MAP AND A CORRECT MATCHER WANT DIFFERENT ROADS ★
+ * The tester asked for a map that shows "a lot of turns and lot of streets and
+ * small roads" — and footways, tracks and paths are most of what makes a
+ * neighbourhood look like itself. None of them may reach the matcher: a car is
+ * not on the pavement, and a vehicle snapped onto a footpath running parallel
+ * to its actual road is wrong in a way that looks entirely plausible.
+ *
+ * So they are fetched with `renderOnly: true`, and RoadIndex refuses to index
+ * anything carrying that flag. The separation is enforced by the type, not by
+ * remembering which list to pass — see RoadWay.renderOnly.
+ *
+ * Inner ring only: these are dense and local, and a footpath 80 km away is
+ * bytes spent on something that will be evicted before it is ever drawn.
+ */
+export const RENDER_ONLY_CLASSES = ['footway', 'path', 'track', 'cycleway', 'steps', 'pedestrian'];
+
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
 ];
 
 /**
- * Largest area that may be requested, square kilometres.
+ * Largest FULL-DETAIL area that may be requested, square kilometres.
  *
  * Overpass rate-limits hard and a careless bounding box is both a long wait
  * and a good way to get the endpoint to refuse everything for a while. 25 km²
  * is a generous city drive and returns in a few seconds.
  */
 export const MAX_AREA_SQ_KM = 25;
+
+/**
+ * Largest MAJOR-ROADS-ONLY area, square kilometres.
+ *
+ * ★ THE CAP BOUNDS RESPONSE SIZE, NOT AREA — SO IT DEPENDS ON THE FILTER ★
+ *
+ * Treating 25 km² as a global limit made rolling 100 km coverage arithmetically
+ * impossible: 31,400 km² in 25 km² pieces is over 1,200 requests, which at any
+ * polite rate is hours and would be rate-limited long before it finished.
+ *
+ * But the limit was never really about area. It is about how much comes back,
+ * and that is dominated by residential and service roads — 83 % of nodes on the
+ * Jabalpur graph. Filtered to majors, an enormous box returns very little.
+ * Measured against overpass-api.de around Jabalpur:
+ *
+ *   filter   area        ways    nodes     response    time
+ *   major     1,600 km²    766   12,618      994 KB    1.5 s
+ *   major    10,000 km²  1,699   43,643    3,147 KB    2.0 s
+ *   full         25 km²  2,512   19,700    1,845 KB   10.4 s
+ *
+ * A major-only query over 10,000 km² is FOUR HUNDRED times the area of a
+ * full-detail one and returns less than twice as much, five times faster. So
+ * the outer ring costs a handful of requests rather than twelve hundred, and
+ * the whole rolling-coverage design becomes affordable.
+ *
+ * 10,000 is where it was measured, not a guess, and it is deliberately not
+ * pushed higher: the response is already 3 MB and the timeout risk grows faster
+ * than the saving.
+ */
+export const MAX_MAJOR_AREA_SQ_KM = 10_000;
+
+/**
+ * The classes an outer-ring query asks for.
+ *
+ * A strict subset of HIGHWAY_CLASSES, so a cell promoted from major to full
+ * detail is a superset of what it held rather than a different graph.
+ */
+export const MAJOR_HIGHWAY_CLASSES = [
+  'motorway',
+  'motorway_link',
+  'trunk',
+  'trunk_link',
+  'primary',
+  'primary_link',
+  'secondary',
+  'secondary_link',
+] as const;
+
+/** Which road classes a request asks for. */
+export type FetchDetail = 'full' | 'major';
+
+export function maxAreaFor(detail: FetchDetail): number {
+  return detail === 'major' ? MAX_MAJOR_AREA_SQ_KM : MAX_AREA_SQ_KM;
+}
 
 export interface BBox {
   minLon: number;
@@ -93,9 +166,13 @@ export function areaSqKm(b: BBox): number {
   return Math.abs(widthKm * heightKm);
 }
 
-export function buildOverpassQuery(b: BBox): string {
+export function buildOverpassQuery(b: BBox, detail: FetchDetail = 'full'): string {
   const bbox = `${b.minLat},${b.minLon},${b.maxLat},${b.maxLon}`;
-  const filter = HIGHWAY_CLASSES.join('|');
+  const classes =
+    detail === 'major'
+      ? [...MAJOR_HIGHWAY_CLASSES]
+      : [...HIGHWAY_CLASSES, ...RENDER_ONLY_CLASSES];
+  const filter = classes.join('|');
   // `out geom` returns each way's coordinates inline, so there is no second
   // pass to resolve node ids — far less data and far less code.
   return `[out:json][timeout:90];way["highway"~"^(${filter})$"](${bbox});out geom;`;
@@ -133,6 +210,10 @@ export function osmToGraph(osm: { elements?: OsmElement[] }, b: BBox): RoadGraph
     };
     if (tags.name) way.name = tags.name;
     if (tags.highway) way.highway = tags.highway;
+    // Marked at the boundary, once, where the OSM class is still in hand. Any
+    // later decision would have to re-derive it from `highway`, and two places
+    // deciding what a footpath is means eventually they disagree.
+    if (tags.highway && RENDER_ONLY_CLASSES.includes(tags.highway)) way.renderOnly = true;
     const ms = parseMaxspeed(tags.maxspeed);
     if (ms !== undefined) way.maxspeed = ms;
     // "-1" means one-way against the drawn direction; treating it as one-way
@@ -170,15 +251,20 @@ export class RoadGraphFetchError extends Error {}
  * the endpoints that require it simply fail and the next one is used. That is
  * why there is more than one.
  */
-export async function fetchRoadGraph(b: BBox, signal?: AbortSignal): Promise<RoadGraph> {
+export async function fetchRoadGraph(
+  b: BBox,
+  signal?: AbortSignal,
+  detail: FetchDetail = 'full',
+): Promise<RoadGraph> {
   const area = areaSqKm(b);
-  if (area > MAX_AREA_SQ_KM) {
+  const cap = maxAreaFor(detail);
+  if (area > cap) {
     throw new RoadGraphFetchError(
-      `area is ${area.toFixed(0)} km², over the ${MAX_AREA_SQ_KM} km² limit — zoom in first`,
+      `area is ${area.toFixed(0)} km², over the ${cap} km² limit — zoom in first`,
     );
   }
 
-  const query = buildOverpassQuery(b);
+  const query = buildOverpassQuery(b, detail);
   let lastError: unknown;
 
   for (const endpoint of ENDPOINTS) {
@@ -192,7 +278,13 @@ export async function fetchRoadGraph(b: BBox, signal?: AbortSignal): Promise<Roa
       if (!res.ok) throw new RoadGraphFetchError(`HTTP ${res.status}`);
       const json = (await res.json()) as { elements?: OsmElement[] };
       const graph = osmToGraph(json, b);
-      if (graph.ways.length === 0) {
+      // ★ AN EMPTY MAJOR-ROADS CELL IS A RESULT, NOT A FAILURE ★
+      // A 5,000 km² outer-ring box over sea, desert or forest genuinely has no
+      // trunk roads in it, and treating that as an error would make the
+      // prefetcher retry it for ever. A full-detail box is different: it is
+      // small and user-initiated, so nothing at all means the user is looking
+      // somewhere unexpected and deserves to be told.
+      if (graph.ways.length === 0 && detail === 'full') {
         throw new RoadGraphFetchError('no roads found here — is the area correct?');
       }
       return graph;

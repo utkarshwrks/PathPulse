@@ -56,15 +56,67 @@ describe('the Overpass query', () => {
     expect(q).toContain('(23.15,79.92,23.18,79.95)');
   });
 
-  it('asks only for road classes a vehicle can be on', () => {
+  it('asks for every road class a vehicle can be on', () => {
     const q = buildOverpassQuery(JABALPUR);
     expect(q).toContain('motorway');
     expect(q).toContain('residential');
     expect(q).toContain('service');
-    // A car is not on a footpath, and offering one as a candidate lets the
-    // matcher snap the vehicle onto the pavement beside its actual road.
+  });
+
+  it('★ also asks for footways — to DRAW, never to match', () => {
+    // ★ THE SAFETY PROPERTY MOVED, AND GOT STRONGER ★
+    // This test used to assert `not.toContain('footway')`, because excluding
+    // them from the query was how "a car is not on the pavement" was enforced.
+    // That only ever protected graphs fetched through THIS function; a bundled
+    // graph, or one from any future source, was covered by nothing.
+    //
+    // Now footways are fetched — the map is far more precise with them — and
+    // arrive flagged `renderOnly`, which RoadIndex refuses to index at
+    // construction. The vehicle still cannot be snapped onto a pavement, and
+    // now that holds however the graph was obtained. Asserted in
+    // nav-core/test/roadsnap.test.ts, which is where the property now lives.
+    const q = buildOverpassQuery(JABALPUR);
+    expect(q).toContain('footway');
+    expect(q).toContain('path');
+  });
+
+  it('★ flags render-only classes, and only those', () => {
+    const graph = osmToGraph(
+      {
+        elements: [
+          {
+            type: 'way',
+            id: 1,
+            tags: { highway: 'footway' },
+            geometry: [
+              { lat: 23.16, lon: 79.93 },
+              { lat: 23.17, lon: 79.94 },
+            ],
+          },
+          {
+            type: 'way',
+            id: 2,
+            tags: { highway: 'residential' },
+            geometry: [
+              { lat: 23.16, lon: 79.93 },
+              { lat: 23.17, lon: 79.94 },
+            ],
+          },
+        ],
+      },
+      JABALPUR,
+    );
+    expect(graph.ways.find((w) => w.id === 'w1')!.renderOnly).toBe(true);
+    expect(graph.ways.find((w) => w.id === 'w2')!.renderOnly).toBeUndefined();
+  });
+
+  it('the major-roads query asks for no footways at all', () => {
+    // The outer ring is for keeping a motorway matched 60 km away. A footpath
+    // there is bytes spent on something evicted before it is ever drawn.
+    const q = buildOverpassQuery(JABALPUR, 'major');
+    expect(q).toContain('motorway');
     expect(q).not.toContain('footway');
-    expect(q).not.toContain('cycleway');
+    expect(q).not.toContain('residential');
   });
 
   it('returns geometry inline, so no second pass resolves node ids', () => {

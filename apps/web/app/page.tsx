@@ -25,6 +25,8 @@ import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
 import TrailLayer from '@/components/TrailLayer';
 import MatchedRoadLayer from '@/components/MatchedRoadLayer';
+import OfflineBasemapLayer from '@/components/OfflineBasemapLayer';
+import TileRefresh from '@/components/TileRefresh';
 import ConfidenceEllipse from '@/components/ConfidenceEllipse';
 import OfflinePanel from '@/components/OfflinePanel';
 import DemoBar from '@/components/DemoBar';
@@ -38,6 +40,7 @@ import { useDemoMode } from '@/hooks/useDemoMode';
 import { DEMO_CONTROLS, DEMO_OUTAGE_MS } from '@/lib/demoScript';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import { useKeepAlive } from '@/hooks/useKeepAlive';
+import { useGraphPrefetch } from '@/hooks/useGraphPrefetch';
 import type { LatLonBounds } from '@/lib/tileCache';
 
 const MapView = dynamic(() => import('@/components/MapView'), {
@@ -170,6 +173,26 @@ export default function Home() {
   // fix. See lib/shownPosition.ts — this was the "Live does not find me" bug.
   const shownPosition = resolveShownPosition(navState, nav.lastGnss?.gnss);
   const hasPosition = shownPosition !== null;
+
+  /*
+   * Offline coverage, acquired in the background.
+   *
+   * ★ DRIVEN BY THE FIX, NOT BY THE ESTIMATE ★
+   * `shownPosition` can be a dead-reckoned solution that has drifted, and
+   * prefetching around a drifted position would acquire cells for somewhere the
+   * vehicle is not. The last real GNSS fix is the only position here that is a
+   * measurement, and coverage is worth building around measurements only.
+   *
+   * Nothing renders from this yet beyond the Offline panel's counters — it is
+   * deliberately invisible, which is the requirement: "they don't directly show
+   * that we are downloading 50 MB... back and back loads all the things."
+   */
+  const prefetchAnchor = useMemo(
+    () =>
+      nav.lastGnss?.gnss ? { lat: nav.lastGnss.gnss.lat, lon: nav.lastGnss.gnss.lon } : null,
+    [nav.lastGnss],
+  );
+  const prefetch = useGraphPrefetch(prefetchAnchor, navState?.headingDeg ?? null, kind === 'live');
 
   useEffect(() => {
     if (!navState) return;
@@ -314,6 +337,20 @@ export default function Home() {
             mode={navState?.mode ?? 'INITIALIZING'}
           />
         ) : null}
+        </ErrorBoundary>
+        {/*
+          The basemap we draw ourselves, from the road graph the estimator is
+          already using. Inserted beneath the tile layer, so it is invisible
+          while tiles load and shows through wherever they are missing — which
+          is what makes the map survive going offline. See the component.
+        */}
+        <ErrorBoundary area="Offline basemap" fallback={null}>
+          <OfflineBasemapLayer graph={nav.roadGraph} />
+        </ErrorBoundary>
+        {/* Re-requests tiles that failed while the network was away. Renders
+            nothing; see the component for why it is not a style reload. */}
+        <ErrorBoundary area="Tile refresh" fallback={null}>
+          <TileRefresh />
         </ErrorBoundary>
         {/*
           Under the trail and the marker on purpose: the highlighted road is
@@ -492,6 +529,16 @@ export default function Home() {
           mapSourceLabel={styleInfo.label}
           position={nav.lastGnss ? { lat: nav.lastGnss.gnss.lat, lon: nav.lastGnss.gnss.lon } : null}
           onRoadGraphChanged={() => void nav.reloadRoadGraph()}
+          coverage={{
+            fetched: prefetch.stats.fetched,
+            queued: prefetch.stats.queued,
+            failed: prefetch.stats.failed,
+            running: prefetch.stats.running,
+            bytesStored: prefetch.bytesStored,
+            persistence: prefetch.persistence,
+            allowMetered: prefetch.allowMetered,
+            setAllowMetered: prefetch.setAllowMetered,
+          }}
           onClose={closePanel}
         />
       ) : null}

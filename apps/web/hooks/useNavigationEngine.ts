@@ -17,6 +17,7 @@ import {
   type SpeedSource,
 } from '@pathpulse/nav-core';
 import { loadRoadGraphFor, type RoadGraphEntry } from '@/lib/roadGraph';
+import { getSharedCellStore } from '@/lib/graphCellStore';
 import { EMPTY_MODEL_INFO, WebSpeedPredictor, type ModelInfo } from '@/lib/ml/speedModel';
 import { WebMotionClassifier } from '@/lib/ml/motionModel';
 import { WebGnssQualityClassifier } from '@/lib/ml/gnssQualityModel';
@@ -406,7 +407,10 @@ export function useNavigationEngine(): NavEngineOutput {
     if (sample.gnss && !graphRequestedRef.current) {
       graphRequestedRef.current = true;
       const { lat, lon } = sample.gnss;
-      void loadRoadGraphFor(lat, lon).then((found) => {
+      // Prefetched cells first, bundled manifest as the fallback — see
+      // loadRoadGraphFor. This is what makes snapping work somewhere nobody
+      // shipped a graph for.
+      void loadRoadGraphFor(lat, lon, getSharedCellStore()).then((found) => {
         if (!found) return;
         engineRef.current?.setRoadGraph(found.graph);
         setRoadGraphEntry(found.entry);
@@ -517,7 +521,7 @@ export function useNavigationEngine(): NavEngineOutput {
   const reloadRoadGraph = useCallback(async () => {
     const at = lastGnssRef.current?.gnss;
     if (!at) return false;
-    const found = await loadRoadGraphFor(at.lat, at.lon);
+    const found = await loadRoadGraphFor(at.lat, at.lon, getSharedCellStore());
     if (!found) return false;
     engineRef.current?.setRoadGraph(found.graph);
     setRoadGraphEntry(found.entry);
