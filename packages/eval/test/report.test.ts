@@ -252,7 +252,22 @@ describe('markdown', () => {
   it('warns loudly when every log is simulated', () => {
     const md = markdown(rows, ['sim_a.jsonl', 'sim_b.jsonl'], new Set());
     expect(md).toMatch(/SIMULATED/);
-    expect(md).toMatch(/do not present any\s*\n?> figure in this file as a road result/i);
+    // Matched with the markdown line breaks stripped: the previous version of
+    // this assertion encoded where the sentence happened to wrap, so rewording
+    // the banner broke it for no reason connected to what it is guarding.
+    const flat = md.replace(/\n>\s*/g, ' ');
+    expect(flat).toMatch(/do not present any figure in this file as a road result/i);
+  });
+
+  it('★ points at the Tier R numbers rather than hiding behind the simulated ones', () => {
+    // The banner used to say only "these are simulated". It now has to say what
+    // the real-sensor figure is, because a reader who stops at this file would
+    // otherwise take 6.9 % as the estimator's accuracy — and it is 41.3 % on
+    // real sensors. A generated file is the only place that stays true, since
+    // `pnpm ablation` overwrites anything added by hand.
+    const md = markdown(rows, ['sim_a.jsonl', 'sim_b.jsonl'], new Set());
+    expect(md).toMatch(/benchmarks-tier-r\.md/);
+    expect(md).toMatch(/never average a row here with a Tier R row/i);
   });
 
   it('drops the warning once a real drive log is included', () => {

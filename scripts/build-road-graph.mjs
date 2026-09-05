@@ -196,7 +196,8 @@ async function main() {
       'usage:\n' +
         '  --route <city|highway> [--pad 400]\n' +
         '  --centre <lat,lon> --radius <m> --name <name>\n' +
-        '  --bbox <minLon,minLat,maxLon,maxLat> --name <name>',
+        '  --bbox <minLon,minLat,maxLon,maxLat> --name <name>\n' +
+        '  --eval-only   write only data/maps, keep it out of the APK',
     );
     process.exit(1);
   }
@@ -219,7 +220,23 @@ async function main() {
   const named = graph.ways.filter((w) => w.name).length;
   const withSpeed = graph.ways.filter((w) => w.maxspeed !== undefined).length;
 
-  const outDirs = [join(ROOT, 'data', 'maps'), join(ROOT, 'apps', 'web', 'public', 'maps')];
+  /*
+   * ★ NOT EVERY GRAPH BELONGS IN THE APK ★
+   *
+   * Writing to both places is right for the areas the app demonstrates: the
+   * eval harness reads data/maps and the handset reads the bundled copy, and
+   * they must be the same file.
+   *
+   * It is wrong for a graph that exists only as an evaluation fixture. The two
+   * IO-VNBD routes are in the English Midlands, and shipping them added 4.4 MB
+   * to an APK whose users will never be within a thousand kilometres of them —
+   * 7.41 MB to 8.65 MB in one build, caught only because the size is a tracked
+   * baseline. `--eval-only` keeps such a graph out of the app entirely.
+   */
+  const evalOnly = args['eval-only'] === true || args['eval-only'] === 'true';
+  const outDirs = evalOnly
+    ? [join(ROOT, 'data', 'maps')]
+    : [join(ROOT, 'data', 'maps'), join(ROOT, 'apps', 'web', 'public', 'maps')];
   const json = JSON.stringify(graph);
   for (const dir of outDirs) {
     mkdirSync(dir, { recursive: true });
@@ -250,7 +267,8 @@ async function main() {
   console.log(`  ways ${graph.ways.length}  points ${points}  named ${named}  maxspeed ${withSpeed}`);
   console.log(`  size ${(json.length / 1024).toFixed(0)} KB`);
   console.log(`  wrote data/maps/road_graph_${name}.json`);
-  console.log(`  wrote apps/web/public/maps/road_graph_${name}.json\n`);
+  if (evalOnly) console.log(`  eval only — NOT bundled into the app\n`);
+  else console.log(`  wrote apps/web/public/maps/road_graph_${name}.json\n`);
 
   if (json.length > 8 * 1024 * 1024) {
     console.warn('  ⚠ over 8 MB — this ships inside the APK. Narrow the bbox.\n');

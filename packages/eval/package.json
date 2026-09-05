@@ -14,7 +14,8 @@
     "gnss-dataset": "tsx src/gnss-quality-dataset.ts",
     "record": "tsx src/record.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "tier-r": "tsx src/tierR.ts"
   },
   "dependencies": {
     "@pathpulse/nav-core": "workspace:*",

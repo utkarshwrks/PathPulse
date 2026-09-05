@@ -52,11 +52,39 @@ export const ABLATION_ORDER = [
   'particle',
 ];
 
-export function listLogs(): string[] {
+/**
+ * Which data tier a log belongs to. See data/replay/README.md.
+ *
+ * ★ TIERS MUST NOT MIX, AND THE TOOLING HAS TO ENFORCE THAT ★
+ * The published ablation is Tier S: simulated logs, deterministic, comparable
+ * across runs. Dropping the Tier R logs into data/replay/ silently pulled them
+ * into that table the moment they existed, because everything enumerated the
+ * directory — which would have averaged a 96 % real-sensor result into a 6.9 %
+ * simulated one and reported the mean as the headline. That is the single
+ * thing the tier rules forbid, so it is a filter here rather than a convention
+ * every caller has to remember.
+ */
+export type DataTier = 'S' | 'R' | 'F';
+
+export function tierOf(logName: string): DataTier {
+  if (logName.startsWith('iovnbd_')) return 'R';
+  if (logName.startsWith('drive_')) return 'F';
+  return 'S';
+}
+
+/**
+ * Logs of one tier. Defaults to Tier S, which is what every published
+ * simulated figure is computed from.
+ *
+ * Tier R is scored by src/tierR.ts and Tier F by nothing yet; both keep their
+ * own tables on purpose.
+ */
+export function listLogs(tier: DataTier | 'ALL' = 'S'): string[] {
   const dir = join(ROOT, 'data', 'replay');
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f) => f.endsWith('.jsonl'))
+    .filter((f) => tier === 'ALL' || tierOf(f) === tier)
     .sort();
 }
 

@@ -25,6 +25,30 @@
       "sizeKb": 206
     },
     {
+      "name": "iovnbd_s1",
+      "file": "road_graph_iovnbd_s1.json",
+      "bbox": [
+        -1.61,
+        52.393,
+        -1.499,
+        52.426
+      ],
+      "ways": 5794,
+      "sizeKb": 1196
+    },
+    {
+      "name": "iovnbd_s3c",
+      "file": "road_graph_iovnbd_s3c.json",
+      "bbox": [
+        -1.526,
+        52.374,
+        -1.23,
+        52.443
+      ],
+      "ways": 15022,
+      "sizeKb": 3098
+    },
+    {
       "name": "jabalpur",
       "file": "road_graph_jabalpur.json",
       "bbox": [

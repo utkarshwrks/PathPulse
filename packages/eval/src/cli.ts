@@ -119,9 +119,22 @@ function main(): void {
 try {
   const args = parseArgs(process.argv);
   if (args.list) {
-    const { listLogs } = await import('./paths.js');
-    const logs = listLogs();
-    console.log(logs.length ? `\n  ${logs.join('\n  ')}\n` : '\n  no logs in data/replay/\n');
+    // Every tier, each labelled. `listLogs()` defaults to Tier S because that
+    // is what the published tables are computed from, but a human asking what
+    // logs exist wants all of them — with the tier attached, so nobody scores
+    // a real-sensor log and files the number under the simulated table.
+    const { listLogs, tierOf } = await import('./paths.js');
+    const logs = listLogs('ALL');
+    const TIER_NOTE: Record<string, string> = {
+      S: 'simulated',
+      R: 'real sensors, not our device',
+      F: 'field — our device, our roads',
+    };
+    const lines = logs.map((l) => {
+      const t = tierOf(l);
+      return `  ${l.padEnd(26)} tier ${t}  (${TIER_NOTE[t]})`;
+    });
+    console.log(lines.length ? `\n${lines.join('\n')}\n` : '\n  no logs in data/replay/\n');
   } else {
     main();
   }
