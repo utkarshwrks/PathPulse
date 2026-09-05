@@ -34,6 +34,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from derived import with_derived  # noqa: E402
 from config import (  # noqa: E402
     CHANNELS,
     EXPORT,
@@ -297,6 +298,54 @@ def main() -> None:
         EXPORT / "probes.json",
         Path(__file__).resolve().parents[1] / "packages" / "nav-core" / "test" / "probes.json",
     )
+
+    # ── ★ THE DERIVATION NEEDS ITS OWN PROBES ★ ─────────────────────────────
+    #
+    # The probes above are windows that have ALREADY been derived and scaled,
+    # so they check the forward pass and nothing before it. The six derived
+    # channels are computed twice — here in `derived.py` and on the phone in
+    # `appendDerivedChannels` — and a disagreement between those two would feed
+    # the network channels it never trained on while every test above still
+    # passed, because both sides of that comparison would be the Python.
+    #
+    # So: raw windows in, derived windows out, straight from `derived.py`.
+    # Unscaled on purpose — the scaler is a separate step with its own check,
+    # and folding it in here would let a scaling bug hide a derivation bug.
+    raw_npz = np.load(PROCESSED / "raw_probe_windows.npz")
+    n_dp = 16
+    raw = raw_npz["X"][:n_dp].astype(np.float64)
+    derived_out = with_derived(raw)
+    (EXPORT / "derived_probes.json").write_text(
+        json.dumps(
+            {
+                "note": (
+                    "Raw (time, channel) windows and the 12-channel result of "
+                    "ml/derived.with_derived. Checks appendDerivedChannels in "
+                    "nav-core against the Python that produced the weights."
+                ),
+                "channels": CHANNELS,
+                "windowSamples": WINDOW_SAMPLES,
+                # (channel, time) — the layout the TypeScript works in, so the
+                # test does not have to transpose and cannot transpose wrongly.
+                "raw": [
+                    [round(v, 6) for v in w.T.flatten().tolist()] for w in raw
+                ],
+                "derived": [
+                    [round(v, 6) for v in w.T.flatten().tolist()] for w in derived_out
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
+    shutil.copy(
+        EXPORT / "derived_probes.json",
+        Path(__file__).resolve().parents[1]
+        / "packages"
+        / "nav-core"
+        / "test"
+        / "derived_probes.json",
+    )
+    print(f"  derived probes: {n_dp} raw windows -> {len(CHANNELS)} channels")
 
     # Count any external-data sidecar too, or the number is a fiction.
     def total_kb(p: Path) -> float:

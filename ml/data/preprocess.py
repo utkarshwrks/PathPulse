@@ -299,6 +299,18 @@ def main() -> None:
 
     np.savez_compressed(PROCESSED / "windows.npz", **out)
 
+    # ★ RAW WINDOWS, KEPT SO THE DERIVATION CAN BE CHECKED ACROSS LANGUAGES ★
+    # `derive` runs twice in this project — here, and in nav-core on the phone.
+    # Everything saved above is already derived AND scaled, so nothing in it can
+    # tell the two apart: a disagreement would feed the network channels it
+    # never trained on with every test still passing. export.py turns these
+    # into the fixture that compares them. A handful of windows is plenty; the
+    # arithmetic is per-window and has no state to accumulate.
+    np.savez_compressed(
+        PROCESSED / "raw_probe_windows.npz",
+        X=window(load_sequence(TEST_SEQUENCES[0]))[0][:16],
+    )
+
     print(f"\n✔ {PROCESSED / 'windows.npz'}")
     for name in ("train", "val", "test"):
         X, y = out[f"X_{name}"], out[f"y_{name}"]
