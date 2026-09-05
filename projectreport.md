@@ -8,6 +8,10 @@ Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · T
 > default constants, every workflow (development, build, Android, ML, eval,
 > deployment), every measured number and every negative result.
 >
+> **Current build: v0.22 · APK 7.41 MB · 1,588 tests.**
+> Headline: **6.9 % mean drift on simulated logs, 41.3 % on real vehicle
+> sensors** — both published, neither measured on our own device yet.
+>
 > Companions: [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md) (results
 > narrative), [`docs/CODE_MAP.md`](docs/CODE_MAP.md) (file index),
 > [`PROJECT_STATUS.md`](PROJECT_STATUS.md) (phase-by-phase build log),
@@ -38,12 +42,14 @@ Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · T
    - 6.13 [On-device ML inference](#613-on-device-ml-inference)
    - 6.14 [Two-wheeler support](#614-two-wheeler-support)
    - 6.15 [Detection, GNSS, confidence, trail, trip export](#615-detection-gnss-confidence-trail-trip-export)
+6A. [Offline coverage — roads, not pictures of roads](#6a--offline-coverage--roads-not-pictures-of-roads)
 7. [`packages/sensor-sources` — where samples come from](#7-packagessensor-sources--where-samples-come-from)
 8. [`packages/eval` — where every number comes from](#8-packageseval--where-every-number-comes-from)
 9. [`packages/edge-engine` — the 200 Hz deliverable](#9-packagesedge-engine--the-200-hz-deliverable)
 10. [`apps/web` — the application](#10-appsweb--the-application)
 11. [`apps/web/android` — the native layer](#11-appswebandroid--the-native-layer)
 12. [`ml` — four models, end to end](#12-ml--four-models-end-to-end)
+12A. [`scripts/iovnbd-to-replay.mjs` — turning a training set into a test](#12a--scriptsiovnbd-to-replaymjs--turning-a-training-set-into-a-test)
 13. [`scripts` — build and data tooling](#13-scripts--build-and-data-tooling)
 14. [`configs` and `data` — the ablation inputs](#14-configs-and-data--the-ablation-inputs)
 15. [Results](#15-results)
@@ -81,7 +87,7 @@ are always true:
 | **NHC** | a vehicle cannot slide sideways or fly | 57.5 % → 33.5 % drift |
 | **ZUPT** | a stopped vehicle has *exactly* zero velocity | 57.7 % → 57.5 %, and it re-calibrates accel bias free |
 | **ZARU** | a stopped vehicle's gyro reading is *pure bias* | 59.3 % → 57.7 %; 0.01 rad/s of bias is 113° over a 197 s outage |
-| **Road snapping** | a vehicle is on a road, and that fact is perpendicular to it | off-road error 15.7 m → 0.8 m mean |
+| **Road snapping** | a vehicle is on a road, and that fact is perpendicular to it | off-road error 15.7 m → 0.5 m mean |
 | **Accel high-pass** | real acceleration averages to zero over a minute; tilt error does not | 30.2 % → 14.6 % |
 
 No route required. No network required. No special hardware.
@@ -259,7 +265,7 @@ PathPulse/
 | `ml` (Python) | 3,481 |
 | `scripts` | 1,204 |
 | **Total source** | **~49,200 TS + 3,481 Py + 710 Java + 1,204 tooling** |
-| Tests | 91 files, 1,464 tests |
+| Tests | 95 files, 1,588 tests |
 
 ### 4.2 Toolchain
 
@@ -530,7 +536,7 @@ sigma grows from the assumed residual gyro bias, and cross-track error is
 | `useMlMotion` | ✅ | Model 2 — inert until loaded |
 | `useMlResidual` | ❌ | Model 3 — does not generalise |
 | `useMlGnssQuality` | ✅ | Model 4 — **advisory only** |
-| `hmmMatch` | ❌ | Phase 14 — 10.5 % vs 9.2 %, flat sweep |
+| `hmmMatch` | ❌ | Phase 14 — 10.5 % vs 6.9 %, flat sweep |
 | `particleFilter` | ❌ | Phase 17 — city 13.3 vs 15.1, highway 12.8 vs 3.2 |
 | `turnRelocalisation` | ❌ | requires `particleFilter`; can move the marker discontinuously |
 | `twoWheeler` | ✅ | Phase 18B — inert until the detector decides TWO_WHEELER |
@@ -663,6 +669,33 @@ Speed priority, highest first:
 3. **ML model** (Model 1) when `useMlSpeed` and the predictor is ready and the
    context is vehicular
 4. **Decayed integration** — see the coasting decay in §6.9
+
+#### The Doppler hold, and why a slow receiver changes the rule
+
+Holding a stale Doppler speed between fixes used to be **refused for vehicles**,
+on a measurement that is still valid: applied to vehicle data it moved the
+simulated mean drift from 10.00 % to 10.33 %, and the p90 from 17.57 % to
+21.31 %.
+
+**Every log behind that rule fixes at 1.00 s.** The first real-sensor logs fix
+every **9.00 s**.
+
+At one hertz, integrating across one gap is cheap and the rule is right. At one
+ninth of a hertz it is ruinous: the estimator spends **nine seconds in ten with
+no speed reference at all, while the mode badge reads GNSS**. Measured on
+`iovnbd_S1`, against a truth speed of 8.5 m/s, the estimate reached the 40 m/s
+plausibility clamp — 144 km/h — *before the artificial outage had even started*.
+
+Both halves of the original trade-off are about **how long the gap is**: a stale
+Doppler costs the vehicle's real acceleration over that gap, and integration
+costs the residual tilt error over the same gap, squared. So the condition is
+the receiver's observed cadence, not the kind of motion —
+`vehicleSpeedHoldMinIntervalMs`, 3 s, which sits between the two cadences with a
+wide margin on each side.
+
+**Worth 50.1 % → 41.3 % on real sensors** (55.4 % → 35.0 % at the median), with
+every simulated figure unchanged to the decimal, because a 1 Hz receiver behaves
+exactly as it did.
 
 ### 6.7 The state machine
 
@@ -843,6 +876,56 @@ literally in degrees, a 90° mismatch would cost 2700 — swamping distance
 entirely and reducing the score to "whichever road points the right way,
 however far".
 
+#### The heading gate — what the scorer could not previously say
+
+Field report, 8.7 km of streets: *"it follows the blue line — I take a turn and
+it carries straight on down the main road."* Reproduced from the arithmetic:
+
+```
+heading mismatch, worst case ......  30 m   (headingWeightM, at 180°)
+continuity bonus, at wide radius ..  60 m   (continuityBonusM × 3)
+```
+
+The road just left kept out-scoring the road just joined by up to 30 m of pure
+preference, **however hard the vehicle had turned away from it** — and was then
+glued to it at `deadReckoningStrength: 1`.
+
+A penalty cannot fix that, because the question is not *which road is most
+plausible* but *whether this road is possible at all*. A vehicle travelling
+across a road is not on it.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `maxHeadingMismatchDeg` | 60 | beyond this, **not a candidate** — folded at 90°, so it is a question about geometry, not about a `oneway` tag |
+| `continuityMaxMismatchDeg` | 40 | continuity is a tie-break between *plausible* roads only. Measured: 6.9 % at 40°, 9.1 % at 50° |
+| `rejectOnewayReverse` | true | worth **2.2 points** |
+
+**Rejecting a reverse one-way is carriageway discrimination, cheaply.** A dual
+carriageway is two one-way ways, so an estimate drifting off one finds the
+other: near, parallel, pointing the wrong way. Two milder mechanisms were tried
+first and *both measured 9.1 %, identical to doing nothing* — a 150 m penalty,
+and holding them as a last resort. Neither helped, and that is the finding: in
+the situations that cost the drift there was no other road to lose to. The gain
+was never in choosing a different road. It was in choosing **no** road.
+
+Together: **9.2 % → 6.9 %** mean drift, and off-road **0.8 m → 0.5 m**.
+
+#### Off-road is a real state, not a bad estimate
+
+*"If I am on a mountain it should run there — but apart from the road it shows
+me on the road."*
+
+The 250 m widened search cannot distinguish **a bad estimate of a vehicle that
+is on a road** from **a good estimate of a vehicle that is genuinely not on
+one**. Both look like a position 200 m from the nearest road, and lowering the
+radius simply trades this report for the one the radius was added for.
+
+A trusted GNSS fix settles it: the fix is a *measurement* and the road is an
+*assumption*. Three consecutive trusted fixes landing beyond `searchRadiusM`
+suspend the widened search; two near a road resume it. Hysteretic in both
+directions, so one multipath fix in a car park cannot flip the verdict.
+Surfaced as `diagnostics.offRoad` and logged.
+
 #### Forward bias — `constraints/forwardBias.ts` (186 lines) — **ships off**
 
 Learns forward-acceleration bias from GNSS Doppler while it is available. It
@@ -904,7 +987,7 @@ accel bias 0.3 m/s², gyro bias 0.02 rad/s.
 a phone accelerometer's bias moves with temperature and with how the case is
 squeezed, and its published noise density flatters it badly.
 
-**The result: 10.1 % mean vs the hand-built chain's 9.2 %, but p90 19.4 % vs
+**The result: 8.5 % mean vs the hand-built chain's 6.9 %, but p90 16.7 % vs
 22.6 %.** Worse in the middle of the distribution, better at the end of it.
 Ships off; **both halves are asserted in tests** so neither can be quietly
 dropped.
@@ -984,7 +1067,7 @@ sequences at all.
 *behind* the vehicle, and the snap then pulls the marker backwards
 (9.9 % → 16.0 %).
 
-**Measured overall: 10.5 % vs 9.2 %, and the parameter sweep is flat**
+**Measured overall: 10.5 % vs 6.9 %, and the parameter sweep is flat**
 (10.4–11.2 % across 3/5/10/20/40 m). That flatness is itself the finding: a knob
 controlling the model's entire source of advantage that changes nothing says
 these routes contain no geometry its transition term can discriminate. Ships
@@ -1052,7 +1135,7 @@ itself is a **rate-limited vector, not a switch**.
 |---|---|---|
 | **City** (junctions everywhere) | 15.1 % | **13.3 %** |
 | **Highway** (few, grade-separated) | **3.2 %** | 12.8 % |
-| Overall | **9.2 %** | 13.0 % |
+| Overall | **6.9 %** | 11.5 % |
 
 Exactly what the mechanism predicts. Ships off; **the split is the finding**,
 and the average of the two is the least informative number available.
@@ -1224,6 +1307,196 @@ GPX (with real `<time>` from the session's wall-clock epoch) and GeoJSON, plus
 vehicle-trained speed model and switches heading to GNSS on foot.
 `steps.ts` (231) is a step detector plus `StrideModel`, re-measured free from
 every second of good GNSS.
+
+---
+
+## 6A · Offline coverage — roads, not pictures of roads
+
+Added after the first field drives. It is the largest single feature in the
+project and the one the whole offline claim now rests on.
+
+### 6A.1 The insight
+
+The estimator never needed the internet. **The map picture did.** So the app
+stopped downloading pictures of roads and started drawing the roads it already
+has — `RoadGraph` is read by snapping, matching and the particle filter, so the
+geometry around the vehicle is in memory whenever navigation works at all.
+
+| Same 100 km radius | Size |
+|---|---|
+| Raster tiles, zoom 11–14 | **~150 MB** |
+| Road graph, flat full detail | 40.8 MB |
+| **Road graph, level-of-detail** | **3.5 MB** |
+
+**~43× smaller than tiles**, and that is at dense-city density everywhere,
+which never happens.
+
+### 6A.2 Why level-of-detail is the whole budget
+
+Measured on `road_graph_jabalpur.json` — 9,462 ways, 75,482 nodes, 143 km²:
+
+| class | share of nodes |
+|---|---|
+| residential | **73.2 %** |
+| service | 10.4 % |
+| tertiary | 7.3 % |
+| **major** (motorway/trunk/primary/secondary + links) | **4.8 %** |
+
+Detail is almost entirely local streets — and a local street 80 km away is
+worthless, because the vehicle cannot reach one for an hour and coverage will
+have rolled by then. So: **inner 20 km at full detail, the ring to 100 km at
+majors only.**
+
+### 6A.3 `nav-core/src/mapmatch/graphCodec.ts` — the compact codec
+
+Binary, LEB128 varints, zigzag deltas, an interned class table, coordinates
+quantised to `1e-5` deg (~1.11 m — inside GNSS error and far inside the 50 m
+snap radius, so it **cannot change a match**).
+
+| graph | raw JSON | encoded | ratio | gzipped | ratio |
+|---|---|---|---|---|---|
+| city | 149,757 | 19,315 | 7.75× | 35,442 → 14,029 | 2.53× |
+| highway | 210,586 | 27,443 | 7.67× | 50,129 → 19,660 | 2.55× |
+| jabalpur | 2,319,824 | 289,003 | **8.03×** | 567,768 → 208,777 | 2.72× |
+
+8×, against the 4.1× a compact *JSON* of the same quantised deltas measured —
+the extra factor is JSON itself, whose commas and decimal digits cost more than
+the numbers they delimit once the numbers are small.
+
+**The ratio is asserted by test.** A refactor that reintroduced full-precision
+floats would still round-trip perfectly and would silently make the feature
+unaffordable, so the size is part of the contract. Truncated buffers throw
+rather than decoding a shorter way.
+
+It lives in `nav-core` because it is pure arithmetic over a nav-core type — so
+the edge engine and the eval harness read compact graphs for free.
+
+### 6A.4 `apps/web/lib/graphCells.ts` — a worldwide grid
+
+Slippy-map tiles, reusing `tileCache.ts`'s own arithmetic. **That is what
+removes the region list entirely:** no bundled index to be missing from, no
+special case at any latitude, and the same cells by the same arithmetic in a
+village nobody has tested in.
+
+- inner ring: **z13** (~4.5 km, ~20 km²) — every class
+- outer ring: **z9** (~72 km, ~5,200 km²) — majors only
+- the antimeridian **wraps**; the poles **clamp**, because Mercator ends there
+
+`mergeGraphs` dedupes by way id, and that is not an optimisation: Overpass
+returns the *whole* way for anything intersecting the box, so a road crossing a
+boundary arrives complete in both cells. Two copies with one id would give
+`findRoadMatch` the same road twice at the same distance — a matching bug
+wearing the costume of a memory problem.
+
+### 6A.5 `graphCellStore.ts` — storage that cannot grow unbounded
+
+IndexedDB behind an **injectable backend**, so eviction order, the size cap and
+"never the cell you are standing in" are all testable headlessly. A cell that
+fails to decode is **deleted**, not kept — otherwise the prefetcher believes the
+area is covered while every read of it throws.
+
+`requestPersistentStorage()` asks the browser not to evict the origin. Refusal
+is normal and is surfaced rather than retried: without it a user can lose
+coverage mid-drive, in a tunnel, which is the exact scenario the feature exists
+for.
+
+### 6A.6 `graphPrefetch.ts` — the blocking problem, solved by measurement
+
+A uniform 25 km² grid over 31,400 km² is **over 1,200 Overpass requests** —
+hours, and refused long before finishing. But the cap bounds **response size**,
+not area, and response size is dominated by the residential roads the outer ring
+does not ask for. Measured against `overpass-api.de`:
+
+| filter | area | ways | nodes | response | time |
+|---|---|---|---|---|---|
+| major | 1,600 km² | 766 | 12,618 | 994 KB | 1.5 s |
+| **major** | **10,000 km²** | 1,699 | 43,643 | **3,147 KB** | **2.0 s** |
+| full | 25 km² | 2,512 | 19,700 | 1,845 KB | 10.4 s |
+
+A major-only query over **400× the area** returns less than twice as much, five
+times faster. So `MAX_AREA_SQ_KM` became per query class, the outer ring uses
+z9, and a 100 km radius is **116 requests**.
+
+Ordering is the feature: current cell → cells ahead along the heading → the rest
+of the inner ring → the outer ring. Requests are **strictly serialised** with
+exponential backoff, asserted by counting concurrency rather than by inspection
+— Overpass is a free shared service and a parallel burst gets the application
+rate-limited, which means no offline coverage at all. Unmetered connections
+only, by default.
+
+> **A finding worth keeping:** Overpass answers **HTTP 406** to a request with no
+> `User-Agent`. Node's `fetch` sends none; browsers always do, so the app is
+> unaffected and anything server-side is not.
+
+### 6A.7 `rollingCoverage.ts` — coverage that follows the vehicle
+
+Past **20 km** from the anchor the disc re-centres **ahead along the heading**,
+not on the current position: anchoring on where you are spends half the disc on
+ground already driven. Eviction is measured from the *vehicle*, so a U-turn does
+not discard the road it is about to drive back along.
+
+A **two-minute floor** prevents a re-anchor storm — a vehicle turning round just
+after a re-anchor is immediately moving away from an anchor placed ahead of its
+old heading, and each re-anchor discards the in-flight queue.
+
+Measured over a simulated 200 km drive, storage in KB at 10 km intervals:
+
+```
+0:4  10:9  20:11  30:14  40:17  50:21  60:24  70:27  80:30  90:34
+100:36  110:36  120:34  130:36  140:36  150:36  160:34  170:36 … 200:34
+```
+
+It climbs while the disc fills and then **stops dead**. The test asserts the
+second half is flat, not that it never grows — the disc is supposed to fill.
+
+**No LOD demotion, deliberately.** Full is a strict superset of major, so
+demoting spends an Overpass request to obtain *less* data and opens a window in
+which the area is covered by neither.
+
+### 6A.8 `OfflineBasemapLayer.tsx` — the map drawn from the graph
+
+Inserted **below** the tile layer. Tiles are opaque, so while they arrive
+nothing looks different; where one is missing MapLibre draws nothing and the
+roads show through.
+
+That is better than an offline switch, because the failure was never clean —
+tiles vanishing, partially cached areas, and `navigator.onLine` reporting true
+on a connection that carries nothing. Underneath, the map degrades **tile by
+tile** and needs no detection at all.
+
+It also cannot lie: a road drawn here is a road the matcher can actually snap
+to, and a blank area is genuinely an area the estimator knows nothing about. A
+raster basemap will happily draw a street the graph has never heard of.
+
+### 6A.9 Render-only classes — drawn, never matched
+
+`RoadWay.renderOnly`, filtered by `RoadIndex` **at construction**.
+
+The build script excludes footways deliberately — *a car is not on the
+pavement* — and that must not change for **matching**. It need not constrain
+**drawing**: tracks, paths and footways are most of what makes a neighbourhood
+recognisable.
+
+The separation is a flag on the type rather than a convention about which array
+to pass, because a convention is a comment and comments do not survive
+refactors. The only way to reintroduce the bug is to delete the filter, which is
+a visible act. The codec carries the flag too — a round-trip that dropped it
+would turn every stored footpath back into an ordinary road, and the symptom
+would surface in the matcher, nowhere near the codec.
+
+### 6A.10 `TileRefresh.tsx` — tiles that come back
+
+MapLibre requests a tile once; offline that request fails and is never retried,
+so reconnecting filled in only wherever the camera had since travelled to —
+*"it loads the place that came after."*
+
+Refreshed via `source.setTiles()` on `online` and on returning to the
+foreground, and **only when a tile actually failed** — phones raise `online` on
+every wifi/cellular handover, and an unconditional refresh would re-download the
+visible map several times on an ordinary drive.
+
+Deliberately not `map.setStyle()`, which works and flashes the whole map while
+discarding every layer the app added on top of it.
 
 ---
 
@@ -1702,7 +1975,7 @@ context, so geolocation and DeviceMotion are available inside the APK),
 `allowMixedContent`, and `Geolocation.enableHighAccuracy: true` to match the web
 hook — never serve a cached fix, the HUD wants the real cadence.
 
-**APK size: ~12.7 MB.** It went 12.8 → 25.1 MB in one build because
+**APK size: 7.41 MB (v0.22).** It went 12.8 → 25.1 MB in one build because
 `publish:apk` → `public/` → `out/` → assets meant each APK contained the
 previous one. `scripts/strip-apk-from-assets.mjs` is the fix.
 
@@ -1995,6 +2268,76 @@ Artefacts land in `ml/results/` (metrics JSON, `.pt` checkpoints, plots) and
 
 ---
 
+## 12A · `scripts/iovnbd-to-replay.mjs` — turning a training set into a test
+
+The dataset was downloaded for *training* and had never been made into a replay
+log. Converting it means `pnpm eval`, `pnpm ablation` and `pnpm eval:offroad`
+run against **real sensors** with no change to the estimator at all — which is
+the whole point of having a log format rather than a special case.
+
+`pnpm data:iovnbd` · `pnpm eval:tier-r`
+
+### 12A.1 The screens, and what they cost
+
+Of **26 sequences, two survive**:
+
+| log | duration | distance | rigid-mount corr | GPS median |
+|---|---|---|---|---|
+| `iovnbd_S1` | 86.2 min | 38.4 km | **0.963** | 3 m |
+| `iovnbd_S3c` | 62.0 min | 44.2 km | **0.954** | 4 m |
+
+Everything else fails one of four screens: the phone was not rigidly mounted
+(21 sequences — the gyro does not see the car's yaw), too short, GPS too coarse,
+or **physically impossible**.
+
+- **`Vw02` fails at 0.234** despite being the longest sequence (87.9 min,
+  98.4 km). It is unusable for anything about turn geometry.
+- **`S3b` contains a 20 rad/s angular rate** — 1,146 °/s — plus a clock that
+  repeats (6,813 rows collapse to 2,043). It passed the mount and GNSS screens,
+  which is the point: those ask whether a recording is *useful*, and a
+  plausibility screen asks whether it is *possible*.
+
+### 12A.2 Six things the dataset's headers get wrong
+
+1. **The time column is milliseconds** — verified, median delta exactly 100 ms.
+   The dataset is 10 Hz, not the 50 Hz a naive reading assumes.
+2. **The gyro columns are not body axes at all.** They are labelled Yaw, Pitch
+   and Roll — Euler *angle rates* — so no permutation of them is a body angular
+   velocity. Feeding two in as body x and y corrupted the attitude filter badly:
+   **6.5 m/s² of horizontal specific force on a car holding 8.5 m/s**, when a
+   total magnitude of 9.95 makes anything above 1.7 impossible. Gravity was
+   leaking through an attitude ~40° wrong. Measured: **74.5 % → 38.5 %**.
+3. **Deriving that channel from CAN yaw rate gives an inverted gyro.** CAN is
+   ISO 8855 (positive counter-clockwise); GNSS heading is a compass bearing
+   (positive clockwise). Every magnitude agreed and every sign was opposite —
+   `gnss −62.0° → gyro +56.6°`. Derived against **GPS heading change** instead.
+4. **`GPS SPEED (Kmh)` is metres per second.** Median CAN-km/h ÷ column =
+   **3.659** (S1), **3.633** (S3c). Read as km/h the whole drive is a crawl, and
+   because the estimator trusts Doppler above everything else that is not a
+   small error — it is a confident, precise, wrong speed.
+5. **The GPS updates every ~9.8 s**, so the withheld ground truth is sparse.
+6. **Not upsampled.** There is no information above 5 Hz in the recording, and
+   interpolated samples are invented data the engine would faithfully integrate.
+
+### 12A.3 What is emitted, and what is not
+
+Only the gyro channel that was **measured**:
+
+```
+omega = yawRateCompass · (−up̂)      so that   −(omega · up̂) = yawRate
+```
+
+built against the file's own gravity columns. Validation: a real turn of
+**91.9° of GPS heading integrates to 92.1°**, and across 106 turns the
+regression slope is **1.002** with **0.9°** mean error.
+
+The two horizontal rates are **not knowable from this data and are not
+invented**. Consequence, stated rather than hidden: pitch and roll come from the
+accelerometer anchor alone — right for a bolted-in phone, wrong for a handheld
+one, and one more reason Tier R does not replace a drive of our own.
+
+---
+
 ## 13 · `scripts` — build and data tooling
 
 | File | Lines | Purpose |
@@ -2089,35 +2432,40 @@ own recorded GNSS, withheld from the estimator over the outage window.
 
 | Configuration | Mean % | Median % | p90 % | Max % | RMSE m | Along m | Cross m | CEP95 m |
 |---|---|---|---|---|---|---|---|---|
-| naive | 59.5 | 57.9 | 80.9 | 81.1 | 348.3 | 297.5 | 173.7 | 600.4 |
-| filtered | 59.3 | 57.9 | 80.9 | 81.0 | 347.2 | 295.1 | 175.2 | 598.1 |
-| zaru | 57.7 | 50.5 | 81.7 | 81.9 | 346.1 | 299.8 | 165.3 | 597.2 |
-| zupt | 57.5 | 52.3 | 76.5 | 77.3 | 342.2 | 300.4 | 156.5 | 590.6 |
-| **nhc** | **33.5** | 34.7 | 52.6 | 57.5 | 170.3 | 146.5 | 71.3 | 317.6 |
-| speedclamp | 30.2 | 34.7 | 52.6 | 57.5 | 152.6 | 128.4 | 69.9 | 265.3 |
-| **highpass** | **14.6** | 16.6 | 25.9 | 27.5 | 92.0 | 71.7 | 49.7 | 150.1 |
-| **full (ships)** | **9.2** | **5.3** | 22.6 | 28.2 | 71.4 | 57.4 | 39.6 | 118.4 |
-| ~~full_forwardbias~~ | 13.3 | 14.5 | 21.6 | 26.8 | 85.2 | 71.2 | 41.8 | 152.4 |
-| ~~eskf~~ | 10.1 | 8.5 | **19.4** | 25.0 | 80.5 | 62.2 | 46.2 | 135.3 |
-| ~~hmm~~ | 10.5 | 7.0 | 25.1 | 30.5 | 73.4 | 59.8 | 39.5 | 126.2 |
-| ~~particle~~ | 13.0 | 10.1 | 22.7 | 28.1 | 90.6 | 85.5 | **22.6** | 180.3 |
+| naive | **59.5** | 57.9 | 80.9 | 81.1 | 348.3 | 297.5 | 173.7 | 600.4 |
+| filtered | **59.3** | 57.9 | 80.9 | 81.0 | 347.2 | 295.1 | 175.2 | 598.1 |
+| zaru | **57.7** | 50.5 | 81.7 | 81.9 | 346.1 | 299.8 | 165.3 | 597.2 |
+| zupt | **57.5** | 52.3 | 76.5 | 77.3 | 342.2 | 300.4 | 156.5 | 590.6 |
+| nhc | **33.5** | 34.7 | 52.6 | 57.5 | 170.3 | 146.5 | 71.3 | 317.6 |
+| speedclamp | **30.2** | 34.7 | 52.6 | 57.5 | 152.6 | 128.4 | 69.9 | 265.3 |
+| highpass | **14.6** | 16.6 | 25.9 | 27.5 | 92.0 | 71.7 | 49.7 | 150.1 |
+| full | **6.9** | 4.4 | 22.6 | 28.2 | 67.0 | 57.3 | 30.4 | 110.2 |
+| full_forwardbias | **10.8** | 11.0 | 21.6 | 26.8 | 82.0 | 71.6 | 33.5 | 146.7 |
+| eskf | **8.5** | 8.1 | 16.7 | 20.5 | 75.6 | 62.1 | 36.4 | 129.7 |
+| hmm | **10.5** | 7.0 | 25.1 | 30.5 | 73.4 | 59.8 | 39.5 | 126.2 |
+| particle | **11.5** | 8.7 | 22.8 | 28.1 | 89.0 | 84.1 | 21.8 | 175.8 |
 
-**9.2 % mean — inside the problem statement's <10 % target.** The two largest
-single wins are NHC (57.5 → 33.5) and the acceleration high-pass (30.2 → 14.6).
+**6.9 % mean — comfortably inside the problem statement's <10 % target.** The
+two largest single wins are NHC (57.5 → 33.5) and the acceleration high-pass
+(30.2 → 14.6); the road-matching heading gate took the shipped chain from 9.2 %
+to 6.9 % (§6.9).
 
 Behaviour columns from the same run:
 
 | Configuration | Recovery s | Update Hz | ZUPT | Road snap % | Resets |
 |---|---|---|---|---|---|
-| naive / filtered / zaru | 1.02 | 50.0 | 0 | 0.0 | 10 |
+| naive | 1.02 | 50.0 | 0 | 0.0 | 10 |
+| filtered | 1.02 | 50.0 | 0 | 0.0 | 10 |
+| zaru | 1.02 | 50.0 | 0 | 0.0 | 10 |
 | zupt | 1.02 | 50.0 | 18 | 0.0 | 10 |
 | nhc | 14.75 | 50.0 | 18 | 0.0 | 0 |
 | speedclamp | 14.50 | 50.0 | 18 | 0.0 | 0 |
 | highpass | 8.68 | 50.0 | 18 | 0.0 | 0 |
-| **full** | **6.29** | 50.0 | 18 | 99.7 | 0 |
-| eskf | 6.85 | 50.0 | 18 | 99.2 | 0 |
+| full | 6.29 | 50.0 | 18 | 99.4 | 0 |
+| full_forwardbias | 7.63 | 50.0 | 18 | 99.8 | 0 |
+| eskf | 6.85 | 50.0 | 18 | 99.0 | 0 |
 | hmm | 6.29 | 50.0 | 18 | 99.7 | 0 |
-| particle | 6.96 | 50.0 | 18 | 99.7 | 0 |
+| particle | 6.24 | 50.0 | 18 | 99.5 | 0 |
 
 ### 15.2 Is the marker on a road? (`pnpm eval:offroad`)
 
@@ -2125,7 +2473,7 @@ Only samples drawn while `DEAD_RECKONING` are counted; 37,196 of them.
 
 | | mean | median | p90 | max | >10 m | >25 m |
 |---|---|---|---|---|---|---|
-| **shipped (`full`)** | **0.8 m** | **0.0 m** | **0.0 m** | 71.1 m | **2.8 %** | **0.8 %** |
+| **shipped (`full`)** | **0.5 m** | **0.0 m** | **0.0 m** | 72.9 m | **1.6 %** | **0.5 %** |
 | snapping off (`highpass`) | 15.7 m | 5.6 m | 49.9 m | 106.5 m | 35.2 % | 21.9 % |
 | *before the wide-radius fix* | *12.5 m* | *3.6 m* | *46.6 m* | *106.5 m* | *26.9 %* | *12.5 %* |
 
@@ -2133,12 +2481,12 @@ Only samples drawn while `DEAD_RECKONING` are counted; 37,196 of them.
 
 | Mount offset | OFF mean % | OFF p90 % | ON mean % | ON p90 % |
 |---|---|---|---|---|
-| 0° (control) | 9.0 | 22.6 | 9.2 | 22.6 |
-| 15° | 9.6 | 23.7 | 9.1 | 22.6 |
-| 30° | 12.7 | 26.3 | **9.2** | 22.7 |
-| 45° | 14.9 | 29.7 | **9.2** | 22.7 |
-| 60° | 25.4 | 47.4 | **9.4** | 22.7 |
-| 90° | 37.1 | 57.7 | **9.1** | 22.6 |
+| 0° | 6.7 | 22.6 | 6.9 | 22.6 |
+| 15° | 8.4 | 21.8 | 6.9 | 22.6 |
+| 30° | 12.7 | 31.0 | 6.9 | 22.7 |
+| 45° | 15.8 | 35.0 | 6.8 | 22.7 |
+| 60° | 25.0 | 47.4 | 7.0 | 22.7 |
+| 90° | 38.2 | 59.2 | 7.1 | 22.6 |
 
 Mount-angle estimate error 3.1–4.1°. **The claim is not "better" — it is
 "independent".** Drift stops depending on how the phone was mounted.
@@ -2175,13 +2523,13 @@ that number is reported as near-meaningless.
 
 ## 16 · Tests
 
-**91 files, 1,464 tests.** `pnpm test` runs every package.
+**95 files, 1,588 tests.** `pnpm test` runs every package.
 
 | Suite | Tests | What it guards |
 |---|---|---|
-| `nav-core` | 701 | The estimator, every constraint, every model contract |
-| `apps/web` | 469 | UI, hooks, panels, offline |
-| `eval` | 158 | The ablation itself, off-road, alignment |
+| `nav-core` | 736 | The estimator, every constraint, the codec, every model contract |
+| `apps/web` | 541 | UI, hooks, panels, offline coverage, the basemap |
+| `eval` | 175 | The ablation itself, off-road, alignment, the Tier R logs |
 | `sensor-sources` | 107 | Sources, the native bridge |
 | `edge-engine` | 29 | Runner, grades, UDP, serial, sinks |
 
@@ -2240,7 +2588,7 @@ pnpm install                 # pnpm 10 workspaces
 pnpm dev                     # Next dev server, 1 s reload
 pnpm dev:lan                 # -H 0.0.0.0, for a phone on the same wifi
 pnpm dev:https               # experimental HTTPS — needed for DeviceMotion on a phone
-pnpm test                    # 1,464 tests across five packages
+pnpm test                    # 1,588 tests across five packages
 pnpm typecheck               # tsc --noEmit, every package
 pnpm lint:core-purity        # Golden Rule 1
 ```
@@ -2273,7 +2621,7 @@ browser reproduces byte-identically in a headless test.
 pnpm android:doctor          # finds JDK 17–21 + SDK, names what is missing
 pnpm build:android           # next build → cap sync → clean-dupes
                              # → strip-apk-from-assets → gradle assembleDebug
-                             # → prints the APK path (~12.7 MB)
+                             # → prints the APK path (7.41 MB)
 pnpm cap:sync                # web assets only, no Gradle
 pnpm publish:apk             # copy into public/downloads + write apk.json
 pnpm build:site              # build:android → publish:apk → next build
@@ -2418,8 +2766,8 @@ Five do not, and all five are kept, toggleable, with published numbers.
 | Component | Measured | Why it stays |
 |---|---|---|
 | **Forward bias** | 12.7 % → 19.1 % | Superseded by the high-pass; the negative result is demonstrable |
-| **ESKF** | mean 10.1 vs 9.2, **p90 19.4 vs 22.6** | Better tail, worse middle — a real trade, and both halves are asserted |
-| **HMM matching** | 10.5 vs 9.2, flat sweep | The capability is structural; these routes cannot show it |
+| **ESKF** | mean 8.5 vs 6.9, **p90 16.7 vs 22.6** | Better tail, worse middle — a real trade, and both halves are asserted |
+| **HMM matching** | 10.5 vs 6.9, flat sweep | The capability is structural; these routes cannot show it |
 | **Particle filter** | **city 13.3 vs 15.1**, highway 12.8 vs 3.2 | Helps exactly where junction ambiguity exists |
 | **Drift residual (M3)** | 3–8× worse | Does not generalise across route types |
 
@@ -2432,21 +2780,90 @@ tab, so the claim can be checked rather than believed.
 
 ---
 
-## 20 · Honesty ledger — what is still simulated
+## 20 · Data tiers, and the honesty ledger
+
+### 20.1 Three tiers, never averaged
+
+| Tier | Logs | What it is |
+|---|---|---|
+| **S** | `sim_*.jsonl` | **Simulated.** Our own physics model. Deterministic, committed, reproducible — and it flatters the estimator. |
+| **R** | `iovnbd_*.jsonl` | **Real sensors, not our device.** Real phone IMU in a real car on real roads, with the vehicle's CAN bus as a cross-check. |
+| **F** | `drive_*.jsonl` | **Field** — our phone, our roads. **Does not exist yet.** |
+
+|  | Tier S | Tier R | Tier F |
+|---|---|---|---|
+| Real IMU vibration | ✗ | ✓ | ✓ |
+| Real GPS on a real road network | ✗ | ✓ | ✓ |
+| Real turn geometry | ✗ | ✓ | ✓ |
+| Our phone, our mount | ✗ | ✗ | ✓ |
+| Our roads, our region | ✗ | ✗ | ✓ |
+| Barometer, NavIC, C/N0 spread | ✗ | ✗ | ✓ |
+| 50–100 Hz sampling | ✓ | ✗ (10 Hz) | ✓ |
+
+The separation is enforced in the tooling, not by convention: `listLogs()`
+defaults to Tier S, because dropping the real logs into `data/replay/` silently
+pulled them into the published ablation the moment they existed — which would
+have averaged a real-sensor result into a simulated one and reported the mean
+as the headline.
+
+### 20.2 The number that matters most
+
+```
+Tier S, simulated ........  6.9 % mean drift
+Tier R, real sensors ..... 41.3 % mean drift
+```
+
+**Six times worse, same code, only the data changed.** Every figure in §15 is an
+*upper bound* on this estimator, not an estimate of it.
+`ml/check_sim_transfer.py` had already shown the same for the models — 2.93 m/s
+speed error on real driving against 8–20 m/s on synthetic — and this is that
+finding reaching the estimator itself.
+
+`pnpm eval:tier-r` regenerates `docs/benchmarks-tier-r.md`:
+
+| log | n | mean % | median % | p90 % | best % | worst % |
+|---|---|---|---|---|---|---|
+| `iovnbd_S1` | 10 | 43.3 | 45.9 | 107.2 | 12.9 | 107.2 |
+| `iovnbd_S3c` | 9 | 39.1 | 35.0 | 88.8 | **6.9** | 88.8 |
+| **OVERALL** | 19 | **41.3** | **35.0** | 88.8 | 6.9 | 107.2 |
+
+**The spread is the second finding.** 6.9 % in one window and 107.2 % in
+another: the good ones are fast, straight, well-fixed stretches; the bad ones
+are stop-go traffic where fixes are sparse and integration has nothing to anchor
+to. A single mean hides that entirely.
+
+**The error is along-track, not cross-track** — three to four times larger.
+Heading is in good shape: integrating the recovered yaw rate across real turns
+reproduces GPS heading change with slope **1.002** and **0.9°** mean error. What
+is wrong is speed.
+
+### 20.3 How Tier R got here — including our own mistake
+
+| | mean % | median % |
+|---|---|---|
+| First measurement | 111.7 | 96.2 |
+| After fixing a fault in **our converter** | 50.1 | 55.4 |
+| After fixing the **speed runaway** | **41.3** | **35.0** |
+
+The first correction is **not** to the estimator's credit and is recorded so
+nobody quotes the improvement as one. See §12A.
+
+### 20.4 What is still assumed
 
 | Claim | Basis |
 |---|---|
-| Drift, off-road, alignment figures | **Simulated logs.** Stated on every page that shows them. |
+| §15 drift, off-road, alignment | **Tier S — simulated.** Stated on every page that shows them. |
+| §20.2 drift | **Tier R — real vehicle sensors, a public dataset, not our device.** |
 | FOG / tactical IMU rows | **Datasheet noise models.** We do not own the hardware. |
 | Model 1 & 2 accuracy | **Real** held-out IO-VNBD journeys |
-| Model 2 on our logs | 12.8 % accuracy — **the models do not transfer to synthetic IMU** |
+| Model 2 on simulated logs | 12.8 % accuracy — the models do not transfer to synthetic IMU |
 | Model 4 macro-F1 0.99 | **Modelled corruptions.** Means almost nothing. |
 | NavIC constellation counts | **Measured** via `GnssStatus` (native only); simulated elsewhere and labelled |
-| Screen-off 10 Hz | **Compiles and is unit-tested. Not yet verified on a road.** |
+| Screen-off 10 Hz | Compiles and is unit-tested. **Not yet verified on a road.** |
+| Background prefetch, HUD drag, tile refresh | Unit-tested. **Not yet run on a phone.** |
 
-`python ml/check_sim_transfer.py` exists solely to keep the first row honest.
-**That is a statement about the logs, not about the models** — and it is why the
-ablation has no AI row.
+> The sentence to keep saying: **"Measured on real vehicle sensors from a public
+> dataset — not yet on our own device."**
 
 ---
 
@@ -2460,12 +2877,12 @@ ablation has no AI row.
 | GNSS+INS fusion (AI based) | 4, **11**, **13** | ✅ ESKF + Models 3, 4 |
 | Seamless GNSS deficit handler (ms) | Phase 4 | ✅ shadow mode, **0 ms** |
 | Real-time navigation interface | 1, 5, 9 | ✅ |
-| Drift < 10 % of distance | 6, 7 | ✅ **9.2 % measured** |
+| Drift < 10 % of distance | 6, 7 | ✅ **6.9 %** simulated · 41.3 % real sensors |
 | 10 Hz update (smartphone) | 4, 10, **15** | ✅ native loop |
 | 200 Hz (edge, FOG IMU) | **16** | ✅ 49,001 Hz sustained |
 | IO-VNBD trained models | 8, **13** | ✅ four models |
 | IO-VNBD position plot | 8 | ✅ screening artefact |
-| Mobile application | 3 | ✅ APK, ~12.7 MB |
+| Mobile application | 3 | ✅ APK, 7.41 MB |
 | **Edge deployable software engine** | **16** | ✅ Docker, UDP, serial |
 | On-device inference, no cloud | 8, 13 | ✅ pure-TS network runner |
 | Offline map database | 6, 9, offline | ✅ downloadable anywhere |
@@ -2490,23 +2907,57 @@ ablation has no AI row.
 
 ---
 
-## 22 · What remains — and it needs a vehicle
+## 22 · What remains
 
-1. **Drive `docs/field-protocol.md`.** Every number in this document is
-   simulated. The gap between a software outage and a real tunnel is the most
-   interesting figure this project could produce.
-2. **Verify screen-off operation.** Install, lock, drive 10 minutes, read the
-   *native* rate on the SENSORS tab. It compiles and is unit-tested; only a road
-   can confirm it.
-3. **Re-run `check_sim_transfer.py` on real logs.** If the models come good, the
-   ablation gains an AI row and every model claim drops its caveat.
-4. **Retrain Models 2, 3 and 4 on real recordings.** Model 3 failed to generalise
-   across *simulated* route types; only real data can say whether that was the
-   model or the simulator.
+Ordered by value. The first two are the same item seen from two sides.
 
-**Two setup steps silently void a drive:** download the road graph for the area
-(Offline → *Download roads + map*), and disable battery optimisation for the
-app. Both are in the protocol's checklist.
+### 1 · Close the Tier R gap — 41.3 % against 6.9 % simulated
+
+The error is **along-track**, so it is speed, not heading. Two candidates, both
+needing measurement before anything is touched:
+
+- the acceleration high-pass never converges when fixes are 9 s apart;
+- the 12 s Doppler hold cap expires mid-outage, and then there is nothing.
+
+### 2 · W0 — a drive log from our own device
+
+`data/replay/` still has no `drive_*.jsonl`. Tier R proves the estimator is
+sound on **real sensors**; it proves nothing about **our handset, our mount, our
+roads**, and it carries no barometer, no NavIC and no C/N0 spread. Follow
+`docs/field-protocol.md`.
+
+**Two setup steps silently void a drive:** download the road graph for the area,
+and disable battery optimisation for the app.
+
+### 3 · Verify on a phone what is only unit-tested
+
+Background prefetch against live Overpass · the HUD drag, one-handed · tile
+refresh across a real reconnect · the off-road verdict on real terrain ·
+screen-off 10 Hz.
+
+### 4 · Re-judge on real data what was judged on simulation
+
+- **HMM and particle filter** both ship off on Tier S verdicts. The HMM's
+  parameter sweep was *flat*, which said those simulated routes contained no
+  geometry its transition term could discriminate. Real roads have service
+  roads, divided carriageways and flyovers. Re-run the sweep; report urban and
+  highway **separately**, never averaged.
+- **The four models.** `configs/full_ml` is excluded from the published table
+  because including it would measure the simulator. On Tier R that objection is
+  gone.
+
+### 5 · Metrics that do not exist yet
+
+- **Turn fidelity** — nothing scores whether the drawn *shape* is right, only
+  distance to truth.
+- **Marker jitter** — per-sample displacement and direction reversals per
+  minute. "Looks smooth" is not a metric.
+
+### 6 · Smaller
+
+Recording speed · a shared Capacitor mock so `sensor-sources` can run its files
+in parallel again · closing the simulator gap so Tier S is worth more
+(`check_sim_transfer.py` is already the objective function).
 
 ---
 
@@ -2522,7 +2973,7 @@ pnpm dev:lan              # bind 0.0.0.0 for a phone on the same wifi
 pnpm dev:https            # HTTPS — DeviceMotion needs a secure context
 
 # Verify
-pnpm test                 # 1,464 tests
+pnpm test                 # 1,588 tests
 pnpm typecheck
 pnpm lint:core-purity     # Golden Rule 1
 
@@ -2536,9 +2987,14 @@ pnpm eval:alignment       # what a crooked mount costs
 pnpm eval:drift-dataset   # training rows for Model 3
 pnpm eval:gnss-dataset    # training rows for Model 4
 
+# Real sensors (Tier R)
+pnpm data:iovnbd          # convert IO-VNBD into replay logs
+pnpm eval:tier-r          # score on real vehicle sensors -> docs/benchmarks-tier-r.md
+pnpm eval -- --log iovnbd_S3c.jsonl --config full --outage-start 1800000
+
 # Android
 pnpm android:doctor       # JDK + SDK, no Android Studio needed
-pnpm build:android        # APK, ~12.7 MB
+pnpm build:android        # APK, 7.41 MB
 pnpm publish:apk
 pnpm build:site           # APK + publish + site
 
