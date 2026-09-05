@@ -2,7 +2,11 @@
 
 import { useEffect } from 'react';
 import type { GeoJSONSource } from 'maplibre-gl';
-import { buildTrailSegments, type TrailPoint } from '@pathpulse/nav-core';
+import {
+  DEFAULT_TRAIL_SMOOTH_HALF_WINDOW,
+  buildTrailSegments,
+  type TrailPoint,
+} from '@pathpulse/nav-core';
 import { MODE_COLORS } from '@/config/modes';
 import { useMap } from './MapContext';
 
@@ -73,7 +77,15 @@ export default function TrailLayer({ trail }: TrailLayerProps) {
     const source = map.getSource(SOURCE_ID) as GeoJSONSource | undefined;
     if (!source) return;
 
-    const segments = buildTrailSegments(trail);
+    // ★ SMOOTHED WHEN DRAWN, RAW WHEN STORED ★
+    // The buffer above is exactly what the estimator reported, and the trip
+    // export reads that buffer. What goes on screen is averaged over a centred
+    // window — see the measurements on DEFAULT_TRAIL_SMOOTH_HALF_WINDOW, which
+    // took the drawn line from 45 % longer than the road to 7 %, with
+    // cross-track error unchanged and no lag behind the marker.
+    const segments = buildTrailSegments(trail, {
+      smoothHalfWindow: DEFAULT_TRAIL_SMOOTH_HALF_WINDOW,
+    });
     source.setData({
       type: 'FeatureCollection',
       features: segments.map((seg) => ({

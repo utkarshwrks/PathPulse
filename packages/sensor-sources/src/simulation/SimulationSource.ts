@@ -151,6 +151,28 @@ export class SimulationSource implements SensorSource {
   }
 
   /**
+   * Where the vehicle actually is, before the receiver noise is added.
+   *
+   * ★ THE ONE THING NO OTHER SOURCE CAN OFFER ★
+   * Every metric that asks "how wrong was the estimate" needs a position the
+   * estimator did not see. Replaying a recorded log gets there by punching an
+   * artificial outage and scoring against the GNSS it hid — which works only
+   * while GNSS is hidden, and so cannot measure anything about behaviour
+   * WHILE the receiver is up. That is precisely where the trail was reported
+   * as messy, so the simulator's own truth has to be observable.
+   *
+   * Deliberately a getter on the simulator rather than a field on the sample:
+   * putting truth inside a SensorSample would put it one careless line away
+   * from being read by the engine, and an estimator that can see the answer
+   * measures nothing at all.
+   */
+  get truthPosition(): { lat: number; lon: number; headingDeg: number; speedMps: number } {
+    const state = this.vehicle.current;
+    const { lat, lon } = this.route.latLonAt(state.s);
+    return { lat, lon, headingDeg: state.headingDeg, speedMps: state.speedMps };
+  }
+
+  /**
    * Hide GNSS for a window of simulated time — the tunnel.
    * Times are relative to simulation start, not wall clock.
    */

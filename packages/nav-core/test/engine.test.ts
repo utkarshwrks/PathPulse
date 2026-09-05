@@ -997,3 +997,93 @@ describe('★ the Doppler hold, and why a slow receiver changes the rule', () =>
     expect(s.filter((x) => x === 'INTEGRATED').length).toBeGreaterThan(0);
   });
 });
+
+describe('NavigationEngine — the GNSS gain rolls off with the fix quality', () => {
+  /**
+   * A stationary-in-truth vehicle whose receiver reports a constant offset.
+   *
+   * Isolating the gain needs a step, not noise: the fraction of a KNOWN
+   * disagreement that the estimate takes is measurable directly, and averaging
+   * over random noise would measure the noise as much as the gain.
+   */
+  function stepResponse(accuracyM: number, config = {}): number {
+    const engine = new NavigationEngine(config);
+    const dtMs = 20;
+    const offsetM = 20;
+    let last = { lat: START.lat, lon: START.lon };
+
+    for (let tMs = 0; tMs <= 40_000; tMs += dtMs) {
+      const phase = (tMs / 1000) * 2 * Math.PI * 20;
+      const shake = 0.8;
+      const s: SensorSample = {
+        t: tMs,
+        imu: {
+          ax: shake * Math.sin(phase),
+          ay: shake * Math.sin(phase * 1.31),
+          az: 9.80665 + shake * Math.sin(phase * 0.77),
+          gx: 0,
+          gy: 0,
+          gz: 0,
+        },
+      };
+      if (tMs % 1000 === 0) {
+        // Settle on the origin for the first half, then step north. Whatever
+        // fraction of that step appears in the next state IS the gain.
+        const stepped = tMs >= 20_000;
+        s.gnss = {
+          lat: START.lat + (stepped ? offsetM / 111_132 : 0),
+          lon: START.lon,
+          accuracyM,
+          speedMps: 0,
+          headingDeg: 0,
+          satCount: 9,
+        };
+      }
+      const state = engine.update(s);
+      if (tMs === 20_000 - dtMs) last = { lat: state.position.lat, lon: state.position.lon };
+      if (tMs === 20_000) {
+        return ((state.position.lat - last.lat) * 111_132) / offsetM;
+      }
+    }
+    return 0;
+  }
+
+  it('★ takes less of a 15 m fix than of a 3 m one', () => {
+    // The bug this fixes: one constant gain applied to both. A quarter of a
+    // 3 m disagreement is mostly signal; a quarter of a 15 m disagreement is
+    // mostly the receiver arguing with itself, and it was being drawn.
+    const good = stepResponse(3);
+    const poor = stepResponse(15);
+    expect(good).toBeGreaterThan(poor);
+    // And the roll-off is worth having rather than a rounding difference.
+    expect(poor).toBeLessThan(good * 0.6);
+  });
+
+  it('caps the gain, so an over-optimistic accuracy cannot buy extra trust', () => {
+    // Receivers reporting sub-metre accuracy they do not have is a common
+    // failure. The curve would hand one a gain above the best measured value.
+    const perfect = stepResponse(0.1);
+    const good = stepResponse(3);
+    expect(perfect).toBeLessThanOrEqual(good + 1e-9);
+    expect(perfect).toBeLessThan(0.3);
+  });
+
+  it('★ does not adopt a fix whose accuracy is unusable, at any gain', () => {
+    // Unknown is not the same claim as excellent. The `trusted` gate settles
+    // this before the gain is consulted, which is the right place: a fix that
+    // cannot say how good it is should not move the estimate at all, rather
+    // than move it by some guessed fraction.
+    expect(stepResponse(NaN)).toBe(0);
+    expect(stepResponse(0)).toBe(0);
+    // And above trustedAccuracyM, likewise.
+    expect(stepResponse(60)).toBe(0);
+  });
+
+  it('reproduces the old fixed behaviour when switched off', () => {
+    // Kept switchable so the ablation can show the trade rather than assert it.
+    const off3 = stepResponse(3, { adaptiveGnssGain: false });
+    const off15 = stepResponse(15, { adaptiveGnssGain: false });
+    expect(off3).toBeCloseTo(off15, 3);
+    expect(off3).toBeCloseTo(0.25, 2);
+  });
+});

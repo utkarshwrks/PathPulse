@@ -21,6 +21,7 @@
     "cap:sync": "pnpm --filter @pathpulse/web cap:sync",
     "eval": "pnpm --filter @pathpulse/eval eval",
     "ablation": "pnpm --filter @pathpulse/eval ablation",
+    "trail": "pnpm --filter @pathpulse/eval trail",
     "eval:alignment": "pnpm --filter @pathpulse/eval alignment",
     "eval:offroad": "pnpm --filter @pathpulse/eval offroad",
     "eval:drift-dataset": "pnpm --filter @pathpulse/eval drift-dataset",
