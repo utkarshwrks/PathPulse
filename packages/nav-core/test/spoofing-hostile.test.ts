@@ -71,14 +71,17 @@ describe('9D hostile — a sustained anomaly must not flood the event log', () =
     for (let t = 0; t < 5000; t += 1000) {
       d.update(input({ t, gnss: { ...BASE, accuracyM: 5, satCount: 12, meanCn0: 42 } }));
     }
-    const first = d.update(
-      input({ t: 5000, gnss: { ...BASE, accuracyM: 5, satCount: 3, meanCn0: 44 } }),
-    );
+    let first = null;
+    let firedAt = 5000;
+    for (let t = 5000; t <= 11_000 && !first; t += 1000) {
+      first = d.update(input({ t, gnss: { ...BASE, accuracyM: 5, satCount: 3, meanCn0: 44 } }));
+      if (first) firedAt = t;
+    }
     expect(first?.kind).toBe('CONSTELLATION');
 
     const jump = d.update(
       input({
-        t: 6000,
+        t: firedAt + 1000,
         gnss: { lat: BASE.lat, lon: east(500), accuracyM: 5, satCount: 3, meanCn0: 44 },
       }),
     );
@@ -90,18 +93,21 @@ describe('9D hostile — a sustained anomaly must not flood the event log', () =
     for (let t = 0; t < 5000; t += 1000) {
       d.update(input({ t, gnss: { ...BASE, accuracyM: 5, satCount: 12, meanCn0: 42 } }));
     }
-    expect(
-      d.update(input({ t: 5000, gnss: { ...BASE, accuracyM: 5, satCount: 3, meanCn0: 44 } })),
-    ).not.toBeNull();
+    let first = null;
+    for (let t = 5000; t <= 11_000 && !first; t += 1000) {
+      first = d.update(input({ t, gnss: { ...BASE, accuracyM: 5, satCount: 3, meanCn0: 44 } }));
+    }
+    expect(first).not.toBeNull();
 
     // Healthy again for a good while.
     for (let t = 20_000; t < 40_000; t += 1000) {
       d.update(input({ t, gnss: { ...BASE, accuracyM: 5, satCount: 12, meanCn0: 42 } }));
     }
     // And jammed again — this is a new event, not a repeat.
-    const again = d.update(
-      input({ t: 41_000, gnss: { ...BASE, accuracyM: 5, satCount: 3, meanCn0: 44 } }),
-    );
+    let again = null;
+    for (let t = 41_000; t <= 47_000 && !again; t += 1000) {
+      again = d.update(input({ t, gnss: { ...BASE, accuracyM: 5, satCount: 3, meanCn0: 44 } }));
+    }
     expect(again?.kind).toBe('CONSTELLATION');
   });
 });

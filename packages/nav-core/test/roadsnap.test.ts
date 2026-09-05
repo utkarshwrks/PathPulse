@@ -6,8 +6,11 @@ import {
   findRoadMatch,
   headingMismatchDeg,
   RoadIndex,
+  NavigationEngine,
   enuToLatLon,
+  latLonToEnu,
   type RoadGraph,
+  type SensorSample,
 } from '../src/index.js';
 
 const ORIGIN = { lat: 28.6315, lon: 77.2167 };
@@ -164,11 +167,47 @@ describe('findRoadMatch', () => {
 
   it('applies the continuity bonus to break a near-tie', () => {
     const idx = indexOf(graphOf(northSouth, eastWest));
-    // Equidistant-ish and heading diagonally: continuity decides.
-    const a = findRoadMatch({ e: 15, n: 15 }, 45, idx, 'ew');
+    // Near-tie, and the heading agrees with the held road: continuity decides.
+    const a = findRoadMatch({ e: 15, n: 15 }, 75, idx, 'ew');
     expect(a!.wayId).toBe('ew');
-    const b = findRoadMatch({ e: 15, n: 15 }, 45, idx, 'ns');
+    const b = findRoadMatch({ e: 15, n: 15 }, 15, idx, 'ns');
     expect(b!.wayId).toBe('ns');
+  });
+
+  it('★ the continuity bonus does not survive a turn away from the held road', () => {
+    // Field report, 8.7 km of streets: "I take an unexpected turn and it
+    // disturbs everything" — the estimate kept following the road it had left
+    // because continuity outbid a 90-degree heading disagreement. Measured, a
+    // bonus that survives 45 degrees of divergence costs 2.2 points of mean
+    // drift (9.1 % against 6.9 %).
+    const idx = indexOf(graphOf(northSouth, eastWest));
+    // Held the east-west road, now travelling due north: it is not that road.
+    const m = findRoadMatch({ e: 15, n: 15 }, 0, idx, 'ew');
+    expect(m!.wayId).toBe('ns');
+  });
+
+  it('★ a road crossed at right angles is not a candidate at all', () => {
+    // The gate, not merely a penalty: heading mismatch was worth at most 30 m
+    // against a continuity bonus worth up to 60 m, so no penalty could express
+    // "the vehicle cannot be on this road".
+    const idx = indexOf(graphOf(northSouth));
+    // Sitting right on the north-south road, travelling due east across it.
+    expect(findRoadMatch({ e: 0, n: 0 }, 90, idx, 'ns')).toBeNull();
+  });
+
+  it('★ refuses a one-way road driven against its direction', () => {
+    // Carriageway discrimination. A dual carriageway is two one-way ways, so
+    // an estimate drifting off one finds the other: near, parallel, pointing
+    // the other way. Snapping there puts the marker on the wrong side of the
+    // divider travelling backwards. Measured, refusing is worth 2.2 points of
+    // mean drift (6.9 % against 9.1 %); a penalty and a last-resort fallback
+    // both measured 9.1 %, because there was no other road to lose to.
+    const one = indexOf(
+      graphOf(wayFromEnu('ow', [[0, -300], [0, 300]], { maxspeed: 60, oneway: true })),
+    );
+    expect(findRoadMatch({ e: 3, n: 0 }, 180, one, null)).toBeNull();
+    // ...and still matches it when driven the way it points.
+    expect(findRoadMatch({ e: 3, n: 0 }, 0, one, null)).not.toBeNull();
   });
 
   it('returns null when no road is within the search radius', () => {
@@ -381,11 +420,21 @@ describe('canTrustSpeedLimit — matching a road and trusting its limit differ',
   });
 
   it('rejects the reverse direction on a one-way road', () => {
-    const one = indexOf(
-      graphOf(wayFromEnu('ow', [[0, -300], [0, 300]], { maxspeed: 60, oneway: true })),
-    );
-    const m = findRoadMatch({ e: 3, n: 0 }, 180, one, null)!;
+    // Built directly rather than through findRoadMatch, which no longer
+    // returns a reverse one-way at all (see rejectOnewayReverse). The two
+    // refusals are independent on purpose: this one is about trusting the
+    // road's SPEED LIMIT, and it must keep holding for any caller that
+    // constructs a match by other means — the HMM and the particle filter do.
+    const m = {
+      wayId: 'ow',
+      maxspeedKph: 60,
+      arcLengthM: 300,
+      enu: { e: 0, n: 0 },
+      distanceM: 3,
+      bearingDeg: 0,
+    };
     expect(canTrustSpeedLimit(m, 180, true)).toBe(false);
+    expect(canTrustSpeedLimit(m, 0, true)).toBe(true);
   });
 
   it('refuses when the road has no speed limit tagged', () => {
@@ -497,5 +546,164 @@ describe('road snapping — staying on the road during an outage', () => {
     const here = { e: 13, n: 0 };
     expect(findRoadMatch(here, 0, idx, 'a')!.wayId).toBe('a');
     expect(findRoadMatch(here, 0, idx, 'b')!.wayId).toBe('b');
+  });
+});
+
+describe('★ W5 — render-only ways can be drawn but never matched', () => {
+  /**
+   * The tester wants a precise map: "a road which consist of lot of turns and
+   * lot of streets and turns small roads". Footways, tracks and paths are most
+   * of what makes a neighbourhood recognisable — and none of them may ever be
+   * offered to the matcher, because a car is not on the pavement and a vehicle
+   * snapped onto a footpath beside its actual road is wrong in a way that looks
+   * entirely plausible.
+   *
+   * Enforced by RoadIndex refusing to index them, so it cannot be undone by a
+   * caller passing the wrong array.
+   */
+  it('★ a footpath is never returned, even when it is by far the nearest way', () => {
+    const idx = indexOf(
+      graphOf(
+        wayFromEnu('pavement', [[0, -300], [0, 300]], { highway: 'footway', renderOnly: true }),
+        wayFromEnu('road', [[40, -300], [40, 300]], { highway: 'residential' }),
+      ),
+    );
+    // Standing directly on the footpath, 40 m from the road, heading along both.
+    const m = findRoadMatch({ e: 0, n: 0 }, 0, idx, null);
+    expect(m).not.toBeNull();
+    expect(m!.wayId).toBe('road');
+  });
+
+  it('a render-only way is not in the index at all', () => {
+    const idx = indexOf(
+      graphOf(wayFromEnu('p', [[0, -300], [0, 300]], { highway: 'path', renderOnly: true })),
+    );
+    expect(idx.wayCount).toBe(0);
+    expect(findRoadMatch({ e: 0, n: 0 }, 0, idx, null)).toBeNull();
+  });
+
+  it('an ordinary way with no flag is still matched — the default is safe', () => {
+    // Stored graphs written before the flag existed carry no `renderOnly`, and
+    // must keep behaving exactly as they did.
+    const idx = indexOf(graphOf(wayFromEnu('r', [[0, -300], [0, 300]], { highway: 'residential' })));
+    expect(findRoadMatch({ e: 3, n: 0 }, 0, idx, null)).not.toBeNull();
+  });
+
+  it('★ continuity cannot resurrect a render-only way', () => {
+    // lastWayId is a string, so a stale id from before a graph reload could in
+    // principle name a footpath. It must still never be returned.
+    const idx = indexOf(
+      graphOf(
+        wayFromEnu('pavement', [[0, -300], [0, 300]], { highway: 'footway', renderOnly: true }),
+        wayFromEnu('road', [[40, -300], [40, 300]], { highway: 'residential' }),
+      ),
+    );
+    const m = findRoadMatch({ e: 0, n: 0 }, 0, idx, 'pavement');
+    expect(m!.wayId).toBe('road');
+  });
+});
+
+describe('★ W9 — a vehicle that is genuinely off the road', () => {
+  /**
+   * Field report: "if I am on a mountain then it should also run there... the
+   * point should show correct wherever I am, but if I am apart from the road
+   * it shows me on the road."
+   *
+   * ★ WHY LOWERING THE RADIUS WOULD HAVE BEEN THE WRONG FIX ★
+   * The widened 250 m search exists because of the opposite complaint — "it
+   * goes off the road, into the plots" — and it is worth the headline off-road
+   * result: 0.5 m mean against 15.7 m with snapping off. Shrinking it trades
+   * one field report for the other.
+   *
+   * The two cases are only separable with evidence, and there is exactly one
+   * piece available: a trusted GNSS fix. The fix is a measurement and the road
+   * is an assumption, so several accurate fixes landing far from any road mean
+   * the vehicle is off the network and the map may not drag it back.
+   */
+  const ORIGIN_LATLON = ORIGIN;
+
+  /** One north-south road at e = 0. Everything else is open ground. */
+  function oneRoad(): RoadGraph {
+    return graphOf(
+      wayFromEnu('road', [
+        [0, -2000],
+        [0, 2000],
+      ]),
+    );
+  }
+
+  /**
+   * Fixes at a fixed easting, walking north, then GNSS disappears.
+   * `offsetE` is how far from the road the vehicle actually is.
+   */
+  function driveAt(offsetE: number): { engine: NavigationEngine; final: ReturnType<NavigationEngine['update']> } {
+    const engine = new NavigationEngine();
+    engine.setRoadGraph(oneRoad());
+    const dtMs = 100;
+    let last!: ReturnType<NavigationEngine['update']>;
+    for (let tMs = 0; tMs <= 120_000; tMs += dtMs) {
+      const tS = tMs / 1000;
+      const n = 8 * tS; // 8 m/s north
+      const sample: SensorSample = {
+        t: tMs,
+        imu: { ax: 0, ay: 0, az: 9.80665, gx: 0, gy: 0, gz: 0 },
+      };
+      // GNSS for the first 60 s, then a total outage.
+      if (tMs % 1000 === 0 && tS <= 60) {
+        const p = enuToLatLon(offsetE, n, ORIGIN_LATLON.lat, ORIGIN_LATLON.lon);
+        sample.gnss = { lat: p.lat, lon: p.lon, accuracyM: 4, speedMps: 8, headingDeg: 0 };
+      }
+      last = engine.update(sample);
+    }
+    return { engine, final: last };
+  }
+
+  it('★ is not dragged onto a road it was never on', () => {
+    // 150 m off the road: outside the 50 m search, inside the 250 m widened
+    // one. Before this, the outage handed the marker to the widened search and
+    // it slid onto a road the vehicle had never been near.
+    const { engine, final } = driveAt(150);
+    expect(engine.diagnostics.offRoad).toBe(true);
+
+    // The road lies along e = 0, so the drawn easting IS the cross-track
+    // distance from it. Back to ENU rather than a haversine between two
+    // contrived points, which is easier to get wrong than to read.
+    const drawn = latLonToEnu(
+      final.position.lat,
+      final.position.lon,
+      ORIGIN_LATLON.lat,
+      ORIGIN_LATLON.lon,
+    );
+    // It should still be out in the field, near 150 m, not pulled to the road.
+    expect(Math.abs(drawn.e)).toBeGreaterThan(100);
+  });
+
+  it('★ still snaps a vehicle whose fixes said it was on the road', () => {
+    // The control. This is the case the widened search was added for, and it
+    // must be completely unaffected — otherwise this "fix" is just a way of
+    // switching road snapping off.
+    const { engine } = driveAt(0);
+    expect(engine.diagnostics.offRoad).toBe(false);
+  });
+
+  it('needs several fixes to decide, so one bad fix cannot flip it', () => {
+    const engine = new NavigationEngine();
+    engine.setRoadGraph(oneRoad());
+    const dtMs = 100;
+    for (let tMs = 0; tMs <= 20_000; tMs += dtMs) {
+      const tS = tMs / 1000;
+      const sample: SensorSample = {
+        t: tMs,
+        imu: { ax: 0, ay: 0, az: 9.80665, gx: 0, gy: 0, gz: 0 },
+      };
+      if (tMs % 1000 === 0) {
+        // On the road throughout, except a single wild multipath fix.
+        const e = tS === 10 ? 200 : 0;
+        const p = enuToLatLon(e, 8 * tS, ORIGIN_LATLON.lat, ORIGIN_LATLON.lon);
+        sample.gnss = { lat: p.lat, lon: p.lon, accuracyM: 4, speedMps: 8, headingDeg: 0 };
+      }
+      engine.update(sample);
+    }
+    expect(engine.diagnostics.offRoad).toBe(false);
   });
 });

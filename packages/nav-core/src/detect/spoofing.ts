@@ -77,6 +77,31 @@ export interface SpoofingConfig {
    * Losing signal genuinely takes C/N0 down with it.
    */
   healthyCn0Db: number;
+  /**
+   * How long the satellite count must STAY collapsed before it is reported, ms.
+   *
+   * ★ THE COUNT AND THE C/N0 ARE NOT THE SAME POPULATION ★
+   * Measured on a real walk: `satellites 43 -> 10 with C/N0 still 38 dB-Hz`
+   * was raised against a fix that was, at that instant, perfect — 0.0 m drift,
+   * 4/4 m uncertainty, 100 % confidence. Nothing was wrong with it.
+   *
+   * The reason is a definition mismatch this rule was written before Phase 15
+   * could expose. `satCount` is GnssStatus's satellites IN VIEW across every
+   * constellation, and it legitimately collapses whenever the receiver
+   * duty-cycles or the status callback reports a partial set. `meanCn0` is
+   * averaged over the satellites USED IN THE FIX, deliberately — see the note
+   * in SensorLoopService. So the two numbers move independently for entirely
+   * benign reasons, and a single sample where one dropped while the other did
+   * not is the normal behaviour of the hardware, not evidence of anything.
+   *
+   * A real jammer or spoofer does not restore the constellation a moment
+   * later. Requiring the collapse to persist costs nothing that matters — the
+   * detector is advisory and cannot gate a fix either way — and it is the same
+   * treatment `staticSustainMs` already gives the static-hold rule, for the
+   * same reason: one sample of disagreement is normal, sustained disagreement
+   * is not.
+   */
+  satDropSustainMs: number;
   /** How long an anomaly stays displayed after its last trigger, ms. */
   holdMs: number;
 }
@@ -90,6 +115,7 @@ export const DEFAULT_SPOOFING_CONFIG: SpoofingConfig = {
   jumpAccuracyMargin: 3,
   satDropFraction: 0.5,
   healthyCn0Db: 35,
+  satDropSustainMs: 5000,
   holdMs: 8000,
 };
 
@@ -131,6 +157,8 @@ export class SpoofingDetector {
   };
   /** Slow mean of satellite count, for spotting a collapse against it. */
   private satBaseline: number | null = null;
+  /** When the count first fell below the threshold, or null while it has not. */
+  private satDropSince: number | null = null;
   /** When each kind was last reported, so a persistent fault reports once. */
   private lastReportedAt: Partial<Record<GnssAnomalyKind, number>> = {};
 
@@ -308,9 +336,20 @@ export class SpoofingDetector {
     // decline does not drag the reference down with it and hide the drop.
     this.satBaseline = baseline === null ? satCount : Math.max(baseline * 0.98, satCount);
 
-    if (baseline === null || baseline < 4) return null;
-    if (satCount > baseline * this.config.satDropFraction) return null;
-    if (meanCn0 < this.config.healthyCn0Db) return null;
+    if (baseline === null || baseline < 4) {
+      this.satDropSince = null;
+      return null;
+    }
+    if (satCount > baseline * this.config.satDropFraction || meanCn0 < this.config.healthyCn0Db) {
+      // The constellation came back, or the signal went down with it the way
+      // a tunnel takes it down. Either way this is not the pattern.
+      this.satDropSince = null;
+      return null;
+    }
+
+    // Sustained, not instantaneous. See satDropSustainMs.
+    if (this.satDropSince === null) this.satDropSince = t;
+    if (t - this.satDropSince < this.config.satDropSustainMs) return null;
 
     return {
       t,
@@ -325,6 +364,7 @@ export class SpoofingDetector {
     this.active = null;
     this.activeUntil = 0;
     this.satBaseline = null;
+    this.satDropSince = null;
     this.lastReportedAt = {};
     this.counts = { STATIC_HOLD: 0, IMPLAUSIBLE_JUMP: 0, CONSTELLATION: 0 };
   }

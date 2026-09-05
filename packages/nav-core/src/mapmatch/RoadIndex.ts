@@ -71,7 +71,13 @@ export class RoadIndex {
     config: Partial<RoadIndexConfig> = {},
   ) {
     this.config = { ...DEFAULT_ROAD_INDEX_CONFIG, ...config };
-    for (const way of graph.ways) this.addWay(way);
+    for (const way of graph.ways) {
+      // ★ THE ONE PLACE THIS IS ENFORCED ★ A render-only way — a footpath, a
+      // track — is never indexed, so no caller can match against one however
+      // it obtained the graph. See RoadWay.renderOnly.
+      if (way.renderOnly === true) continue;
+      this.addWay(way);
+    }
   }
 
   get size(): number {

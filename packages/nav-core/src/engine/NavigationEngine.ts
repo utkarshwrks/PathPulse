@@ -399,6 +399,36 @@ export interface EngineConfig extends ConstraintFlags {
   /** Never hold a GNSS speed longer than this however slow the receiver, ms. */
   gnssSpeedHoldMaxMs: number;
   /**
+   * Above this observed fix interval, hold the Doppler speed for a VEHICLE too.
+   *
+   * ★ THE RULE WAS RIGHT AND ITS CONDITION WAS WRONG ★
+   *
+   * Holding a stale Doppler speed used to be restricted to non-vehicle motion,
+   * and the measurement behind that is real: applied to vehicle data it moved
+   * the published mean drift from 10.00 % to 10.33 % and the p90 from 17.57 %
+   * to 21.31 %. The reasoning was that in a vehicle, integration across one fix
+   * interval beats a speed that has gone stale.
+   *
+   * That is true at one hertz. It is false at one tenth of a hertz, and every
+   * log the rule was measured on fixes at 1.00 s. The first real-sensor logs
+   * fix every 9.00 s, and there the same rule is catastrophic: the estimator
+   * spends nine seconds in ten integrating with no speed reference AT ALL,
+   * while the badge says GNSS. Measured on iovnbd_S1, in GNSS mode with a truth
+   * speed of 8.5 m/s, the estimate reached the 40 m/s plausibility clamp —
+   * 144 km/h — before the artificial outage had even started.
+   *
+   * So the condition is the receiver's cadence, not the kind of motion. Both
+   * halves of the original trade-off are about HOW LONG the gap is: a stale
+   * Doppler costs the vehicle's real acceleration over that gap, and
+   * integration costs the residual tilt error over the same gap, squared. One
+   * second favours integration; ten seconds does not.
+   *
+   * 3 s sits between the two cadences with a wide margin on each side, so a
+   * 1 Hz receiver behaves exactly as before and nothing about the published
+   * simulated numbers can move.
+   */
+  vehicleSpeedHoldMinIntervalMs: number;
+  /**
    * The window a speed and course are measured over, s.
    *
    * ★ IT ENDS ON TIME, NEVER ON DISTANCE ★ A window that closes as soon as the
@@ -480,6 +510,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlInferenceIntervalMs: 500,
   gnssSpeedHoldMs: 3_000,
   gnssSpeedHoldMaxMs: 12_000,
+  vehicleSpeedHoldMinIntervalMs: 3_000,
   gnssCourseMinBaselineS: 10,
   gnssPositionGain: 0.25,
   // Wider than a good urban fix disagrees with itself (2-6 m) and than the
@@ -596,6 +627,8 @@ export class NavigationEngine {
   private measuredRateHz = 0;
   /** Slow mean of forward acceleration — the high-pass fallback. */
   private forwardAccelDc = 0;
+  /** Diagnostics only: the conditioned forward acceleration last integrated. */
+  private lastForwardAccel = 0;
   private hasAccelDc = false;
   private estimatedDriftM = 0;
   private lastState: NavigationState | null = null;
@@ -686,6 +719,25 @@ export class NavigationEngine {
   private snapOffset: EnuPoint = { e: 0, n: 0 };
   /** Samples rescued by the widened search — surfaced, never silent. */
   private wideSnapCount = 0;
+  /**
+   * Consecutive trusted fixes that landed far from any road, and near one.
+   *
+   * ★ THE ONE PIECE OF EVIDENCE THAT SEPARATES THE TWO CASES ★
+   * Road snapping cannot tell "a BAD estimate of a vehicle that IS on a road"
+   * from "a GOOD estimate of a vehicle that is genuinely NOT on one" — a car
+   * park, a field, a mountain track. Both look like a position 200 m from the
+   * nearest road, and the widened search treats both as the first.
+   *
+   * A trusted GNSS fix settles it. The fix is a MEASUREMENT and the road is an
+   * ASSUMPTION, so when several accurate fixes in a row land a long way from
+   * any road, the vehicle is off-road and the map is not entitled to drag it
+   * back. Counted rather than averaged because one multipath fix in a car park
+   * must not flip the verdict, and hysteretic in both directions for the same
+   * reason.
+   */
+  private offRoadFixes = 0;
+  private onRoadFixes = 0;
+  private offRoad = false;
   /** Slow mean of horizontal acceleration, in the PLANE frame. See its use. */
   private planeAccelDcF = 0;
   private planeAccelDcR = 0;
@@ -770,6 +822,10 @@ export class NavigationEngine {
     unaidedMs: number;
     forwardBiasMps2: number;
     forwardBiasObservations: number;
+    /** Conditioned forward acceleration actually integrated, m/s^2. */
+    forwardAccelMps2: number;
+    /** The slow mean removed from it by the high-pass, m/s^2. */
+    forwardAccelDcMps2: number;
     roadSnapAppliedFraction: number;
     matchedRoadName: string | null;
     matchedRoadDistanceM: number | null;
@@ -800,6 +856,8 @@ export class NavigationEngine {
     /** Why the engine is dead reckoning or degraded, for the HUD. */
     modeReason: string | null;
     speedSource: SpeedSource;
+    /** True while trusted fixes say the vehicle is genuinely off the network. */
+    offRoad: boolean;
     /** Phase 12: where the alignment engine thinks the phone is pointing. */
     alignment: AutoAlignState;
     /** Phase 13: the motion classifier's accepted state, and its evidence. */
@@ -866,6 +924,8 @@ export class NavigationEngine {
       strideObservations: this.stride.observationCount,
       forwardBiasMps2: this.forwardBias.estimateMps2,
       forwardBiasObservations: this.forwardBias.observationCount,
+      forwardAccelMps2: this.lastForwardAccel,
+      forwardAccelDcMps2: this.forwardAccelDc,
       roadSnapAppliedFraction: this.roadSnapAppliedFraction,
       matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
       matchedRoadDistanceM: this.lastMatch?.distanceM ?? null,
@@ -886,6 +946,7 @@ export class NavigationEngine {
           : Math.max(0, this.lastState.t - this.lastGnssT),
       ),
       speedSource: this.speedSource,
+      offRoad: this.offRoad,
     };
   }
 
@@ -1392,6 +1453,7 @@ export class NavigationEngine {
       } else {
         forwardAccel = h.forward;
       }
+      this.lastForwardAccel = forwardAccel;
 
       // ★ PHASE 18B — THE LEAN, BEFORE ANYTHING INTEGRATES THE YAW RATE ★
       //
@@ -1599,6 +1661,46 @@ export class NavigationEngine {
     if (sample.gnss && gnssEnu) {
       this.lastGnssT = sample.t;
       this.lastGnssEnu = gnssEnu;
+
+      // ★ IS THE VEHICLE ACTUALLY ON A ROAD? ASK THE MEASUREMENT. ★
+      // Only trusted fixes vote: a 60 m fix is not evidence about a 50 m
+      // radius. Measured from the FIX, never from the estimate, because the
+      // estimate is the thing whose reliability is in question.
+      if (trusted && this.roadIndex) {
+        const cfg = this.config.roadSnapConfig;
+        const nearest = findRoadMatch(
+          gnssEnu,
+          this.dr.current.headingDeg,
+          this.roadIndex,
+          null,
+          cfg,
+          cfg.wideSearchRadiusM,
+        );
+        const distanceM = nearest?.distanceM ?? Number.POSITIVE_INFINITY;
+        if (distanceM > cfg.searchRadiusM) {
+          this.offRoadFixes++;
+          this.onRoadFixes = 0;
+        } else {
+          this.onRoadFixes++;
+          this.offRoadFixes = 0;
+        }
+        const wasOffRoad = this.offRoad;
+        // Three to leave the road, two to come back. Asymmetric on purpose:
+        // being wrongly held off-road costs a correction that was optional
+        // anyway, and being wrongly dragged onto a road is the reported bug.
+        if (this.offRoadFixes >= 3) this.offRoad = true;
+        else if (this.onRoadFixes >= 2) this.offRoad = false;
+        if (this.offRoad !== wasOffRoad) {
+          this.log.push({
+            t: sample.t,
+            type: 'ROAD_MATCH',
+            message: this.offRoad
+              ? `off-road — ${distanceM.toFixed(0)} m from the nearest road on ${this.offRoadFixes} fixes, snapping suspended`
+              : 'back on a road, snapping resumed',
+            data: { offRoad: this.offRoad, distanceM: Number(distanceM.toFixed(1)) },
+          });
+        }
+      }
       // 1.5 m/s is walking pace — comfortably above GNSS speed noise at rest,
       // comfortably below anything that could be called stopped.
       if (trusted && (speedForFix ?? 0) > 1.5) {
@@ -1741,9 +1843,36 @@ export class NavigationEngine {
     // the marker sitting still. Cadence times stride is measured fresh every
     // step, so unlike an integrated velocity it does not decay: a two-minute
     // outage on foot is no worse than a ten-second one.
+    //
+    // ★ NO FOOTFALL MEANS STOPPED, NOT ACCELERATING ★
+    //
+    // This used to be `undefined` when the cadence was zero, which looks like
+    // "the step model has no opinion" and behaves like something much worse:
+    // the chain falls through the ML slot — correctly suppressed on foot — and
+    // lands on INTEGRATED, double-integrating a hand-held accelerometer. That
+    // is the worst estimator available for a pedestrian and it does not
+    // hesitate. Field report: "I just stopped and it continuously go forward
+    // and forward. It does not stop anywhere", with the HUD reading
+    // `[INTEGRATED] 1 km/h` and the distance total climbing past 120 m.
+    //
+    // Reproduced in pedestrian.test.ts: two minutes of standing still holding
+    // the phone manufactured 74.9 m of travel. With zero as the answer it is
+    // under 5 m.
+    //
+    // Zero is a real measurement here, not a fallback. `cadenceHz` returns 0
+    // only after 1.6 s with no footfall (stepTimeoutMs), and a person on foot
+    // who has not taken a step in 1.6 seconds is standing still. The distance
+    // floor cannot catch this on its own — it rejects speeds under 0.3 m/s,
+    // and integrated hand tremor comfortably exceeds that.
+    //
+    // Note this cannot silence a real walk: GNSS speed still outranks it in
+    // propagate(), and a resumed cadence restores the stride estimate on the
+    // next step.
     const stepSpeed =
-      this.motion.current === 'PEDESTRIAN' && this.lastCadenceHz > 0
-        ? this.stride.speedMps(this.lastCadenceHz)
+      this.motion.current === 'PEDESTRIAN'
+        ? this.lastCadenceHz > 0
+          ? this.stride.speedMps(this.lastCadenceHz)
+          : 0
         : undefined;
 
     if (this.dr.isInitialised) {
@@ -1767,10 +1896,16 @@ export class NavigationEngine {
         modeBefore === 'GNSS' ||
         modeBefore === 'GNSS_DEGRADED' ||
         modeBefore === 'INITIALIZING';
+      // See `vehicleSpeedHoldMinIntervalMs`. A vehicle on a 1 Hz receiver still
+      // integrates between fixes, exactly as measured; one on a 9 s receiver
+      // holds the Doppler instead, because nine seconds of unaided integration
+      // is how the estimate reached its plausibility clamp with GNSS healthy.
+      const slowReceiver =
+        observedFixMs !== null && observedFixMs >= this.config.vehicleSpeedHoldMinIntervalMs;
       const gnssSpeedHeld =
         !trusted &&
         gnssHealthy &&
-        context !== 'VEHICLE' &&
+        (context !== 'VEHICLE' || slowReceiver) &&
         this.lastGnssSpeed !== null &&
         gnssSpeedAgeMs <= gnssSpeedHoldMs;
       const gnssSpeed = trusted
@@ -2449,7 +2584,15 @@ export class NavigationEngine {
         // bad estimate is not to stop correcting it. The widened search is
         // only used when the ordinary one found nothing, and the score still
         // prefers near roads pointing the right way.
-        if (!match && mode === 'DEAD_RECKONING') {
+        // ★ AND THE WIDE SEARCH IS WHERE THAT VERDICT IS SPENT ★
+        // "It goes off the road into the plots" and "if I am on a mountain it
+        // shows me on the road" are the SAME mechanism seen from both sides:
+        // the widened search cannot tell a drifted estimate from a vehicle
+        // that is legitimately off the network. The ordinary 50 m search still
+        // runs either way — that one is bounded by the road actually being
+        // there — but the 250 m reach is only defensible while the last thing
+        // GNSS said was that the vehicle is on a road.
+        if (!match && mode === 'DEAD_RECKONING' && !this.offRoad) {
           match = findRoadMatch(
             shownEnu,
             this.dr.current.headingDeg,
@@ -3156,6 +3299,9 @@ export class NavigationEngine {
     this.snapStrength = 0;
     this.snapOffset = { e: 0, n: 0 };
     this.wideSnapCount = 0;
+    this.offRoadFixes = 0;
+    this.onRoadFixes = 0;
+    this.offRoad = false;
     this.hmm?.reset();
     this.lastHmmEnu = null;
     this.particles?.reset();

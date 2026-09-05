@@ -24,6 +24,27 @@ export interface RoadWay {
    * common case and is why nothing else depends on it.
    */
   layerM?: number;
+  /**
+   * This way exists to be DRAWN, and must never be matched against.
+   *
+   * ★ THE MAP AND THE MATCHER WANT DIFFERENT ROAD SETS ★
+   *
+   * A precise offline basemap wants footways, tracks and paths — they are most
+   * of what makes a neighbourhood recognisable. The matcher must never see one:
+   * `build-road-graph.mjs` excludes footways deliberately, because A CAR IS NOT
+   * ON THE PAVEMENT, and a vehicle snapped onto a footpath running parallel to
+   * the road it is actually on is both wrong and completely plausible-looking.
+   *
+   * The separation is a FLAG ON THE TYPE rather than a convention about which
+   * array to pass, because a convention is a comment and comments do not
+   * survive refactors. `RoadIndex` filters on this at construction, so it is
+   * not possible to hand the matcher a footpath by accident — the only way to
+   * reintroduce the bug is to delete the filter, which is a visible act.
+   *
+   * Absent means an ordinary road: everything that existed before this flag
+   * did is matchable, which is the safe default for old stored graphs.
+   */
+  renderOnly?: boolean;
   /** [lon, lat] pairs, in order along the way. */
   coords: Array<[number, number]>;
 }

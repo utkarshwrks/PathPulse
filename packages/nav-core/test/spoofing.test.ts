@@ -217,9 +217,23 @@ describe('SpoofingDetector — constellation', () => {
   it('flags satellites collapsing while the signal stays strong', () => {
     const d = new SpoofingDetector();
     for (let t = 0; t < 5000; t += 1000) d.update(fix(t, 12, 42));
-    const found = d.update(fix(5000, 3, 44));
+    // Sustained, because a single collapsed sample is what real hardware does
+    // when the status callback reports a partial set — see satDropSustainMs.
+    let found = null;
+    for (let t = 5000; t <= 11_000 && !found; t += 1000) found = d.update(fix(t, 3, 44));
     expect(found?.kind).toBe('CONSTELLATION');
     expect(found?.message).toMatch(/C\/N0 still 44/);
+  });
+
+  it('★ ignores a one-sample satellite-count collapse', () => {
+    // Measured on a real walk: `satellites 43 -> 10 with C/N0 still 38 dB-Hz`
+    // against a fix with 0.0 m drift and 100 % confidence. In view and used-in-
+    // fix are different populations and they move independently.
+    const d = new SpoofingDetector();
+    for (let t = 0; t < 5000; t += 1000) d.update(fix(t, 43, 38));
+    expect(d.update(fix(5000, 10, 38))).toBeNull();
+    expect(d.update(fix(6000, 41, 38))).toBeNull();
+    expect(d.current).toBeNull();
   });
 
   it('★ does not fire entering a tunnel', () => {

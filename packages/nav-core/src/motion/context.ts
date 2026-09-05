@@ -248,6 +248,35 @@ export class MotionContextDetector {
           reason: `${cadence.toFixed(1)} steps/s at ${s.toFixed(1)} m/s`,
         };
       }
+      // ★ STOPPING IS NOT GETTING INTO A CAR ★
+      //
+      // Falling through to VEHICLE here is right when the evidence is a speed
+      // and a shake that do not look like walking. It is badly wrong for the
+      // one case that produced it most often: a walker who STOPS.
+      //
+      // Cadence goes to zero 1.6 s after the last footfall, while the last
+      // Doppler speed is still a walking 1.4 m/s and stays "recent" for
+      // several seconds more. So `walking` is false, `s` is mid-band, and this
+      // branch declared VEHICLE — and, worse, wrote it into `gnssBacked`,
+      // which the hold below then preserves for the WHOLE outage. Measured on
+      // the walk-then-stop fixture in pedestrian.test.ts: the context flipped
+      // to VEHICLE within five seconds of stopping and never came back, which
+      // re-enabled the vehicle speed model, disabled the pedestrian heading
+      // rule, and left the chain integrating hand tremor. 74.9 m of travel
+      // invented while standing still.
+      //
+      // Inside the pedestrian speed band, the absence of a cadence is not
+      // evidence of a vehicle — it is the absence of evidence. Hold whatever
+      // GNSS last established rather than inventing a new answer from a
+      // missing signal. Above the band the original reasoning is untouched: a
+      // speed no pedestrian reaches is decisive however quiet the handset.
+      if (s <= this.config.pedestrianMaxSpeedMps && this.gnssBacked !== null) {
+        return {
+          context: this.gnssBacked,
+          reason: `held ${this.gnssBacked.toLowerCase()} — no cadence at ${s.toFixed(1)} m/s`,
+        };
+      }
+
       this.gnssBacked = 'VEHICLE';
       return {
         context: 'VEHICLE',

@@ -150,10 +150,19 @@ describe('ablation over the committed logs', () => {
     // constructs each of those geometries directly. This assertion exists so
     // that "it did not help on these logs" stays a recorded measurement rather
     // than becoming a forgotten disappointment.
+    //
+    // ★ THE GAP WIDENED, AND THAT IS ALSO A MEASUREMENT ★ It used to be 10.5 %
+    // against 9.2 %. The heading gate in roadsnap.ts — a road pointing more
+    // than 60 degrees away from the direction of travel is not a candidate —
+    // took the shipped chain to 6.9 % and left the HMM untouched at 10.5 %,
+    // because `hmmMatch` replaces that greedy matcher rather than feeding it.
+    // The tolerance below is against an absolute figure now, not a multiple of
+    // a moving baseline, or an improvement to the shipped chain would keep
+    // failing this test for the wrong reason.
     const hmm = get('hmm');
     expect(hmm.mean).toBeGreaterThan(get('full').mean);
     // But it must stay in the same league. A matcher that diverges is a bug.
-    expect(hmm.mean).toBeLessThan(get('full').mean * 1.5);
+    expect(hmm.mean).toBeLessThan(15);
   });
 
   it('★ records where the particle filter helps and where it does not', () => {
@@ -174,9 +183,12 @@ describe('ablation over the committed logs', () => {
     //
     // The overall mean is asserted only to keep the filter in the same league.
     // The per-route numbers are the finding, and they are in docs/benchmarks.md.
+    //
+    // Same note as the HMM above: the shipped chain's heading gate took it to
+    // 6.9 % and did not move the filter, which reads its own hypotheses rather
+    // than the greedy match. Bounded absolutely for the same reason.
     const particle = get('particle');
-    const full = get('full');
-    expect(particle.mean).toBeLessThan(full.mean * 1.5);
+    expect(particle.mean).toBeLessThan(15);
     // And it must not be the catastrophe it was before the divergence guard:
     // an unguarded cloud that had collectively taken a wrong slip road
     // reported itself unimodal, with a two-metre spread, a kilometre from the
@@ -185,7 +197,7 @@ describe('ablation over the committed logs', () => {
   });
 
   it('does not regress past the figure published in docs/benchmarks.md', () => {
-    // A guard, not a target. Published: 10.0% mean, 22.6% p90.
+    // A guard, not a target. Published: 6.9% mean, 22.6% p90.
     expect(get('full').mean).toBeLessThan(13);
     // The tail matters more than the mean — it is what someone finds by
     // picking the one drive that went wrong.

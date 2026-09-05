@@ -918,3 +918,82 @@ describe('Phase 17 — the particle filter inside the engine', () => {
     expect(outage.every((s) => s.confidence <= 1)).toBe(true);
   });
 });
+
+describe('★ the Doppler hold, and why a slow receiver changes the rule', () => {
+  /**
+   * ★ THE RULE WAS RIGHT AND ITS CONDITION WAS WRONG ★
+   *
+   * Holding a stale Doppler speed used to be refused for vehicles, on a real
+   * measurement: applied to vehicle data it moved the simulated mean drift from
+   * 10.00 % to 10.33 %. Every log behind that fixes at 1.00 s, where
+   * integrating across one gap is cheap.
+   *
+   * The first real-sensor logs fix every 9.00 s. There the same rule leaves the
+   * estimator integrating with no speed reference for nine seconds in ten while
+   * the badge reads GNSS — and measured on iovnbd_S1, the estimate reached the
+   * 40 m/s plausibility clamp against a truth of 8.5 m/s before the artificial
+   * outage had even begun. Over 19 windows on the real logs the fix is worth
+   * 50.1 % to 41.3 % mean drift, and 55.4 % to 35.0 % at the median.
+   *
+   * So the condition is the receiver's cadence, not the kind of motion.
+   */
+  function sourcesOverDrive(fixIntervalS: number, minIntervalMs?: number): string[] {
+    const engine = new NavigationEngine(
+      minIntervalMs === undefined ? {} : { vehicleSpeedHoldMinIntervalMs: minIntervalMs },
+    );
+    const sources: string[] = [];
+    let nextFixMs = 0;
+    for (let tMs = 0; tMs <= 120_000; tMs += 100) {
+      const tS = tMs / 1000;
+      const sample: SensorSample = {
+        t: tMs,
+        imu: { ax: 0.25, ay: 0, az: 9.80665, gx: 0, gy: 0, gz: 0 },
+      };
+      if (tMs >= nextFixMs) {
+        nextFixMs += fixIntervalS * 1000;
+        sample.gnss = {
+          lat: 28.6315 + (15 * tS) / 111_320,
+          lon: 77.2167,
+          accuracyM: 4,
+          speedMps: 15,
+          headingDeg: 0,
+        };
+      }
+      engine.update(sample);
+      // ★ AFTER THE CADENCE HAS BEEN OBSERVED ★ The hold is keyed on the
+      // receiver's measured fix interval, which does not exist for the first
+      // few fixes — so the opening of every drive is unaided by design, and
+      // counting it would compare the warm-up rather than the behaviour.
+      if (tMs <= 60_000) continue;
+      // Only the samples where a speed had to come from somewhere. This
+      // fixture is quiet enough that stationarity fires on most of it — a real
+      // vehicle's vibration would not let it — so counting those would drown
+      // out the comparison entirely.
+      const src = engine.diagnostics.speedSource;
+      if (src === 'GNSS' || src === 'INTEGRATED') sources.push(src);
+    }
+    return sources;
+  }
+
+  it('★ a 9 s receiver holds the Doppler speed instead of integrating', () => {
+    const s = sourcesOverDrive(9);
+    expect(s.length).toBeGreaterThan(50);
+    expect(s.filter((x) => x === 'INTEGRATED')).toHaveLength(0);
+  });
+
+  it('★ and without the fix, the same drive is entirely unaided', () => {
+    // The before. Nine seconds in ten with nothing measuring speed, while the
+    // mode badge says GNSS.
+    const s = sourcesOverDrive(9, 999_999_999);
+    expect(s.length).toBeGreaterThan(50);
+    expect(s.filter((x) => x === 'GNSS')).toHaveLength(0);
+  });
+
+  it('a 1 s receiver still integrates between fixes, exactly as measured', () => {
+    // The original finding is preserved unchanged: at 1 Hz, integration across
+    // one short gap beats a stale Doppler, and the published simulated
+    // ablation depends on that staying true.
+    const s = sourcesOverDrive(1);
+    expect(s.filter((x) => x === 'INTEGRATED').length).toBeGreaterThan(0);
+  });
+});

@@ -538,3 +538,115 @@ describe('the motion classifier', () => {
     expect(fast.current).toBe('VEHICLE');
   });
 });
+
+describe('★ W6 — the walker who stopped', () => {
+  /**
+   * Field report, on foot: "I just stopped and it continuously go forward and
+   * forward. It does not stop anywhere." The screenshot showed
+   * `[INTEGRATED] 1 km/h`, `no fix for 108s`, and a distance total still
+   * climbing past 120 m while the phone was being held still.
+   *
+   * The mechanism is a gap in the speed priority. `stepSpeed` is only defined
+   * while a cadence is detected, so the moment the walking stops the chain
+   * falls through the ML slot — suppressed on foot, correctly — and lands on
+   * INTEGRATED: double-integrating a hand-held accelerometer, which is the
+   * worst estimator available for a pedestrian and invents motion happily.
+   *
+   * A pedestrian with no footfall is not accelerating. They have stopped.
+   */
+  function walkThenStop(): SensorSample[] {
+    let state = 99;
+    const rand = () => {
+      state = (state * 1103515245 + 12345) % 2147483648;
+      return state / 2147483648 - 0.5;
+    };
+    const dtMs = 1000 / 60;
+    const walkS = 40;
+    const totalS = 160;
+    const speedMps = 1.4;
+    const samples: SensorSample[] = [];
+    let nextFixMs = 0;
+
+    for (let tMs = 0; tMs <= totalS * 1000; tMs += dtMs) {
+      const tS = tMs / 1000;
+      const walking = tS < walkS;
+      const step = 2 * Math.PI * 2 * tS;
+      // While walking: footfall impulses. After: hand tremor only — a phone
+      // held in a hand is never as quiet as one on a table, which is exactly
+      // why the stationarity detector cannot be relied on to catch this.
+      const tremor = walking ? 0 : 0.35;
+      samples.push({
+        t: Math.round(tMs),
+        imu: {
+          ax: (walking ? 3.2 * Math.sin(step) : 0) + tremor * rand() + 0.05 * rand(),
+          ay: (walking ? 2.4 * Math.sin(step * 0.5 + 1) : 0) + tremor * rand() + 0.05 * rand(),
+          az:
+            9.80665 +
+            (walking ? 4.1 * Math.sin(step) : 0) +
+            tremor * rand() +
+            0.05 * rand(),
+          gx: (walking ? 0.9 * Math.sin(step * 0.5) : 0) + tremor * 0.2 * rand(),
+          gy: (walking ? 0.7 * Math.sin(step * 0.33 + 2) : 0) + tremor * 0.2 * rand(),
+          gz:
+            (walking ? 1.1 * Math.sin(step * 0.37 + 0.6) : 0) +
+            tremor * 0.25 * rand() +
+            0.012,
+        },
+      });
+
+      // GNSS for the walking half only; then it disappears, which is the
+      // condition under which the invented distance was observed.
+      if (tMs >= nextFixMs && walking) {
+        nextFixMs += 1000;
+        const metresEast = speedMps * tS;
+        const noise = () => (rand() + rand() + rand()) * 2 * 4;
+        samples[samples.length - 1]!.gnss = {
+          lat: START.lat + noise() / M_PER_DEG_LAT,
+          lon: START.lon + (metresEast + noise()) / mPerDegLon,
+          accuracyM: 4,
+          // Doppler, so the motion context is decided by a measured walking
+          // speed rather than by differencing two noisy positions. Without it
+          // a 4 m fix jitter over a 1 s interval implies 4 m/s and the
+          // classifier reads a walk as a vehicle — which is a fixture
+          // artefact, not the behaviour under test.
+          speedMps: 1.4,
+          headingDeg: 90,
+        };
+      }
+    }
+    return samples;
+  }
+
+  it('does not invent distance while the carrier stands still', () => {
+    const engine = new NavigationEngine();
+    const samples = walkThenStop();
+    let atStop: NavigationState | null = null;
+    let final: NavigationState | null = null;
+
+    for (const s of samples) {
+      const st = engine.update(s);
+      if (atStop === null && s.t >= 41_000) atStop = st;
+      final = st;
+    }
+
+    expect(atStop).not.toBeNull();
+    const invented = final!.distanceTravelledM - atStop!.distanceTravelledM;
+    // Two minutes of standing still, holding the phone. Anything over a few
+    // metres is manufactured travel.
+    expect(invented).toBeLessThan(5);
+  });
+
+  it('still measures the walk itself', () => {
+    // The guard must not be a speed source that reports zero for everything —
+    // that would "fix" the symptom by breaking pedestrian navigation.
+    const engine = new NavigationEngine();
+    let last: NavigationState | null = null;
+    for (const s of walkThenStop()) {
+      last = engine.update(s);
+      if (s.t >= 40_000) break;
+    }
+    // 40 s at 1.4 m/s is 56 m. Generous bounds: this asserts the walk was
+    // measured at all, not that it was measured perfectly.
+    expect(last!.distanceTravelledM).toBeGreaterThan(20);
+  });
+});
