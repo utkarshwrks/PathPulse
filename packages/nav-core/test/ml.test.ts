@@ -273,6 +273,40 @@ describe('NavigationEngine + ML speed', () => {
     expect(e.diagnostics.mlSpeedMps).toBeLessThanOrEqual(40);
   });
 
+  it('★ a model may move the estimate, not teleport it', () => {
+    // See `mlSpeedMaxAccelMps2`. The drive establishes 10 m/s on Doppler, then
+    // GNSS goes and the model asserts 35 — a 25 m/s step that no vehicle can
+    // produce, and precisely the shape of the field report: the marker running
+    // off down the road and being yanked back by the next fix.
+    const e = new NavigationEngine();
+    e.setSpeedPredictor(new MockSpeedPredictor(35), { mean: ZERO_MEAN, std: UNIT_STD });
+    let t = 0;
+    for (; t < 6000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: 10 };
+      }
+      e.update(s);
+    }
+    const cutAt = t;
+    // One second into the outage, 4 m/s^2 gets from 10 to at most 14.
+    let atOneSecond = 0;
+    for (; t < cutAt + 1000; t += 20) atOneSecond = e.update(sample(t)).velocityMps;
+    expect(atOneSecond).toBeLessThan(15);
+    expect(atOneSecond).toBeGreaterThan(10);
+  });
+
+  it('★ and gets there, if it keeps saying so', () => {
+    // The bound delays a wrong answer; it must not silence a right one. Given
+    // long enough the estimate reaches what the model claims, so this is a
+    // rate limit and not a ceiling.
+    const e = new NavigationEngine();
+    e.setSpeedPredictor(new MockSpeedPredictor(25), { mean: ZERO_MEAN, std: UNIT_STD });
+    const out = run(e, { gnssMs: 6000, outageMs: 20_000 });
+    expect(out.diagnostics.speedSource).toBe('ML');
+    expect(out.update(sample(26_020)).velocityMps).toBeGreaterThan(20);
+  });
+
   it('a NaN prediction never reaches the emitted state', () => {
     const e = new NavigationEngine();
     e.setSpeedPredictor(new MockSpeedPredictor(NaN), { mean: ZERO_MEAN, std: UNIT_STD });

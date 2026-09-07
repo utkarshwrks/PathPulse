@@ -42,6 +42,7 @@ import {
 import { StepDetector, StrideModel } from '../motion/steps.js';
 import {
   ImuWindowBuffer,
+  ML_WINDOW_SAMPLES,
   NullSpeedPredictor,
   SpeedSmoother,
   SpeedWindowBuffer,
@@ -692,7 +693,13 @@ export class NavigationEngine {
   private lastState: NavigationState | null = null;
   // ── ML speed (Phase 8) ────────────────────────────────────────────────────
   private speedPredictor: SpeedPredictor = new NullSpeedPredictor();
-  private readonly mlBuffer = new SpeedWindowBuffer();
+  /**
+   * ★ CANONICALISED, BECAUSE THE WEIGHTS ONLY KNOW ONE MOUNT ★
+   * The training augmentation covers any yaw but only ±30° of pitch and roll,
+   * and a phone in a hand is 90° of pitch. See `canonicaliseMountFrame` for
+   * what that cost, measured against Doppler on the IO-VNBD replays.
+   */
+  private readonly mlBuffer = new SpeedWindowBuffer(ML_WINDOW_SAMPLES, true);
   private readonly mlSmoother = new SpeedSmoother(5);
   private mlScalerMean: readonly number[] = [0, 0, 0, 0, 0, 0];
   private mlScalerStd: readonly number[] = [1, 1, 1, 1, 1, 1];
@@ -1983,6 +1990,36 @@ export class NavigationEngine {
         ? Math.max(0, 1 - gnssSpeedAgeMs / Math.max(1, gnssSpeedHoldMs))
         : 1;
 
+      // ★ AN INFERRED SPEED MUST NEVER OUTRANK A MEASURED ONE ★
+      //
+      // Field report, with the satellite badge GREEN and the fix 0.1 s old:
+      // `[ML] 91 km/h`. Then `[ML] 54 km/h`. The marker ran off down the road,
+      // the next fix pulled it back, and it did that once a second — "it show
+      // accurate position, if it should stop and it goes forward and they come
+      // back".
+      //
+      // The chain was doing exactly what it was written to do, and the comment
+      // above says why that was wrong. Only ONE sample per second carries a
+      // fix. On the other nine the Doppler hold is deliberately withheld from a
+      // vehicle on a fast receiver, because "in a vehicle the ratio inverts and
+      // integration is the better estimate" — but the ML branch sits ABOVE
+      // integration in propagate(), so integration was never what it fell
+      // through to. It fell through to the model, which then re-anchored the
+      // velocity vector outright, nine samples out of ten, while a measurement
+      // 100 ms old sat unused. The ablation that chose integration over the
+      // hold was never a comparison the code could honour.
+      //
+      // So: while the receiver is healthy and its last Doppler is still inside
+      // the hold window — 1.5 fix intervals, the same freshness test the hold
+      // itself uses — the model is not offered. The estimate coasts forward
+      // from the measurement by integrating, which is the arm that ablation
+      // actually preferred. The instant the fixes stop, `gnssHealthy` goes
+      // false, the window lapses, and the model is back — which is the outage
+      // it exists for and the only place the drift figures are measured.
+      const gnssSpeedFresh =
+        gnssHealthy && this.lastGnssSpeed !== null && gnssSpeedAgeMs <= gnssSpeedHoldMs;
+      const mlForPropagate = gnssSpeedFresh ? undefined : mlSpeed;
+
       // ★ A HAND IS NOT A CHASSIS ★
       // On foot the device's yaw is uncorrelated with the direction of travel,
       // so integrating it does not refine the heading — it randomises it. Over
@@ -2026,7 +2063,7 @@ export class NavigationEngine {
       this.dr.propagate(forwardAccel, drYawRate, dtMs, gnssSpeed, {
         lateralAccelMps2: lateralAccel,
         isStationary: stationaryForZupt,
-        mlSpeedMps: mlSpeed,
+        mlSpeedMps: mlForPropagate,
         stepSpeedMps: stepSpeed,
         roadMaxSpeedMps: this.roadMaxSpeedMps,
         gnssSpeedWeight,
@@ -2068,9 +2105,16 @@ export class NavigationEngine {
             ? 'GNSS'
             : stepSpeed !== undefined
               ? 'STEPS'
-              : mlSpeed !== undefined
+              : mlForPropagate !== undefined
                 ? 'ML'
-                : 'INTEGRATED';
+                : // ★ AND THIS IS WHY THE BADGE IS WORTH READING ★ On a 1 Hz
+                  // receiver in a vehicle the nine samples between fixes now
+                  // say INTEGRATED, where they used to say ML. Both are the
+                  // truth about the arm that supplied the velocity; the
+                  // difference is that this one coasts from a Doppler
+                  // measurement 100 ms old, and the other re-anchored to a
+                  // model that had never seen the mount.
+                  'INTEGRATED';
     } else {
       this.speedSource = 'NONE';
     }

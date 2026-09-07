@@ -48,6 +48,37 @@ export interface DeadReckoningConfig {
    * at when it is stopped.
    */
   distanceFloorMps: number;
+  /**
+   * The most the ML speed model may push the estimate UP per second, m/s^2.
+   *
+   * ★ A MODEL IS EVIDENCE, NOT A TELEPORT ★
+   *
+   * The ML branch below anchors the velocity vector outright, exactly as a
+   * Doppler fix does — and that was written when the only thing feeding it was
+   * a model reading a phone in its trained pose. It is not the same claim. A
+   * Doppler speed is measured; this one is inferred with a held-out MAE of
+   * 2.9 m/s, from vibration, by a network whose single strongest learned cue is
+   * "loud accelerometer means fast". Hand the same window to it with the
+   * handset held rather than cradled and it answers 25 m/s, and the estimate
+   * takes that value on the next sample with nothing in the way.
+   *
+   * What is in the way now is physics. Whatever the model believes, the vehicle
+   * it is describing was travelling at a known speed a moment ago, and no road
+   * vehicle gains 25 m/s in half a second. So the model may MOVE the estimate,
+   * at a rate a vehicle could actually produce, and if it is right it gets
+   * there in a couple of seconds. If it is wrong — the pothole, the pocket, the
+   * walk that was classified as a drive — it is wrong slowly enough that the
+   * next fix arrives first.
+   *
+   * 4 m/s^2 up is brisk acceleration for a loaded car and beyond most two-
+   * wheelers; 8 m/s^2 down is emergency braking. Deliberately asymmetric,
+   * because the failure this exists to stop is always upward: a model that
+   * under-reads costs distance, and a model that over-reads puts the marker in
+   * a field. Braking is left nearly free so a genuine stop is never delayed.
+   */
+  mlSpeedMaxAccelMps2: number;
+  /** The most it may pull the estimate DOWN per second, m/s^2. See above. */
+  mlSpeedMaxDecelMps2: number;
 }
 
 export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
@@ -61,6 +92,8 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   speedClamp: true,
   speedClampConfig: DEFAULT_SPEED_CLAMP_CONFIG,
   distanceFloorMps: 0.3,
+  mlSpeedMaxAccelMps2: 4,
+  mlSpeedMaxDecelMps2: 8,
 };
 
 /** Per-sample inputs that are optional or only available in some modes. */
@@ -367,8 +400,18 @@ export class DeadReckoningEngine {
       //    does NOT reset unaidedMs: the coasting decay exists because an
       //    unaided estimate must not be asserted forever, and a model whose
       //    held-out MAE is 2.9 m/s is not the truth that earns a reset.
-      vE = opts.mlSpeedMps * fE;
-      vN = opts.mlSpeedMps * fN;
+      // See `mlSpeedMaxAccelMps2`. Bounded by what a vehicle can do, against
+      // the speed the estimate already held — which at the start of an outage
+      // is the last Doppler measurement, and is never nothing.
+      const dtS = dtMs / 1000;
+      const prev = this.state.speedMps;
+      const target = opts.mlSpeedMps;
+      const bounded =
+        target > prev
+          ? Math.min(target, prev + this.config.mlSpeedMaxAccelMps2 * dtS)
+          : Math.max(target, prev - this.config.mlSpeedMaxDecelMps2 * dtS);
+      vE = bounded * fE;
+      vN = bounded * fN;
       this.state.unaidedMs += dtMs;
     } else {
       // 3. Integrate acceleration onto the existing velocity vector.

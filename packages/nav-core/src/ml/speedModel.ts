@@ -142,6 +142,121 @@ export function appendDerivedChannels(raw: Float32Array, n: number, out: Float32
   }
 }
 
+/**
+ * The mount the training augmentation actually covers.
+ *
+ * ml/README.md: "The rotation is limited to **any yaw but ±30° of pitch and
+ * roll**, and that limit is load-bearing" — with uniform SO(3) the model was
+ * measurably worse, because it puts the handset upside-down as often as
+ * upright. So the weights know a phone lying roughly flat, screen up, turned
+ * to any compass bearing. Nothing else. The scaler agrees: its mean for `az`
+ * is 9.41, which is gravity sitting almost entirely on one axis.
+ */
+export const ML_TRAINED_PITCH_ROLL_LIMIT_DEG = 30;
+
+/**
+ * Rotate a window so gravity lands on +z, in place.
+ *
+ * ★ THE MODEL WAS BEING ASKED ABOUT A PHONE IT HAD NEVER SEEN ★
+ *
+ * `appendDerivedChannels` hands the network six mount-invariant channels so it
+ * no longer has to learn the geometry. It does not, and cannot, do anything
+ * about the six RAW channels sitting beside them, and those still carry the
+ * device frame — so a handset held in the hand, in portrait, presents
+ * `ay ≈ 9.8, az ≈ 0` where every training window had `az ≈ 9.4`. Standardised,
+ * that is roughly ten sigma on one channel and four on another: not a hard
+ * case, a different distribution, and a convolutional regressor asked to
+ * extrapolate does not decline — it answers.
+ *
+ * Measured against GNSS Doppler over the two IO-VNBD replays (the probe in
+ * test/mount.test.ts), MAE in m/s:
+ *
+ *   mount                       device frame     canonicalised
+ *   flat, as recorded               3.28 / 4.21     3.28 / 4.21
+ *   portrait (90° pitch)            7.02 / 9.63     3.27 / 4.23
+ *   pocket (60° pitch)              3.29 / 4.53     3.28 / 4.20
+ *   upside down                    21.42 / 20.29    3.29 / 4.21
+ *
+ * and, on windows where the receiver says the vehicle is STOPPED, portrait
+ * predicts 13.5 m/s — 48 km/h at a red light — against 3.5 m/s canonicalised.
+ * That is the field report: `[ML] 91 km/h` on a phone that was in a hand.
+ *
+ * ★ IT IS A NO-OP IN THE TRAINED POSE ★ Flat is already canonical, so the
+ * first row above is unchanged to the last digit and no published drift figure
+ * moves. This adds a rotation the model always assumed had been done.
+ *
+ * The rotation is the minimal one taking the window's mean specific force onto
+ * +z — the same gravity estimate `appendDerivedChannels` uses, deliberately, so
+ * the two cannot disagree about which way is down. Yaw about the vertical is
+ * left wherever it lands, because yaw is the one degree of freedom the
+ * augmentation covers uniformly.
+ *
+ * Accelerometer and gyroscope take the SAME rotation: they share a frame, and
+ * rotating one without the other would invent a handset whose sensors are
+ * bolted to each other at an angle.
+ */
+export function canonicaliseMountFrame(raw: Float32Array, n: number): void {
+  let mx = 0;
+  let my = 0;
+  let mz = 0;
+  for (let t = 0; t < n; t++) {
+    mx += raw[t]!;
+    my += raw[n + t]!;
+    mz += raw[2 * n + t]!;
+  }
+  const norm = Math.hypot(mx, my, mz);
+  // No usable vertical — a free-fall window, or a synthetic test vector. The
+  // identity is the honest answer: we do not know which way is down, so we do
+  // not pretend to have turned the phone.
+  if (!(norm > 1e-6)) return;
+  const ux = mx / norm;
+  const uy = my / norm;
+  const uz = mz / norm;
+
+  // Rodrigues, specialised to "take û onto ẑ". v = û × ẑ, c = û · ẑ.
+  const vx = uy;
+  const vy = -ux;
+  const c = uz;
+  // Antipodal: û is straight DOWN, so no axis is preferred and the formula
+  // below divides by zero. Any 180° turn works; this one flips y and z, which
+  // keeps x — and therefore the handedness — alone.
+  if (c < -0.999999) {
+    for (let t = 0; t < n; t++) {
+      raw[n + t] = -raw[n + t]!;
+      raw[2 * n + t] = -raw[2 * n + t]!;
+      raw[4 * n + t] = -raw[4 * n + t]!;
+      raw[5 * n + t] = -raw[5 * n + t]!;
+    }
+    return;
+  }
+  const k = 1 / (1 + c);
+  // R = I + [v]x + k[v]x^2, with vz = 0.
+  const r00 = 1 - k * vy * vy;
+  const r01 = k * vx * vy;
+  const r02 = vy;
+  const r10 = k * vx * vy;
+  const r11 = 1 - k * vx * vx;
+  const r12 = -vx;
+  const r20 = -vy;
+  const r21 = vx;
+  const r22 = 1 - k * (vx * vx + vy * vy);
+
+  for (let t = 0; t < n; t++) {
+    const ax = raw[t]!;
+    const ay = raw[n + t]!;
+    const az = raw[2 * n + t]!;
+    const wx = raw[3 * n + t]!;
+    const wy = raw[4 * n + t]!;
+    const wz = raw[5 * n + t]!;
+    raw[t] = r00 * ax + r01 * ay + r02 * az;
+    raw[n + t] = r10 * ax + r11 * ay + r12 * az;
+    raw[2 * n + t] = r20 * ax + r21 * ay + r22 * az;
+    raw[3 * n + t] = r00 * wx + r01 * wy + r02 * wz;
+    raw[4 * n + t] = r10 * wx + r11 * wy + r12 * wz;
+    raw[5 * n + t] = r20 * wx + r21 * wy + r22 * wz;
+  }
+}
+
 /** Predicts vehicle speed from a window of conditioned IMU samples. */
 export interface SpeedPredictor {
   /**
@@ -237,7 +352,19 @@ export class SpeedWindowBuffer {
    * clock-jump handling and the channel ordering are identical and hard-won,
    * and were not worth writing twice.
    */
-  constructor(private readonly windowSamples: number = ML_WINDOW_SAMPLES) {
+  constructor(
+    private readonly windowSamples: number = ML_WINDOW_SAMPLES,
+    /**
+     * Rotate each window into the trained mount before the network reads it.
+     *
+     * OFF by default, because the other user of this class — Phase 13's motion
+     * classifier — is deliberately fed the VEHICLE frame the engine has already
+     * established, and a state model is exactly the case where the sign of an
+     * axis carries information. Turning it on there would undo that.
+     * See `canonicaliseMountFrame`.
+     */
+    private readonly canonicaliseMount = false,
+  ) {
     this.buf = new Float32Array(windowSamples * ML_RAW_CHANNELS);
   }
 
@@ -310,6 +437,12 @@ export class SpeedWindowBuffer {
         out[c * n + t] = this.buf[src * ML_RAW_CHANNELS + c]!;
       }
     }
+    // ★ ROTATE BEFORE DERIVING, WHICH COSTS THE DERIVED CHANNELS NOTHING ★
+    // All six are norms and dot products against the same gravity estimate, so
+    // they are rotation-invariant by construction and come out bit-for-bit
+    // where they would have. Only the six raw channels move — which is the
+    // whole point, because they are the ones carrying the device frame.
+    if (this.canonicaliseMount) canonicaliseMountFrame(out, n);
     if (channels === ML_MODEL_CHANNELS) appendDerivedChannels(out, n, out);
 
     for (let c = 0; c < channels; c++) {
