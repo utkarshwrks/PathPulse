@@ -1,8 +1,8 @@
 {
   "file": "downloads/PathPulse.apk",
-  "sizeBytes": 7778784,
-  "sizeMb": 7.42,
-  "sha256": "a8e6ec0d8136eb02945a62e6c23afdd3a28ada3baefb53bd3239355f5903b691",
-  "builtAt": "2026-09-06T12:23:15.089Z",
+  "sizeBytes": 7864866,
+  "sizeMb": 7.5,
+  "sha256": "fe7dbe145135aca764075cd151c35173b8d6c78724b65c7ed391342aa546a1aa",
+  "builtAt": "2026-09-07T15:52:54.990Z",
   "package": "in.avinya.pathpulse"
 }
