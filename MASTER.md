@@ -3,7 +3,7 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.22** · APK 7.52 MB · 1,634 tests · 60,224 lines
+**Build v0.22** · APK 7.50 MB · 1,650 tests · 60,224 lines
 **6.9 % mean drift on simulated logs · 41.4 % on real vehicle sensors**
 
 ---
@@ -683,7 +683,7 @@ are marked ⊘ and explained in §21.
 │  apps/web     │      │ edge-engine  │      │ packages/eval  │
 │  map · HUD    │      │ 200 Hz CLI   │      │ tiers S/R/F    │
 │  Capacitor    │      │ FOG/tactical │      │ ablation       │
-│  APK 7.52 MB  │      │ headless     │      │ 0 ms handover  │
+│  APK 7.50 MB  │      │ headless     │      │ 0 ms handover  │
 └───────────────┘      └──────────────┘      └────────────────┘
 ```
 
@@ -1423,7 +1423,7 @@ that is what keeps one estimator across three runtimes (§3.11).
 | Permissions | Runtime location + activity recognition |
 | `elapsedRealtimeNanos` | A monotonic clock the WebView does not expose |
 
-Capacitor bridges these to the TypeScript app. **APK: 7.52 MB.**
+Capacitor bridges these to the TypeScript app. **APK: 7.50 MB.**
 
 ---
 
@@ -1729,8 +1729,8 @@ of raster tiles — a **43× reduction**.
 
 | | |
 |---|---|
-| **APK** | **7.52 MB** |
-| Tests | **1,634** passing |
+| **APK** | **7.50 MB** |
+| Tests | **1,650** passing |
 | Source | **60,224 lines**, 98 test files |
 | `nav-core` runtime dependencies | **zero** |
 
@@ -1739,7 +1739,7 @@ of raster tiles — a **43× reduction**.
 
 # 20 · Tests
 
-**1,634 tests across 99 files.** `pnpm test` runs them; `pnpm typecheck` and
+**1,650 tests across 101 files.** `pnpm test` runs them; `pnpm typecheck` and
 `pnpm lint:core-purity` complete the gate.
 
 ## 20.1 What a test looks like here
@@ -1815,8 +1815,8 @@ Every claim this project makes, and exactly what backs it.
 | 200 Hz on edge | Sim | `pnpm edge:bench` | ~83,000 Hz sustained; IMU rows are datasheet noise models, not hardware |
 | 8.03× compression | Measured | `graphCodec` tests | Real OSM extracts |
 | 3.5 MB per 100 km | Measured | Cell planning | Real Overpass responses |
-| APK 7.52 MB | Measured | Clean Gradle build | |
-| 1,634 tests | Measured | `pnpm test` | |
+| APK 7.50 MB | Measured | Clean Gradle build | |
+| 1,650 tests | Measured | `pnpm test` | |
 | Zero deps in `nav-core` | Enforced | `pnpm lint:core-purity` | |
 
 **What we have never measured:** a drive with our own phone, in our own vehicle,
@@ -1967,7 +1967,7 @@ Two causes, both measured:
 - **1.16 MB of zip padding** from incremental Gradle builds. A clean build
   removes it.
 
-**4.2 MB → 8.65 MB → 7.52 MB.**
+**4.2 MB → 8.65 MB → 7.50 MB.**
 
 ## 24.7 The map loaded "the place that came after"
 
@@ -2016,7 +2016,7 @@ us to make the distinction explicit in code rather than in a convention.
 
 ```bash
 pnpm install
-pnpm test                 # 1,634 tests
+pnpm test                 # 1,650 tests
 pnpm typecheck
 pnpm lint:core-purity     # nav-core must stay pure
 
@@ -2032,7 +2032,7 @@ before a build rather than failing halfway through Gradle.
 
 ## 25.2 What ships
 
-- **APK**, 7.52 MB, at `apps/web/public/downloads/`, and copied to the Desktop
+- **APK**, 7.50 MB, at `apps/web/public/downloads/`, and copied to the Desktop
   on each build.
 - **The site** — a Next.js static export, no server.
 - `scripts/strip-apk-from-assets.mjs` prevents the APK being packaged **inside
@@ -2167,7 +2167,7 @@ needs a battery measurement we have not taken.
 
 ## 28.5 CI
 
-The repository has `keepalive.yml` and nothing that runs the 1,634 tests on push.
+The repository has `keepalive.yml` and nothing that runs the 1,650 tests on push.
 For a project whose entire credibility rests on those tests being green, that is
 a gap.
 
@@ -2195,7 +2195,7 @@ Every script in `package.json`.
 ## Quality gate
 | Command | Does |
 |---|---|
-| `pnpm test` | **1,634 tests** |
+| `pnpm test` | **1,650 tests** |
 | `pnpm test:watch` | `nav-core` in watch mode |
 | `pnpm typecheck` | Every package |
 | `pnpm lint:core-purity` | **Fails if `nav-core` gains an import or a dependency** |

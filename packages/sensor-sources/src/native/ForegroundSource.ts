@@ -149,6 +149,16 @@ export class ForegroundSource implements SensorSource {
       }
     }
 
+    // See SensorSample.mag. The native loop has always sent this; nothing on
+    // this side ever read it.
+    const mag = raw['mag'] as Record<string, unknown> | undefined;
+    if (mag) {
+      const mx = num(mag['mx']);
+      const my = num(mag['my']);
+      const mz = num(mag['mz']);
+      if (mx !== null && my !== null && mz !== null) sample.mag = { mx, my, mz };
+    }
+
     const baro = raw['baro'] as Record<string, unknown> | undefined;
     if (baro) {
       const pressureHpa = num(baro['pressureHpa']);
@@ -206,7 +216,7 @@ export class ForegroundSource implements SensorSource {
       }
     }
 
-    if (sample.imu || sample.gnss || sample.baro) this.emit(sample);
+    if (sample.imu || sample.gnss || sample.baro || sample.mag) this.emit(sample);
   }
 
   /** Live counters, including the rate the NATIVE side measured for itself. */

@@ -40,6 +40,7 @@ import {
   type MotionContext,
 } from '../motion/context.js';
 import { StepDetector, StrideModel } from '../motion/steps.js';
+import { MagneticHeading } from '../alignment/magneticHeading.js';
 import {
   ImuWindowBuffer,
   ML_WINDOW_SAMPLES,
@@ -199,6 +200,21 @@ export interface ConstraintFlags {
    * most of the compass and drew the estimate out and back on every interval.
    */
   pedestrianHeadingFromGnss: boolean;
+  /**
+   * ★ ON FOOT, LET THE MAGNETOMETER CARRY THE TURNS ★
+   *
+   * `pedestrianHeadingFromGnss` freezes device yaw on foot and takes the
+   * bearing from the GNSS course, which is right and which leaves the heading
+   * frozen for the whole of an outage — so the estimate walks a straight line
+   * through every corner the carrier turns. See `MagneticHeading` for why the
+   * magnetometer is the one sensor that can answer here and why this project's
+   * standing reason for ignoring it ("a vehicle is a steel box") does not apply
+   * to somebody walking down a lane.
+   *
+   * Only consulted while the context is PEDESTRIAN and only while GNSS cannot
+   * supply a course, so a vehicle's heading path is byte-for-byte what it was.
+   */
+  pedestrianHeadingFromMagnetometer: boolean;
   /**
    * ★ PHASE 11 ★ Take position from the error-state Kalman filter instead of
    * from open-loop integration, while dead reckoning.
@@ -542,6 +558,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   useMlSpeed: true,
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  pedestrianHeadingFromMagnetometer: true,
   eskf: false,
   autoAlign: true,
   useMlMotion: true,
@@ -701,6 +718,7 @@ export class NavigationEngine {
    */
   private readonly mlBuffer = new SpeedWindowBuffer(ML_WINDOW_SAMPLES, true);
   private readonly mlSmoother = new SpeedSmoother(5);
+  private readonly magHeading = new MagneticHeading();
   private mlScalerMean: readonly number[] = [0, 0, 0, 0, 0, 0];
   private mlScalerStd: readonly number[] = [1, 1, 1, 1, 1, 1];
   private lastMlInferenceT: number | null = null;
@@ -1033,6 +1051,7 @@ export class NavigationEngine {
       this.mlScalerStd = scaler.std;
     }
     this.mlBuffer.reset();
+    this.magHeading.reset();
     this.mlSmoother.reset();
     this.lastMlSpeedMps = Number.NaN;
     this.lastMlInferenceT = null;
@@ -1567,6 +1586,18 @@ export class NavigationEngine {
       // our gravity-removed, bias-corrected, horizontally-resolved values would
       // be a different signal entirely — and one it has never been shown.
       this.mlBuffer.push(sample.t, ax, ay, az, gx, gy, gz);
+
+      // ★ THE COMPASS, LEVELLED AGAINST THE SAME GRAVITY EVERYTHING ELSE USES ★
+      // Fed the raw specific force rather than a gravity estimate of its own,
+      // so this file's idea of "down" and the estimator's cannot drift apart.
+      // Absent on every source but the Phase 15 native loop, and absence is
+      // handled by MagneticHeading reporting null rather than by a branch here.
+      if (sample.mag) {
+        this.magHeading.push(
+          { x: sample.mag.mx, y: sample.mag.my, z: sample.mag.mz },
+          { x: ax, y: ay, z: az },
+        );
+      }
     }
 
     // Establish the ENU origin from the first fix we see.
@@ -2028,7 +2059,13 @@ export class NavigationEngine {
       // trail from a walk down a straight footpath. Freeze it and let the
       // course between fixes supply the bearing instead.
       const drYawRate =
-        this.config.pedestrianHeadingFromGnss && context === 'PEDESTRIAN' ? 0 : yawRate;
+        this.config.pedestrianHeadingFromGnss && context === 'PEDESTRIAN'
+          ? this.pedestrianYawRate(
+              sample.t,
+              dtMs,
+              trusted ? headingForFix : undefined,
+            )
+          : yawRate;
 
       // 9B: turns come off the same corrected yaw rate the estimate does, so a
       // detected turn is by construction the turn the engine believes it made.
@@ -3172,6 +3209,45 @@ export class NavigationEngine {
    * predictor, not enough history, or a non-finite answer — and the caller
    * then falls through to integration exactly as it did before Phase 8.
    */
+  /**
+   * The yaw rate to integrate on foot, where device yaw may not be.
+   *
+   * ★ ZERO WAS AN ANSWER, AND IT WAS ONLY EVER HALF OF ONE ★
+   *
+   * Freezing device yaw on foot is right — see `pedestrianHeadingFromGnss`, and
+   * the star-shaped trail it fixed. What it left behind is that the heading is
+   * then frozen for the whole of an outage too, so the estimate walks a
+   * straight line through every corner: "street and gali, this appears to just
+   * go straight". A four-leg walk through a grid ended 172 m out with the
+   * heading stuck 90° from the truth.
+   *
+   * The magnetometer is the only sensor on the handset that can answer, and it
+   * is already being read. Note what is NOT happening here: device yaw is still
+   * not integrated. The compass supplies an absolute bearing whose error is
+   * bounded by how far the phone has turned in the hand, where an integrated
+   * gyro bias is unbounded and never returns.
+   *
+   * A fix carrying a course outranks it — that is a measurement of where the
+   * carrier actually went, and the compass only ever knows where the phone is
+   * pointing. So a course, when there is one, is spent teaching the grip
+   * offset rather than steering, and `pushFix` sets the heading as it always
+   * did. Between fixes, and for the whole of an outage, the compass steers.
+   * Deliberately the same rule either side of the mode boundary: there is no
+   * regime change to tune, and no step in the heading when the fixes stop.
+   */
+  private pedestrianYawRate(
+    tMs: number,
+    dtMs: number,
+    courseDeg: number | undefined,
+  ): number {
+    if (!this.config.pedestrianHeadingFromMagnetometer) return 0;
+    if (courseDeg !== undefined && Number.isFinite(courseDeg)) {
+      this.magHeading.observeCourse(tMs, courseDeg);
+      return 0;
+    }
+    return this.magHeading.yawRateToward(tMs, this.dr.current.headingDeg, dtMs) ?? 0;
+  }
+
   private runSpeedModel(tMs: number): number | undefined {
     if (this.mlFailure !== null) return undefined;
     if (!this.config.useMlSpeed || !this.speedPredictor.isReady()) return undefined;

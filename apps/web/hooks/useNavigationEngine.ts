@@ -15,6 +15,7 @@ import {
   type SensorSample,
   type SessionSummary,
   type SpeedSource,
+  haversineDistance,
 } from '@pathpulse/nav-core';
 import { loadRoadGraphFor, type RoadGraphEntry } from '@/lib/roadGraph';
 import { getSharedCellStore } from '@/lib/graphCellStore';
@@ -43,6 +44,27 @@ const EMIT_INTERVAL_MS = 100;
  * and bounded so a session left running cannot exhaust memory on a phone.
  */
 const MAX_GNSS_TRAIL = 5000;
+
+/**
+ * How often to re-ask for a road graph while we have none, ms.
+ *
+ * Sized against the prefetcher, not against the sensors: `REQUEST_SPACING_MS`
+ * is 1200 ms and an Overpass round trip is seconds, so the first cell lands a
+ * few seconds after the first fix. Asking every five seconds finds it almost
+ * immediately without spinning. Only ever runs while uncovered — see
+ * `maybeLoadRoadGraph`.
+ */
+const GRAPH_RETRY_INTERVAL_MS = 5_000;
+
+/**
+ * How far the vehicle may travel before the working set is re-centred, metres.
+ *
+ * Comfortably inside `FULL_WORKING_RADIUS_M` (12 km), so the graph in hand
+ * always still covers the road ahead at the moment it is replaced. Larger and
+ * matching would lapse at the edge; smaller and a motorway would pay for a
+ * RoadIndex rebuild every couple of minutes.
+ */
+const GRAPH_RELOAD_DISTANCE_M = 5_000;
 
 /** Everything the Phase 5 debug panel shows, sampled at the UI rate. */
 export interface EngineDiagnostics {
@@ -197,6 +219,14 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // in nav-core — which is what makes them demonstrable rather than asserted.
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
+  // On, and inert on any handset or source that reports no magnetometer — the
+  // estimator answers null and the engine keeps the frozen heading it had.
+  // What it fixes is the field report that dead reckoning "only works on
+  // straight road ... street and gali, this appears to just go straight": on
+  // foot the heading was frozen for the whole of an outage, because the rule
+  // above takes it from a GNSS course and an outage has none. Toggleable, so a
+  // judge can watch the corners stop being turned.
+  pedestrianHeadingFromMagnetometer: true,
   // Phase 17. OFF: measured 13.0% mean overall against the shipped chain's
   // 9.2% — but that average hides the finding. City 15.1% -> 13.3% (it helps),
   // highway 3.2% -> 12.8% (it hurts), which is exactly what a filter built for
@@ -310,7 +340,14 @@ export function useNavigationEngine(): NavEngineOutput {
   const [lastGnss, setLastGnss] = useState<LastGnss | null>(null);
   const [roadGraphEntry, setRoadGraphEntry] = useState<RoadGraphEntry | null>(null);
   const [roadGraph, setRoadGraph] = useState<RoadGraph | null>(null);
-  const graphRequestedRef = useRef(false);
+  /**
+   * Where the graph the engine currently holds was centred, and when we last
+   * went looking. See `maybeLoadRoadGraph` — NOT a one-shot "have we asked yet"
+   * flag, which is what this used to be and why snapping never engaged.
+   */
+  const graphAnchorRef = useRef<{ lat: number; lon: number } | null>(null);
+  const graphAttemptTRef = useRef<number | null>(null);
+  const graphLoadingRef = useRef(false);
   const [diagnostics, setDiagnostics] = useState<EngineDiagnostics>(EMPTY_DIAGNOSTICS);
   const [modelInfo, setModelInfo] = useState<ModelInfo>(EMPTY_MODEL_INFO);
   const predictorRef = useRef<WebSpeedPredictor | null>(null);
@@ -396,27 +433,78 @@ export function useNavigationEngine(): NavEngineOutput {
    */
   const gnssTrailRef = useRef<Array<{ lat: number; lon: number; t: number }>>([]);
 
+  /**
+   * Keep the engine pointed at a road graph that actually covers us.
+   *
+   * ★ ONE ATTEMPT ON THE FIRST FIX IS THE WRONG NUMBER OF ATTEMPTS ★
+   *
+   * This used to fire exactly once, on the first sample carrying GNSS, and set
+   * its "requested" flag *before* the async load resolved — so a load that
+   * found nothing was never retried. Two consequences, both silent, and
+   * together they are why the field report is "there is no proper map
+   * matching":
+   *
+   *   The first fix arrives seconds before the prefetcher has anything to
+   *   offer. `useGraphPrefetch` acquires coverage from Overpass in the
+   *   background, spaced 1200 ms apart and starting only once there is a
+   *   position to centre on — so on the one and only attempt the cell store is
+   *   still empty. Outside the three areas that ship with the APK,
+   *   `loadRoadGraphFor` therefore returned null, and nothing ever asked
+   *   again. Snapping, the HMM and the particle filter all hang off
+   *   `roadIndex`, so all three stayed switched off for the entire session
+   *   while the coverage they needed finished downloading and sat unread.
+   *
+   *   And the working set travels with the vehicle — 12 km of full detail, 60
+   *   km of majors — so even a graph that loaded correctly runs out. Driving
+   *   off the edge of it left the estimate unmatched from there on.
+   *
+   * So: retry while we have nothing, and re-centre once we have moved far
+   * enough that the edge of the working set is in reach. Both are cheap. The
+   * retry only runs while there is no graph, which is precisely the state in
+   * which the cell store is empty and the lookup is a handful of misses; the
+   * re-centre runs at most once per RELOAD_DISTANCE_M of travel.
+   */
+  const maybeLoadRoadGraph = useCallback((lat: number, lon: number, t: number) => {
+    if (graphLoadingRef.current) return;
+    const anchor = graphAnchorRef.current;
+    if (anchor) {
+      // We have coverage. Only re-centre once the vehicle has travelled far
+      // enough to be approaching the edge of it. Well inside FULL_WORKING_RADIUS_M
+      // so the graph is always replaced before it stops covering the road ahead.
+      if (haversineDistance(anchor.lat, anchor.lon, lat, lon) < GRAPH_RELOAD_DISTANCE_M) return;
+    } else {
+      // Nothing loaded. Keep asking — the prefetcher is filling the store
+      // underneath us, and the whole feature is dark until this succeeds.
+      const last = graphAttemptTRef.current;
+      if (last !== null && t - last < GRAPH_RETRY_INTERVAL_MS) return;
+    }
+    graphAttemptTRef.current = t;
+    graphLoadingRef.current = true;
+    // Prefetched cells first, bundled manifest as the fallback — see
+    // loadRoadGraphFor. This is what makes snapping work somewhere nobody
+    // shipped a graph for.
+    void loadRoadGraphFor(lat, lon, getSharedCellStore())
+      .then((found) => {
+        if (!found) return;
+        graphAnchorRef.current = { lat, lon };
+        engineRef.current?.setRoadGraph(found.graph);
+        setRoadGraphEntry(found.entry);
+        setRoadGraph(found.graph);
+      })
+      .finally(() => {
+        graphLoadingRef.current = false;
+      });
+  }, []);
+
   const feed = useCallback((sample: SensorSample) => {
     const engine = engineRef.current!;
     const next = engine.update(sample);
     statsRef.current!.push(next);
 
-    // Load the road graph covering wherever we actually are, once, on the first
-    // fix. It cannot be chosen before that: the app does not know where it is,
-    // and the index has to be built against the engine's ENU origin anyway.
-    if (sample.gnss && !graphRequestedRef.current) {
-      graphRequestedRef.current = true;
-      const { lat, lon } = sample.gnss;
-      // Prefetched cells first, bundled manifest as the fallback — see
-      // loadRoadGraphFor. This is what makes snapping work somewhere nobody
-      // shipped a graph for.
-      void loadRoadGraphFor(lat, lon, getSharedCellStore()).then((found) => {
-        if (!found) return;
-        engineRef.current?.setRoadGraph(found.graph);
-        setRoadGraphEntry(found.entry);
-        setRoadGraph(found.graph);
-      });
-    }
+    // Load the road graph covering wherever we actually are. It cannot be
+    // chosen before the first fix: the app does not know where it is, and the
+    // index has to be built against the engine's ENU origin anyway.
+    if (sample.gnss) maybeLoadRoadGraph(sample.gnss.lat, sample.gnss.lon, sample.t);
 
     // Remember the last fix so the debug panel can show it between fixes. At
     // 0.09 Hz the odds of the displayed sample being the one carrying GNSS are
@@ -492,6 +580,7 @@ export function useNavigationEngine(): NavEngineOutput {
         roadSnap: next.roadSnap,
         mlVehicleOnly: next.mlVehicleOnly,
         pedestrianHeadingFromGnss: next.pedestrianHeadingFromGnss,
+        pedestrianHeadingFromMagnetometer: next.pedestrianHeadingFromMagnetometer,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });
       return next;
@@ -511,7 +600,8 @@ export function useNavigationEngine(): NavEngineOutput {
     gnssTrailRef.current = [];
     setRoadGraphEntry(null);
     setRoadGraph(null);
-    graphRequestedRef.current = false;
+    graphAnchorRef.current = null;
+    graphAttemptTRef.current = null;
     lastGnssRef.current = null;
     lastSampleTRef.current = null;
     setDiagnostics(EMPTY_DIAGNOSTICS);
@@ -523,6 +613,9 @@ export function useNavigationEngine(): NavEngineOutput {
     if (!at) return false;
     const found = await loadRoadGraphFor(at.lat, at.lon, getSharedCellStore());
     if (!found) return false;
+    // Re-anchor here too, or the automatic re-centre would measure its distance
+    // from wherever the previous load happened rather than from this one.
+    graphAnchorRef.current = { lat: at.lat, lon: at.lon };
     engineRef.current?.setRoadGraph(found.graph);
     setRoadGraphEntry(found.entry);
     setRoadGraph(found.graph);

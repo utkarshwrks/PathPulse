@@ -91,6 +91,23 @@ export interface SensorSample {
     /** Rotation vector, if the device exposes one. */
     quat?: Quaternion;
   };
+  /**
+   * Magnetic field, microtesla, device frame.
+   *
+   * ★ COLLECTED SINCE PHASE 15, AND DROPPED AT THE BRIDGE UNTIL NOW ★
+   * `SensorLoopService` has put `mag` on every sample from the beginning; there
+   * was no field here to receive it, so it was parsed by nobody. The Java
+   * comment explains the reasoning, and the reasoning is a VEHICLE argument: "a
+   * vehicle is a steel box, its own body distorts the field by tens of degrees".
+   * True, and it says nothing about a person walking down a lane in the open —
+   * which is the one case where the gyro has nothing to offer, because a hand
+   * is not a chassis. See `MagneticHeading`.
+   */
+  mag?: {
+    mx: number;
+    my: number;
+    mz: number;
+  };
   baro?: {
     pressureHpa: number;
   };
