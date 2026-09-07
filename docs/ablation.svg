@@ -24,20 +24,20 @@
   <rect x="210" y="296" width="146.7" height="30" rx="4" fill="#eab308" />
   <text x="366.7" y="316.4" font-size="13" fill="#e2e8f0">14.6%</text>
   <text x="198" y="356.4" text-anchor="end" font-size="13" fill="#cbd5e1">full</text>
-  <rect x="210" y="336" width="69.1" height="30" rx="4" fill="#22c55e" />
-  <text x="289.1" y="356.4" font-size="13" fill="#e2e8f0">6.9%</text>
+  <rect x="210" y="336" width="61.8" height="30" rx="4" fill="#22c55e" />
+  <text x="281.8" y="356.4" font-size="13" fill="#e2e8f0">6.1%</text>
   <text x="198" y="396.4" text-anchor="end" font-size="13" fill="#cbd5e1">full_forwardbias</text>
-  <rect x="210" y="376" width="109.1" height="30" rx="4" fill="#eab308" />
-  <text x="329.1" y="396.4" font-size="13" fill="#e2e8f0">10.8%</text>
+  <rect x="210" y="376" width="129.1" height="30" rx="4" fill="#eab308" />
+  <text x="349.1" y="396.4" font-size="13" fill="#e2e8f0">12.8%</text>
   <text x="198" y="436.4" text-anchor="end" font-size="13" fill="#cbd5e1">eskf</text>
-  <rect x="210" y="416" width="86.1" height="30" rx="4" fill="#22c55e" />
-  <text x="306.1" y="436.4" font-size="13" fill="#e2e8f0">8.5%</text>
+  <rect x="210" y="416" width="84.2" height="30" rx="4" fill="#22c55e" />
+  <text x="304.2" y="436.4" font-size="13" fill="#e2e8f0">8.4%</text>
   <text x="198" y="476.4" text-anchor="end" font-size="13" fill="#cbd5e1">hmm</text>
-  <rect x="210" y="456" width="106.5" height="30" rx="4" fill="#eab308" />
-  <text x="326.5" y="476.4" font-size="13" fill="#e2e8f0">10.6%</text>
+  <rect x="210" y="456" width="74.8" height="30" rx="4" fill="#22c55e" />
+  <text x="294.8" y="476.4" font-size="13" fill="#e2e8f0">7.4%</text>
   <text x="198" y="516.4" text-anchor="end" font-size="13" fill="#cbd5e1">particle</text>
-  <rect x="210" y="496" width="118.5" height="30" rx="4" fill="#eab308" />
-  <text x="338.5" y="516.4" font-size="13" fill="#e2e8f0">11.8%</text>
+  <rect x="210" y="496" width="122.0" height="30" rx="4" fill="#eab308" />
+  <text x="342.0" y="516.4" font-size="13" fill="#e2e8f0">12.1%</text>
   <line x1="310.8" y1="48" x2="310.8" y2="548" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 4" />
   <text x="316.8" y="562" font-size="11" fill="#38bdf8">10% target</text>
 </svg>

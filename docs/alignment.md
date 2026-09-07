@@ -18,12 +18,12 @@ Logs: sim_city_1337.jsonl, sim_city_4242.jsonl, sim_highway_1337.jsonl, sim_high
 
 | Mount offset | OFF mean % | OFF p90 % | ON mean % | ON p90 % |
 |---|---|---|---|---|
-| 0° | 6.7 | 22.6 | 6.9 | 22.6 |
-| 15° | 8.4 | 21.8 | 6.9 | 22.6 |
-| 30° | 12.7 | 31.0 | 6.9 | 22.7 |
-| 45° | 15.8 | 35.0 | 6.8 | 22.7 |
-| 60° | 25.0 | 47.4 | 7.0 | 22.7 |
-| 90° | 38.2 | 59.2 | 7.1 | 22.6 |
+| 0° | 8.6 | 17.8 | 6.1 | 15.1 |
+| 15° | 8.6 | 17.0 | 6.9 | 15.2 |
+| 30° | 11.4 | 19.9 | 7.0 | 15.2 |
+| 45° | 15.7 | 30.3 | 7.8 | 15.2 |
+| 60° | 25.7 | 46.6 | 6.4 | 15.1 |
+| 90° | 40.2 | 61.5 | 6.5 | 15.1 |
 
 0° is the control: there the alignment engine can only cost, and the size of
 that cost is the price paid for the rest of the column.

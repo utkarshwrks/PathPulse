@@ -6,7 +6,7 @@ import { AttitudeEstimator } from '../alignment/attitude.js';
 import { SimpleAlignment } from '../alignment/simpleAlignment.js';
 import { BarometricAltimeter } from '../alignment/altimeter.js';
 import { VehicleTypeDetector, type VehicleType, type VehicleTypeState } from '../twowheeler/VehicleTypeDetector.js';
-import { leanAngleRad, leanCompensatedYawRate, turnRadiusFromLeanM } from '../twowheeler/lean.js';
+import { applyLeanCompensation, leanAngleRad, turnRadiusFromLeanM } from '../twowheeler/lean.js';
 import { AutoAlignment, type AutoAlignState } from '../alignment/autoAlign.js';
 import { StationarityDetector, type StationarityResult } from '../filters/stationarity.js';
 import { Vec3LowPassFilter, Vec3MedianFilter } from '../filters/index.js';
@@ -27,7 +27,7 @@ import {
   findRoadMatch,
   type RoadSnapConfig,
 } from '../constraints/roadsnap.js';
-import { RoadIndex } from '../mapmatch/RoadIndex.js';
+import { RoadIndex, angleDiffDeg } from '../mapmatch/RoadIndex.js';
 import { RoadTopology } from '../mapmatch/RoadTopology.js';
 import { HmmMapMatcher, type HmmConfig } from '../mapmatch/hmm.js';
 import { ParticleFilter, type ParticleEstimate } from '../particle/ParticleFilter.js';
@@ -352,6 +352,49 @@ export interface ConstraintFlags {
 }
 
 export interface EngineConfig extends ConstraintFlags {
+  /**
+   * The widest the road-match heading gate may open, degrees.
+   *
+   * The gate starts at `roadSnapConfig.maxHeadingMismatchDeg` and widens by the
+   * heading uncertainty the engine has integrated, so a long outage can still
+   * match a road its heading has drifted away from. This is where that stops:
+   * a gate at 90 degrees admits any road not actually perpendicular, and past
+   * that it is not selecting a road, it is accepting one.
+   */
+  maxHeadingGateDeg: number;
+  /**
+   * ★ CORRECT THE HEADING THE ROAD DISAGREES WITH, NOT ONLY THE POSITION ★
+   *
+   * Degrees per second the matched road may rotate the dead-reckoned heading
+   * while dead reckoning. Zero reproduces the old behaviour exactly.
+   *
+   * Road snapping is display-only, and the long note where it is applied
+   * explains why: fed back as a POSITION correction it measured 10.0 % mean
+   * drift to 39.7 %, because "it corrects position while leaving the heading
+   * error that caused it untouched, so the estimate leaves the road again
+   * immediately and is dragged back harder each time."
+   *
+   * That sentence names the missing piece. The estimate is not drifting
+   * sideways because its position is wrong; it is drifting sideways because
+   * its HEADING is wrong, and a straight road is a direct measurement of the
+   * heading of anything travelling along it. Traced on a scooter fixture: the
+   * heading walked 90 to 77 degrees over ninety seconds while snapping held
+   * the marker on the road, the estimate underneath walked 162 m off it, and
+   * at 287 m it passed `wideSearchRadiusM`, lost the match, and was released —
+   * the marker jumping off the road it had never left. That release, over and
+   * over, is the zigzag.
+   *
+   * Deliberately slow, and deliberately not a snap. At this rate a heading
+   * 30 degrees out takes fifteen seconds to come back, which is far too slow
+   * to force the estimate onto a road it does not belong on, and far faster
+   * than gyro drift accumulates. Gated on a match that has been stable for
+   * `roadHeadingAidMinStableMs`, so a matcher flickering between two roads
+   * cannot steer anything.
+   */
+  roadHeadingAidDegPerSec: number;
+  /** How long one way must stay matched before it may correct the heading, ms. */
+  roadHeadingAidMinStableMs: number;
+
   /** Phase 14's matcher settings. A shape, not a switch — see residualConfig. */
   hmmConfig: Partial<HmmConfig>;
   /**
@@ -544,6 +587,15 @@ export interface EngineConfig extends ConstraintFlags {
   roadSnapConfig: RoadSnapConfig;
 }
 
+/**
+ * Time constant for the yaw rate the LEAN is inferred from, ms.
+ *
+ * Not a tuning knob so much as a statement about motorcycles: a rider takes
+ * roughly a second to put a bike over and the same to pick it up, so a lean
+ * that changed faster than this did not happen. See applyLeanCompensation.
+ */
+const LEAN_TAU_MS = 700;
+
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   medianFilter: true,
   lowPass: true,
@@ -559,6 +611,9 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
   pedestrianHeadingFromMagnetometer: true,
+  maxHeadingGateDeg: 90,
+  roadHeadingAidDegPerSec: 2,
+  roadHeadingAidMinStableMs: 3_000,
   eskf: false,
   autoAlign: true,
   useMlMotion: true,
@@ -699,6 +754,10 @@ export class NavigationEngine {
   private recoveryStartCovariance: { alongM: number; crossM: number } | null = null;
   /** Accumulated heading uncertainty during an outage, radians. */
   private headingSigmaRad = 0;
+  /** Smoothed yaw rate the lean angle is estimated from. See LEAN_TAU_MS. */
+  private leanYawRateLp = 0;
+  /** When the currently matched way was first matched. See roadHeadingAidDegPerSec. */
+  private matchStableSinceMs: number | null = null;
   /** Smoothed observed sample rate, Hz. Keeps the filters correctly tuned. */
   private measuredRateHz = 0;
   /** Slow mean of forward acceleration — the high-pass fallback. */
@@ -1567,11 +1626,21 @@ export class NavigationEngine {
         }
 
         if (verdict.type === 'TWO_WHEELER') {
-          this.lastLeanRad = leanAngleRad(this.dr.current.speedMps, yawRate);
+          // ★ THE LEAN COMES OFF A SMOOTHED RATE, THE CORRECTION OFF THIS ONE ★
+          // See applyLeanCompensation. Estimating the lean from the same
+          // instantaneous yaw rate it then divides is a closed loop that
+          // amplifies a 0.5 rad/s pothole to 0.95 and leaves 0.6 untouched —
+          // neither linear nor monotonic, and integrated it is heading error a
+          // real lean never made. A rider needs the better part of a second to
+          // put a scooter over, so the lean lives on a 700 ms time constant and
+          // road noise cannot reach it.
+          const aLean = Math.min(1, Math.max(0, dtMs / LEAN_TAU_MS));
+          this.leanYawRateLp += aLean * (yawRate - this.leanYawRateLp);
+          this.lastLeanRad = leanAngleRad(this.dr.current.speedMps, this.leanYawRateLp);
           // Everything downstream — the heading integration, the turn
           // detector, the ESKF, the particle filter — reads `yawRate`. There
           // is exactly one place to correct it, and this is it.
-          yawRate = leanCompensatedYawRate(this.dr.current.speedMps, yawRate);
+          yawRate = applyLeanCompensation(yawRate, this.lastLeanRad);
         } else {
           this.lastLeanRad = 0;
         }
@@ -2450,6 +2519,8 @@ export class NavigationEngine {
         this.covarianceCrossM = recoveredAccuracyM;
         this.recoveryStartCovariance = null;
         this.headingSigmaRad = 0;
+    this.leanYawRateLp = 0;
+    this.matchStableSinceMs = null;
         this.drStartedAtMs = null;
       }
     }
@@ -2699,7 +2770,47 @@ export class NavigationEngine {
       }
       if (this.roadIndex) {
         this.snapAttemptCount++;
-        const cfg = this.config.roadSnapConfig;
+        // ★ A HEADING WE DO NOT TRUST MUST NOT VETO THE ROAD ★
+        //
+        // `maxHeadingMismatchDeg` throws away a candidate road the heading
+        // disagrees with by more than 60 degrees. That is the right rule under
+        // GNSS, where the heading is measured every second and a road pointing
+        // somewhere else really is the wrong road.
+        //
+        // Under dead reckoning it is backwards, and it is the mechanism behind
+        // the field report. On a scooter the heading is integrated from a gyro
+        // on a machine that buzzes, over a surface that does not oblige; the
+        // error grows the whole time, and the moment it passes 60 degrees EVERY
+        // candidate is rejected, `match` comes back null, the snap correction
+        // bleeds away and the marker is released to fly off on the very heading
+        // that just failed the test. It rejoins when the heading wanders back.
+        // Out, back, out, back — "it moves to other roads and makes zigzag
+        // pattern", on a road that was straight the whole time.
+        //
+        // The engine already knows how wrong the heading might be: it
+        // integrates `headingSigmaRad` for exactly this purpose and spends it
+        // on the cross-track covariance. Spend it here too. The gate becomes
+        // "reject a road the heading disagrees with by more than it could
+        // plausibly be wrong", which is the same rule it always was, stated
+        // against a heading whose uncertainty is known rather than assumed to
+        // be zero.
+        //
+        // Bounded, because a gate that opens all the way is not a gate: past
+        // `maxHeadingGateDeg` any road in any direction would qualify, and a
+        // marker snapped to a cross street it never entered is failure mode 3
+        // — confidently wrong — which this project exists to avoid.
+        const headingSlackDeg = Math.min(
+          this.config.maxHeadingGateDeg - this.config.roadSnapConfig.maxHeadingMismatchDeg,
+          (this.headingSigmaRad * 180) / Math.PI,
+        );
+        const cfg =
+          headingSlackDeg > 0
+            ? {
+                ...this.config.roadSnapConfig,
+                maxHeadingMismatchDeg:
+                  this.config.roadSnapConfig.maxHeadingMismatchDeg + headingSlackDeg,
+              }
+            : this.config.roadSnapConfig;
         let match = findRoadMatch(
           shownEnu,
           this.dr.current.headingDeg,
@@ -2847,8 +2958,29 @@ export class NavigationEngine {
               data: { wayId: match.wayId, distanceM: match.distanceM },
             });
           }
+          if (this.lastMatchedWayId !== match.wayId || this.matchStableSinceMs === null) {
+            this.matchStableSinceMs = sample.t;
+          }
           this.lastMatchedWayId = match.wayId;
           this.snapAppliedCount++;
+
+          // ★ THE ROAD KNOWS WHICH WAY WE ARE POINTING ★ See
+          // `roadHeadingAidDegPerSec`. Only while dead reckoning — under GNSS
+          // the heading is measured every fix and the road has nothing to add
+          // — and only once this way has been held long enough that it is not
+          // a flicker.
+          if (
+            mode === 'DEAD_RECKONING' &&
+            this.config.roadHeadingAidDegPerSec > 0 &&
+            sample.t - this.matchStableSinceMs >= this.config.roadHeadingAidMinStableMs
+          ) {
+            // Fold at 180 degrees: a two-way road carries traffic both ways and
+            // its drawn bearing is an OSM detail, not a direction of travel.
+            const raw = angleDiffDeg(match.bearingDeg, this.dr.current.headingDeg);
+            const err = Math.abs(raw) > 90 ? raw - Math.sign(raw) * 180 : raw;
+            const maxStep = this.config.roadHeadingAidDegPerSec * (dtMs / 1000);
+            this.dr.nudgeHeading(Math.max(-maxStep, Math.min(maxStep, err)));
+          }
           // 6E: the matched road's speed limit bounds the next propagation —
           // but only when we are confident WHICH road it is. One sample of lag,
           // because the match is only known after the position has been
@@ -2871,6 +3003,7 @@ export class NavigationEngine {
         } else {
           this.lastMatch = null;
           this.lastMatchedWayId = null;
+          this.matchStableSinceMs = null;
           this.roadMaxSpeedMps = undefined;
           // Nothing to snap to. Bleed both the strength and the correction away
           // at the bounded rate, so that losing a match releases the marker as
@@ -3553,6 +3686,8 @@ export class NavigationEngine {
     this.covarianceAlongM = 0;
     this.covarianceCrossM = 0;
     this.headingSigmaRad = 0;
+    this.leanYawRateLp = 0;
+    this.matchStableSinceMs = null;
     this.measuredRateHz = 0;
     this.forwardAccelDc = 0;
     this.mlBuffer.reset();

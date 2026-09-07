@@ -119,19 +119,27 @@ describe('ablation over the committed logs', () => {
     expect(get('full_forwardbias').mean).toBeGreaterThan(get('full').mean);
   });
 
-  it('records the ESKF result as measured, in both directions', () => {
-    // ★ PHASE 11, REPORTED HONESTLY ★
-    // The error-state Kalman filter is the more principled estimator and it
-    // does NOT win outright. It is worse in the middle of the distribution and
-    // better at the end of it, which is a real and explainable trade: the
-    // hand-tuned chain is very good on the runs it was tuned against, and the
-    // filter's covariance bookkeeping is what stops the bad runs getting as
-    // bad. Both halves are asserted so neither can be quietly dropped from
-    // whichever story is more convenient on the day.
+  it('records the ESKF result as measured, and it no longer trades', () => {
+    // ★ PHASE 11, REPORTED HONESTLY — AND THE REPORT HAS CHANGED ★
+    //
+    // This used to assert a trade in both directions: the filter worse in the
+    // middle of the distribution (mean) and better at the end of it (p90), on
+    // the reasoning that the hand-tuned chain is very good on the runs it was
+    // tuned against while the filter's covariance bookkeeping is what stops
+    // the bad runs getting as bad. That was true and it is not true any more.
+    //
+    // The road heading aid took `full`'s p90 from 22.6 % to 15.1 % — it closes
+    // the same failure the filter's bookkeeping was closing, and closes it
+    // harder, because a road is a measurement of heading and a covariance is
+    // only an opinion about one. The tail the ESKF used to win is gone, and
+    // at 15.7 % against 15.1 % it now loses on both halves.
+    //
+    // Asserted rather than deleted: the filter is still the more principled
+    // estimator and the day it wins again, this is what will notice.
     const eskf = get('eskf');
     const full = get('full');
     expect(eskf.mean).toBeGreaterThan(full.mean);
-    expect(eskf.p90).toBeLessThan(full.p90);
+    expect(eskf.p90).toBeGreaterThan(full.p90);
     // And it must stay in the same league — a filter that diverges is not a
     // trade-off, it is a bug, and it was one twice while this was written.
     expect(eskf.mean).toBeLessThan(full.mean * 1.5);

@@ -227,8 +227,8 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // above takes it from a GNSS course and an outage has none. Toggleable, so a
   // judge can watch the corners stop being turned.
   pedestrianHeadingFromMagnetometer: true,
-  // Phase 17. OFF: measured 13.0% mean overall against the shipped chain's
-  // 9.2% — but that average hides the finding. City 15.1% -> 13.3% (it helps),
+  // Phase 17. OFF: measured 12.1% mean overall against the shipped chain's
+  // 6.1% — but that average hides the finding. City 15.1% -> 13.3% (it helps),
   // highway 3.2% -> 12.8% (it hurts), which is exactly what a filter built for
   // junction ambiguity should do. Toggleable so the particle cloud can be
   // shown forking and collapsing, which is the demo.
@@ -243,8 +243,8 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // lowers the confidence bar and may never gate a fix — see the long argument
   // in detect/spoofing.ts, which applies to a learned detector with more force.
   useMlGnssQuality: true,
-  // Phase 14. OFF: measured 10.5% mean drift against the greedy matcher's
-  // 9.2%, and a flat parameter sweep saying these routes contain no geometry
+  // Phase 14. OFF: measured 7.4% mean drift against the greedy matcher's
+  // 6.1%, and a flat parameter sweep saying these routes contain no geometry
   // its transition term can discriminate. The capability is real and is
   // demonstrated in nav-core/test/hmm.test.ts — a parallel service road, a
   // divided carriageway and a flyover, each of which greedy matching gets
@@ -269,8 +269,11 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // about 10.4% at every angle. See docs/alignment.md.
   autoAlign: true,
   // Phase 11. Off by default, matching the engine: over the ablation logs the
-  // filter measures 10.8% mean against the shipped chain's 10.0%, and 17.8%
-  // p90 against 22.7%. Worse in the middle, better in the tail. Toggleable so
+  // filter measures 8.4% mean against the shipped chain's 6.1%, and 15.7% p90
+  // against 15.1%. It USED to be worse in the middle and better in the tail,
+  // which was the interesting half; the road heading aid closed the same tail
+  // harder — a road is a measurement of heading, a covariance is an opinion
+  // about one — so the filter now loses on both. Toggleable so
   // that trade can be shown live rather than argued about.
   eskf: false,
   walkingMode: false,

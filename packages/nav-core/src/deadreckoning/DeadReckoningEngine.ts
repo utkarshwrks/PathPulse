@@ -224,6 +224,33 @@ export class DeadReckoningEngine {
    * healthy — this is shadow mode: the engine is always running and always
    * corrected, so when GNSS disappears there is no start-up cost.
    */
+  /**
+   * Rotate the heading, and the velocity vector with it, by a small amount.
+   *
+   * ★ THIS IS A CORRECTION, NOT A TURN ★
+   *
+   * The caller has evidence that the heading has drifted — the matched road
+   * runs one way and the estimate is pointing another. It is applied here
+   * rather than folded into the yaw rate on purpose: the yaw rate is what the
+   * vehicle DID, and every consumer of it (the turn detector, the ESKF, the
+   * particle filter) is entitled to read it that way. The vehicle did not turn.
+   * The estimate was wrong and is being told so.
+   *
+   * The velocity vector is rotated with the heading because the two are one
+   * quantity expressed twice, and leaving the vector behind would put the next
+   * propagation back where it started.
+   */
+  nudgeHeading(deltaDeg: number): void {
+    if (!Number.isFinite(deltaDeg) || deltaDeg === 0) return;
+    this.state.headingDeg = normalizeAngle360(this.state.headingDeg + deltaDeg);
+    const r = (deltaDeg * Math.PI) / 180;
+    const c = Math.cos(r);
+    const sn = Math.sin(r);
+    // Clockwise in the compass sense, which in ENU rotates (e, n) this way.
+    const { e, n } = this.state.velocityEnu;
+    this.state.velocityEnu = { e: e * c + n * sn, n: -e * sn + n * c };
+  }
+
   resetTo(fix: TrustedFix): void {
     this.state.enu = { ...fix.enu };
     this.state.speedMps = fix.speedMps;

@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.22** · APK 7.50 MB · 1,650 tests · 60,224 lines
-**6.9 % mean drift on simulated logs · 41.4 % on real vehicle sensors**
+**Build v0.22** · APK 7.50 MB · 1,653 tests · 60,224 lines
+**6.1 % mean drift on simulated logs · 38.3 % on real vehicle sensors**
 
 ---
 
@@ -1612,20 +1612,20 @@ corresponds to a trap that was actually hit:
 | nhc | **33.5** | 34.7 | 52.6 | 57.5 | 170.3 | 146.5 | 71.3 | 317.6 |
 | speedclamp | **30.2** | 34.7 | 52.6 | 57.5 | 152.6 | 128.4 | 69.9 | 265.3 |
 | highpass | **14.6** | 16.6 | 25.9 | 27.5 | 92.0 | 71.7 | 49.7 | 150.1 |
-| eskf | **8.5** | 8.1 | 16.7 | 20.5 | 75.6 | 62.1 | 36.4 | 129.7 |
-| hmm | **10.5** | 7.0 | 25.1 | 30.5 | 73.4 | 59.8 | 39.5 | 126.2 |
-| particle | **11.5** | 8.7 | 22.8 | 28.1 | 89.0 | 84.1 | **21.8** | 175.8 |
-| full_forwardbias | **10.8** | 11.0 | 21.6 | 26.8 | 82.0 | 71.6 | 33.5 | 146.7 |
-| **full** | **6.9** | **4.4** | 22.6 | 28.2 | **67.0** | **57.3** | 30.4 | **110.2** |
+| eskf | **8.4** | 8.1 | 15.7 | 19.3 | 77.4 | 63.2 | 37.7 | 131.7 |
+| hmm | **7.4** | 6.2 | 18.3 | 18.8 | 65.5 | 59.5 | 22.5 | 118.4 |
+| particle | **12.1** | 10.3 | 23.0 | 25.2 | 91.9 | 87.2 | **21.8** | 181.7 |
+| full_forwardbias | **12.8** | 11.3 | 19.1 | 24.1 | 77.8 | 68.3 | 31.1 | 144.5 |
+| **full** | **6.1** | **4.6** | **15.1** | **17.8** | **61.7** | **57.7** | 18.2 | **106.0** |
 
-**59.5 % → 6.9 %.** The PS asks for under 10 %.
+**59.5 % → 6.1 %.** The PS asks for under 10 %.
 
 Behaviour: **0 ms handover** on every configuration that has constraints,
-**50 Hz** update, **18 ZUPTs**, **99.4 % road-snap**, **0 resets** for `full`.
+**50 Hz** update, **18 ZUPTs**, **99.9 % road-snap**, **0 resets** for `full`.
 
 ⚠️ **Tier S. Every log here is simulated.** These numbers measure the estimator
 against a physics model, not against a road, and they flatter it — the same
-configuration measures **41.4 % on real vehicle sensors**.
+configuration measures **38.3 % on real vehicle sensors**.
 
 ### What the table tells you
 
@@ -1638,8 +1638,8 @@ configuration measures **41.4 % on real vehicle sensors**.
   That is exactly what a map-aided filter should do: it puts you on the right
   road and is less certain where along it.
 - **`full_forwardbias` is a kept negative result.** The GNSS-Doppler forward-bias
-  estimator measurably *worsens* drift now that the high-pass exists — 6.9 % →
-  10.8 %. It is reported rather than deleted, because a table with no failures in
+  estimator measurably *worsens* drift now that the high-pass exists — 6.1 % →
+  12.8 %. It is reported rather than deleted, because a table with no failures in
   it is not a measurement, it is a brochure.
 
 ## 19.2 Tier R — real vehicle sensors (`pnpm eval:tier-r`)
@@ -1648,12 +1648,13 @@ Config `full`, 10 outage windows of 60 s per log.
 
 | log | n | mean % | median % | p90 % | best % | worst % |
 |---|---|---|---|---|---|---|
-| `iovnbd_S1.jsonl` | 10 | 43.3 | 45.9 | 107.2 | 13.0 | 107.2 |
-| `iovnbd_S3c.jsonl` | 9 | 39.3 | 35.8 | 88.8 | 6.9 | 88.8 |
-| **OVERALL** | **19** | **41.4** | **35.8** | 88.8 | **6.9** | 107.2 |
+| `iovnbd_S1.jsonl` | 10 | 38.4 | 28.5 | 107.2 | 8.5 | 107.2 |
+| `iovnbd_S3c.jsonl` | 9 | 38.0 | 27.5 | 88.8 | 6.8 | 88.8 |
+| **OVERALL** | **19** | **38.3** | **27.5** | 88.8 | **6.8** | 107.2 |
 
-**41.4 %, and we publish it.** Journey: 111.7 % → 50.1 % (a converter bug of our
-own, §24.3) → **41.4 %** (the speed fix, §24.1).
+**38.3 %, and we publish it.** Journey: 111.7 % → 50.1 % (a converter bug of our
+own, §24.3) → 41.4 % (the speed fix, §24.1) → **38.3 %** (the road heading aid,
+§24.1).
 
 Three things this says:
 
@@ -1730,7 +1731,7 @@ of raster tiles — a **43× reduction**.
 | | |
 |---|---|
 | **APK** | **7.50 MB** |
-| Tests | **1,650** passing |
+| Tests | **1,653** passing |
 | Source | **60,224 lines**, 98 test files |
 | `nav-core` runtime dependencies | **zero** |
 
@@ -1739,7 +1740,7 @@ of raster tiles — a **43× reduction**.
 
 # 20 · Tests
 
-**1,650 tests across 101 files.** `pnpm test` runs them; `pnpm typecheck` and
+**1,653 tests across 101 files.** `pnpm test` runs them; `pnpm typecheck` and
 `pnpm lint:core-purity` complete the gate.
 
 ## 20.1 What a test looks like here
@@ -1808,7 +1809,7 @@ Every claim this project makes, and exactly what backs it.
 | Claim | Tier | Backing | Caveat |
 |---|---|---|---|
 | 6.9 % mean drift | **S** | `pnpm ablation` | Simulated sensors |
-| 41.4 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset** |
+| 38.3 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset** |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
 | 0 ms handover | **S** | `pnpm ablation` | Structural — there is no transition code path |
 | 7.1 % at 90° mount | **S** | `pnpm eval:alignment` | Simulated rotation of real logs |
@@ -1816,7 +1817,7 @@ Every claim this project makes, and exactly what backs it.
 | 8.03× compression | Measured | `graphCodec` tests | Real OSM extracts |
 | 3.5 MB per 100 km | Measured | Cell planning | Real Overpass responses |
 | APK 7.50 MB | Measured | Clean Gradle build | |
-| 1,650 tests | Measured | `pnpm test` | |
+| 1,653 tests | Measured | `pnpm test` | |
 | Zero deps in `nav-core` | Enforced | `pnpm lint:core-purity` | |
 
 **What we have never measured:** a drive with our own phone, in our own vehicle,
@@ -2016,7 +2017,7 @@ us to make the distinction explicit in code rather than in a convention.
 
 ```bash
 pnpm install
-pnpm test                 # 1,650 tests
+pnpm test                 # 1,653 tests
 pnpm typecheck
 pnpm lint:core-purity     # nav-core must stay pure
 
@@ -2063,7 +2064,7 @@ pnpm edge:bench        # docs/edge-benchmarks.md
 | GNSS+INS fusion, AI-based | ✅ | 15-state ESKF + M1/M2/M4 |
 | **Seamless handover, milliseconds** | ✅ | **0 ms** — structural, §4.1 |
 | Real-time navigation interface | ✅ | `apps/web`, MapLibre, HUD, Device, Replay |
-| **Drift < 10 % of distance** | ✅ **S** / ⚠️ **R** | **6.9 % Tier S**; **41.4 % Tier R** — stated, not hidden |
+| **Drift < 10 % of distance** | ✅ **S** / ⚠️ **R** | **6.1 % Tier S**; **38.3 % Tier R** — stated, not hidden |
 | 10 Hz on a smartphone | ✅ | **50 Hz** measured |
 | 200 Hz on edge + FOG IMU | ✅ | ~83,000 Hz sustained; 15.0 % drift at FOG grade |
 | Trained on IO-VNBD | ✅ | `ml/data/download.py`; also the Tier R corpus |
@@ -2167,7 +2168,7 @@ needs a battery measurement we have not taken.
 
 ## 28.5 CI
 
-The repository has `keepalive.yml` and nothing that runs the 1,650 tests on push.
+The repository has `keepalive.yml` and nothing that runs the 1,653 tests on push.
 For a project whose entire credibility rests on those tests being green, that is
 a gap.
 
@@ -2195,7 +2196,7 @@ Every script in `package.json`.
 ## Quality gate
 | Command | Does |
 |---|---|
-| `pnpm test` | **1,650 tests** |
+| `pnpm test` | **1,653 tests** |
 | `pnpm test:watch` | `nav-core` in watch mode |
 | `pnpm typecheck` | Every package |
 | `pnpm lint:core-purity` | **Fails if `nav-core` gains an import or a dependency** |
@@ -2283,7 +2284,7 @@ and no uncertainty to display. For a system whose worst failure is *confident
 wrongness*, that is disqualifying. §3.2.
 
 **"What is your actual accuracy?"**
-**6.9 % on simulated logs, 41.4 % on real vehicle sensors, and we publish both.**
+**6.1 % on simulated logs, 38.3 % on real vehicle sensors, and we publish both.**
 The gap is along-track speed error, it is named in §28.2, and Tier S numbers
 should be read as an upper bound. §22.
 

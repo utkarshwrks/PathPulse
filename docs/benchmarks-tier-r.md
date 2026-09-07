@@ -15,13 +15,13 @@ Config `full`, 10 outage windows of 60 s per log.
 
 | log | n | mean % | median % | p90 % | best % | worst % |
 |---|---|---|---|---|---|---|
-| `iovnbd_S1.jsonl` | 10 | 43.3 | 45.9 | 107.2 | 13.0 | 107.2 |
-| `iovnbd_S3c.jsonl` | 9 | 39.3 | 35.8 | 88.8 | 6.9 | 88.8 |
-| **OVERALL** | 19 | **41.4** | **35.8** | 88.8 | 6.9 | 107.2 |
+| `iovnbd_S1.jsonl` | 10 | 38.4 | 28.5 | 107.2 | 8.5 | 107.2 |
+| `iovnbd_S3c.jsonl` | 9 | 38.0 | 27.5 | 88.8 | 6.8 | 88.8 |
+| **OVERALL** | 19 | **38.3** | **27.5** | 88.8 | 6.8 | 107.2 |
 
 ## What this says
 
-The shipped configuration measures **6.9 % on simulated logs and 41.4 % on real
+The shipped configuration measures **6.9 % on simulated logs and 38.3 % on real
 vehicle sensors.** Every figure in benchmarks.md should be read as an upper
 bound on the estimator, not an estimate of it.
 
@@ -30,7 +30,7 @@ larger. Heading is in good shape: integrating the recovered yaw rate across real
 turns reproduces GPS heading change with slope 1.002 and 0.9° mean error. What
 is wrong is speed once the held Doppler expires.
 
-**The spread is the other finding.** 6.9 % in one window and 107.2 % in another.
+**The spread is the other finding.** 6.8 % in one window and 107.2 % in another.
 The good ones are fast, straight, well-fixed stretches; the bad ones are stop-go
 traffic where fixes are sparse and integration has nothing to anchor to. A
 single mean hides that entirely.

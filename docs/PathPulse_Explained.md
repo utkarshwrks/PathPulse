@@ -758,7 +758,7 @@ PathPulse — the rare stuff
   estimator snaps to. A raster map will happily draw a street the engine has never heard of. Ours can't lie.
 
   6 · Measured on real vehicle sensors, not just simulation
-  Simulated: 6.9 %. Real sensors: 41.4 %. We publish both and call the simulated one an upper bound. Most teams 
+  Simulated: 6.1 %. Real sensors: 38.3 %. We publish both and call the simulated one an upper bound. Most teams 
   have one number and no idea how flattering it is.
 
   7 · Every number is one command away

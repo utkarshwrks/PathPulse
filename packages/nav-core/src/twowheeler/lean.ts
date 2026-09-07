@@ -94,8 +94,52 @@ export function leanCompensatedYawRate(
   speedMps: number,
   measuredYawRateRadPerSec: number,
 ): number {
-  const lean = leanAngleRad(speedMps, measuredYawRateRadPerSec);
-  const c = Math.cos(lean);
+  return applyLeanCompensation(
+    measuredYawRateRadPerSec,
+    leanAngleRad(speedMps, measuredYawRateRadPerSec),
+  );
+}
+
+/**
+ * Divide out a lean that was estimated somewhere else.
+ *
+ * ★ A LEAN IS NOT A PER-SAMPLE QUANTITY ★
+ *
+ * `leanCompensatedYawRate` infers the lean from the SAME instantaneous yaw rate
+ * it then corrects, and that closed loop is only sound for the steady
+ * coordinated turn the derivation assumes. A pothole is not a coordinated
+ * turn. Neither is engine buzz, or a steering correction, and on an Indian road
+ * a scooter delivers all three onto the gyro continuously.
+ *
+ * What that costs, at 60 km/h, is a transfer function that is neither linear
+ * nor monotonic — measured by feeding it single values:
+ *
+ *   measured w   sin(lean)   applied
+ *     0.10 rad/s     0.17     0.101     (1.0x)
+ *     0.30           0.51     0.349     (1.2x)
+ *     0.50           0.85     0.948     (1.9x)
+ *     0.60           1.02     0.600     (1.0x — the clamp, and a cliff)
+ *
+ * A noise spike at 0.5 rad/s is amplified to nearly twice itself, and one at
+ * 0.6 passes through untouched because sin(lean) saturated. Integrated, that is
+ * heading error that a real lean never produced — and once the heading is more
+ * than `maxHeadingMismatchDeg` from the road, map matching stops matching and
+ * the marker is released to wander. Which is the field report: on a scooter,
+ * on a straight road, "it moves to other roads and makes zigzag pattern".
+ *
+ * A physical lean cannot change at that bandwidth. A rider takes the better
+ * part of a second to put a bike over and the same to pick it up, so the lean
+ * belongs to a SMOOTHED yaw rate while the correction factor applies to the
+ * instantaneous one. Splitting the two is what this overload is for; the caller
+ * owns the smoothing because it owns the sample clock.
+ */
+export function applyLeanCompensation(
+  measuredYawRateRadPerSec: number,
+  leanRad: number,
+): number {
+  if (!Number.isFinite(measuredYawRateRadPerSec)) return 0;
+  if (!Number.isFinite(leanRad)) return measuredYawRateRadPerSec;
+  const c = Math.cos(leanRad);
   // Below about 6 degrees of cos the correction exceeds 10x and is noise
   // amplification rather than compensation.
   if (!(c > 0.1)) return measuredYawRateRadPerSec;
