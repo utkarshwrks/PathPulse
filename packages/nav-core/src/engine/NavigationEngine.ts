@@ -41,6 +41,7 @@ import {
 } from '../motion/context.js';
 import { StepDetector, StrideModel } from '../motion/steps.js';
 import { MagneticHeading } from '../alignment/magneticHeading.js';
+import { MlSpeedCalibrator } from '../ml/speedCalibrator.js';
 import {
   ImuWindowBuffer,
   ML_WINDOW_SAMPLES,
@@ -215,6 +216,33 @@ export interface ConstraintFlags {
    * supply a course, so a vehicle's heading path is byte-for-byte what it was.
    */
   pedestrianHeadingFromMagnetometer: boolean;
+  /**
+   * Learn the speed model's scale against GNSS Doppler, and spend it in outages.
+   *
+   * ★ OFF — A KEPT NEGATIVE RESULT ★
+   *
+   * The reasoning is sound and the same trick works twice elsewhere in this
+   * project (`StrideModel`, `MagneticHeading`): an unknown constant of the
+   * carrier, unobservable from the IMU, measured against GNSS while it is free
+   * and spent during the outage. Measured over 16 outage windows on the two
+   * IO-VNBD replays, with the speed model running:
+   *
+   *              mean     median    p90      worst
+   *   off        40.1 %   32.8 %    73.0 %   131.5 %
+   *   on         45.7 %   29.5 %    84.2 %   207.9 %
+   *
+   * Better in the middle and much worse at both ends — a scale fitted over two
+   * minutes of driving is itself an estimate, and when the stretch it was
+   * fitted on is unrepresentative the correction is confidently wrong in the
+   * direction that costs most. The median is not what a dead-reckoning system
+   * pays for; the tail is.
+   *
+   * Kept and toggleable rather than deleted, because the negative result is
+   * worth more on the record than in a commit message, and because the failure
+   * is in the FITTING rather than the idea — a calibration that carried its own
+   * uncertainty, and stood down when it was low, could still be right.
+   */
+  calibrateMlSpeed: boolean;
   /**
    * ★ PHASE 11 ★ Take position from the error-state Kalman filter instead of
    * from open-loop integration, while dead reckoning.
@@ -611,6 +639,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
   pedestrianHeadingFromMagnetometer: true,
+  calibrateMlSpeed: false,
   maxHeadingGateDeg: 90,
   roadHeadingAidDegPerSec: 2,
   roadHeadingAidMinStableMs: 3_000,
@@ -778,6 +807,9 @@ export class NavigationEngine {
   private readonly mlBuffer = new SpeedWindowBuffer(ML_WINDOW_SAMPLES, true);
   private readonly mlSmoother = new SpeedSmoother(5);
   private readonly magHeading = new MagneticHeading();
+  private readonly mlCalibrator = new MlSpeedCalibrator();
+  /** Raw model output before calibration, so the calibrator scores the model. */
+  private lastMlRawMps = Number.NaN;
   private mlScalerMean: readonly number[] = [0, 0, 0, 0, 0, 0];
   private mlScalerStd: readonly number[] = [1, 1, 1, 1, 1, 1];
   private lastMlInferenceT: number | null = null;
@@ -1110,6 +1142,8 @@ export class NavigationEngine {
       this.mlScalerStd = scaler.std;
     }
     this.mlBuffer.reset();
+    this.mlCalibrator.reset();
+    this.lastMlRawMps = Number.NaN;
     this.magHeading.reset();
     this.mlSmoother.reset();
     this.lastMlSpeedMps = Number.NaN;
@@ -1883,6 +1917,13 @@ export class NavigationEngine {
         // worth anything once GNSS is gone — the same trick ZUPT plays with
         // accelerometer bias, applied to the carrier instead of the sensor.
         if (this.lastCadenceHz > 0) this.stride.observe(speedForFix, this.lastCadenceHz);
+        // ★ AND EVERY SECOND OF GOOD GNSS IS A FREE CHECK ON THE SPEED MODEL ★
+        // Exactly the trick one line above, pointed at the other quantity that
+        // has to survive an outage. Paired against the model's most recent
+        // opinion, uncalibrated — see `lastMlRawMps`.
+        if (this.config.calibrateMlSpeed && Number.isFinite(this.lastMlRawMps)) {
+          this.mlCalibrator.observe(sample.t, speedForFix, this.lastMlRawMps);
+        }
         // Held, not consumed. See `gnssSpeedHoldMs`.
         this.lastGnssSpeed = { t: sample.t, mps: speedForFix };
       }
@@ -3428,10 +3469,19 @@ export class NavigationEngine {
           const clamped = Math.max(0, Math.min(this.config.maxSpeedMps, raw));
           this.mlSmoother.push(clamped);
           this.lastMlSpeedMps = this.mlSmoother.value;
+          // The calibrator scores the MODEL, so it must see what the model
+          // said — not what the correction turned it into, which would be a
+          // loop learning from its own output.
+          this.lastMlRawMps = this.lastMlSpeedMps;
         }
       }
     }
-    return Number.isFinite(this.lastMlSpeedMps) ? this.lastMlSpeedMps : undefined;
+    if (!Number.isFinite(this.lastMlSpeedMps)) return undefined;
+    // ★ SPEND WHAT GNSS TAUGHT US ABOUT THIS VEHICLE ★ See MlSpeedCalibrator.
+    // Identity until enough pairs have been seen, so a short session or a
+    // handset that never had a fix behaves exactly as before.
+    if (!this.config.calibrateMlSpeed) return this.lastMlSpeedMps;
+    return this.lastMlSpeedMps * this.mlCalibrator.scaleAt(tMs);
   }
 
   /**
@@ -3691,6 +3741,8 @@ export class NavigationEngine {
     this.measuredRateHz = 0;
     this.forwardAccelDc = 0;
     this.mlBuffer.reset();
+    this.mlCalibrator.reset();
+    this.lastMlRawMps = Number.NaN;
     this.mlSmoother.reset();
     this.lastMlInferenceT = null;
     this.lastMlSpeedMps = Number.NaN;

@@ -48,11 +48,7 @@ const TILE_HOSTS = [
   // import from the bundle, so this is a copy — if the basemap host changes
   // and this list does not, tiles are fetched and never stored, and the
   // aeroplane-mode demo fails with no error anywhere.
-  'a.basemaps.cartocdn.com',
-  'b.basemaps.cartocdn.com',
-  'c.basemaps.cartocdn.com',
-  'd.basemaps.cartocdn.com',
-  'basemaps.cartocdn.com',
+  'tile.openstreetmap.org',
   'api.maptiler.com',
 ];
 

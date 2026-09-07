@@ -227,11 +227,31 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // above takes it from a GNSS course and an outage has none. Toggleable, so a
   // judge can watch the corners stop being turned.
   pedestrianHeadingFromMagnetometer: true,
-  // Phase 17. OFF: measured 12.1% mean overall against the shipped chain's
-  // 6.1% — but that average hides the finding. City 15.1% -> 13.3% (it helps),
-  // highway 3.2% -> 12.8% (it hurts), which is exactly what a filter built for
-  // junction ambiguity should do. Toggleable so the particle cloud can be
-  // shown forking and collapsing, which is the demo.
+  // OFF — a kept negative result. Learning the speed model's scale against
+  // GNSS Doppler and spending it in the outage is the same trick StrideModel
+  // and MagneticHeading both use, and here it does not pay: over 16 outage
+  // windows on the IO-VNBD replays it moves the median from 32.8% to 29.5%
+  // and the worst case from 131.5% to 207.9%. Better in the middle, much
+  // worse at the ends, which is not what a dead-reckoning system pays for.
+  calibrateMlSpeed: false,
+  // Phase 17. OFF by default, and the finding has REVERSED on real sensors.
+  //
+  // Tier S, simulated: 12.1% mean against the shipped chain's 6.1%. Tier R,
+  // real vehicle sensors, with the speed model running as the handset runs it:
+  //
+  //            mean    median   p90     worst
+  //   full     30.9%   28.4%    70.5%   73.0%
+  //   particle 30.7%   27.8%    63.7%   68.9%
+  //
+  // Better on all four. That is what a multi-hypothesis filter is FOR: it pays
+  // where the single hypothesis is genuinely uncertain, and on a simulated log
+  // the dead-reckoned estimate is so good that forking only adds variance.
+  //
+  // Left off because the <10% Tier S headline is load-bearing and this doubles
+  // it — but it is one tap away, and on a real vehicle it is the better
+  // estimator. Toggleable so the cloud can be shown forking at a junction and
+  // collapsing three turns later, which is the demo and is also the answer to
+  // "which lane did it take".
   particleFilter: false,
   turnRelocalisation: false,
   // Phase 18B. ON and safe: the lean compensation is applied only once the
@@ -243,7 +263,12 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // lowers the confidence bar and may never gate a fix — see the long argument
   // in detect/spoofing.ts, which applies to a learned detector with more force.
   useMlGnssQuality: true,
-  // Phase 14. OFF: measured 7.4% mean drift against the greedy matcher's
+  // Phase 14. OFF by default, and this finding has reversed too: on Tier R,
+  // real vehicle sensors, the HMM is the best matcher measured — 29.0% mean
+  // against the greedy matcher's 30.9%, p90 60.4% against 70.5%, worst 62.9%
+  // against 73.0%. On the simulated tier it still loses:
+  //
+  // measured 7.4% mean drift against the greedy matcher's
   // 6.1%, and a flat parameter sweep saying these routes contain no geometry
   // its transition term can discriminate. The capability is real and is
   // demonstrated in nav-core/test/hmm.test.ts — a parallel service road, a
@@ -584,6 +609,7 @@ export function useNavigationEngine(): NavEngineOutput {
         mlVehicleOnly: next.mlVehicleOnly,
         pedestrianHeadingFromGnss: next.pedestrianHeadingFromGnss,
         pedestrianHeadingFromMagnetometer: next.pedestrianHeadingFromMagnetometer,
+        calibrateMlSpeed: next.calibrateMlSpeed,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });
       return next;

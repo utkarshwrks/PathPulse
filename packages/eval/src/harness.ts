@@ -1,9 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
+  CnnSpeedPredictor,
   NavigationEngine,
+  parseSpeedCnnWeights,
   type NavigationState,
   type RoadGraph,
   type SensorSample,
 } from '@pathpulse/nav-core';
+import { ROOT } from './paths.js';
 import {
   computeMetrics,
   decomposeError,
@@ -13,6 +18,25 @@ import {
   type TruthPoint,
 } from './metrics.js';
 
+/**
+ * The shipped weights, parsed once.
+ *
+ * The same file the APK serves, read straight off disk — so a benchmark and a
+ * handset cannot disagree about which network they are scoring.
+ */
+let speedModel: { predictor: CnnSpeedPredictor; scaler: { mean: number[]; std: number[] } } | null =
+  null;
+
+function loadSpeedModel(): [CnnSpeedPredictor, { mean: number[]; std: number[] }] {
+  if (!speedModel) {
+    const raw = JSON.parse(
+      readFileSync(join(ROOT, 'apps/web/public/models/speed_model.json'), 'utf8'),
+    ) as { scaler: { mean: number[]; std: number[] } };
+    speedModel = { predictor: new CnnSpeedPredictor(parseSpeedCnnWeights(raw)), scaler: raw.scaler };
+  }
+  return [speedModel.predictor, speedModel.scaler];
+}
+
 export interface RunOptions {
   configName: string;
   logName: string;
@@ -21,6 +45,28 @@ export interface RunOptions {
   outageStartMs: number;
   outageDurationMs: number;
   roadGraph?: RoadGraph | null;
+  /**
+   * Run the shipped speed model, as the handset does.
+   *
+   * ★ DEFAULT OFF, AND THAT IS A STATEMENT ABOUT THE LOGS, NOT THE MODEL ★
+   *
+   * The network was trained on IO-VNBD: real accelerometer and gyroscope off a
+   * real phone in a real car. Tier S logs are SIMULATED — their IMU is
+   * synthesised by a physics model — so the windows handed to the network there
+   * are out of its training domain in exactly the way a portrait mount was, and
+   * it answers anyway. Measured: switching it on takes Tier S `full` from 6.1 %
+   * mean drift to 71.2 %, and the drawn marker from 0.3 m off-road to 14.7 m.
+   * That number describes the simulator, not the estimator.
+   *
+   * On Tier R, which is real vehicle sensors, it belongs and it pays: 38.3 % to
+   * 30.9 % mean, p90 88.8 % to 70.5 %, worst 107.2 % to 73.0 %.
+   *
+   * So it is on where it is in domain and off where it is not, and the two are
+   * never averaged — the same rule Tier S and Tier R already live under. What
+   * this must never become is a switch flipped to whichever produces the better
+   * headline, which is why the reason is written here next to the numbers.
+   */
+  speedModel?: boolean;
   /** Phase 13, Model 3: record a training row for every dead-reckoning sample. */
   collectDriftRows?: boolean;
 }
@@ -106,6 +152,19 @@ export function runEval(samples: readonly SensorSample[], opts: RunOptions): Run
   const outageEndMs = opts.outageStartMs + opts.outageDurationMs;
 
   const engine = new NavigationEngine(opts.engineConfig as never);
+  // ★ THE BENCHMARK COULD NOT RUN WHAT THE PHONE RUNS ★
+  //
+  // `useMlSpeed` has been on in every config for phases and this harness never
+  // supplied a predictor, so the engine fell back to NullSpeedPredictor and
+  // every published figure — Tier S and Tier R alike — measured an estimator
+  // with the speed model switched off. The phone was running a configuration
+  // the numbers did not describe, and nothing could tell.
+  //
+  // The network is pure TypeScript in nav-core precisely so it can run here
+  // (that is what the purity rule buys) and the weights are a JSON file Node
+  // can read, so this was an omission rather than a limitation. See
+  // `speedModel` for why it is nonetheless off on the simulated logs.
+  if (opts.speedModel) engine.setSpeedPredictor(...loadSpeedModel());
   if (opts.roadGraph) engine.setRoadGraph(opts.roadGraph);
 
   const states: NavigationState[] = [];

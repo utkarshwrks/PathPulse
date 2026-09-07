@@ -16,6 +16,12 @@ export {
   type SpeedPredictor,
 } from './speedModel.js';
 export {
+  DEFAULT_SPEED_CALIBRATOR_CONFIG,
+  MlSpeedCalibrator,
+  type SpeedCalibratorConfig,
+  type SpeedCalibratorState,
+} from './speedCalibrator.js';
+export {
   CnnSpeedPredictor,
   decodeFloat32,
   parseCnnWeights,

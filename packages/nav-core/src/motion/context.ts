@@ -277,6 +277,47 @@ export class MotionContextDetector {
         };
       }
 
+      // ★ AND THE SAME REASONING, WHEN THERE IS NOTHING TO HOLD ★
+      //
+      // The branch above declines to invent a verdict from a missing cadence —
+      // but only once GNSS has already established one. With `gnssBacked` still
+      // null it fell through to here, and here asserts VEHICLE.
+      //
+      // At the START of a session that is the common case, not the rare one.
+      // Open the app and start walking: the variance window needs twenty
+      // samples before it will answer, the step detector needs a rhythm before
+      // it reports a cadence, and the first fix arrives before either. So
+      // `hasV` is false, `walking` is false, the speed is a walking 1.4 m/s —
+      // and the reason string this produced was, literally, `var n/a at
+      // 1.4 m/s`. No variance, no cadence, and a speed no vehicle sustains,
+      // and from that it concluded VEHICLE and WROTE IT DOWN. Once written,
+      // the hold above preserves it and the outage branch preserves it again:
+      // one wrong verdict in the first second, kept for the session, enabling
+      // a vehicle-trained speed model on a pedestrian for the rest of it.
+      //
+      // Narrowly: only while the variance window has NOT filled. Once it has,
+      // the existing rule stands and is deliberate — a loud handset with no
+      // footfall is the scooter on a bad road, and calling that a pedestrian
+      // froze the heading of a vehicle doing 25 km/h. Variance never says
+      // "somebody is walking"; what it says here is "something is moving and
+      // it is not stepping", and inside the band that is a vehicle.
+      //
+      // What it cannot say is anything at all before it has twenty samples,
+      // and that is the only case being changed. UNKNOWN is a SAFE answer: it
+      // enables neither the vehicle speed model nor the pedestrian heading
+      // rule, and it costs nothing here because this branch only runs when a
+      // recent GNSS speed exists — which is what the estimator is using
+      // anyway. It resolves within a second or two, on evidence.
+      //
+      // Above the band nothing changes: a speed no pedestrian reaches is
+      // decisive however quiet the handset, and that is the branch at the top.
+      if (!hasV && s <= this.config.pedestrianMaxSpeedMps) {
+        return {
+          context: 'UNKNOWN',
+          reason: `no cadence and no variance yet at ${s.toFixed(1)} m/s — not enough to call it`,
+        };
+      }
+
       this.gnssBacked = 'VEHICLE';
       return {
         context: 'VEHICLE',

@@ -64,6 +64,11 @@ for (const r of RUNS) {
       outageStartMs: w,
       outageDurationMs: DURATION_MS,
       roadGraph: graph,
+      // ★ REAL SENSORS ARE WHERE THE SPEED MODEL BELONGS ★ These logs ARE
+      // IO-VNBD, which is what the network was trained on, so here it is in
+      // domain and here it is what the handset runs. See RunOptions.speedModel
+      // for why the simulated tier does not do this.
+      speedModel: true,
     });
     const d = res.metrics.driftPercent;
     if (Number.isFinite(d)) {

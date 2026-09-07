@@ -527,6 +527,62 @@ describe('the motion classifier', () => {
     expect(scooter.current).toBe('VEHICLE');
   });
 
+  it('★ does not call a walker a vehicle before it has looked at anything', () => {
+    // ★ THE LATCH ★ Open the app and start walking. The variance window needs
+    // twenty samples, the step detector needs a rhythm, and the first fix
+    // arrives before either — so the classifier saw no variance, no cadence,
+    // and a walking 1.4 m/s, and from that concluded VEHICLE. The reason string
+    // was literally `var n/a at 1.4 m/s`.
+    //
+    // Then it WROTE IT DOWN. `gnssBacked` is what the hold and the outage
+    // branch both read, so one verdict reached in the first second before any
+    // evidence existed was kept for the session — enabling a vehicle-trained
+    // speed model on a pedestrian, and disabling the pedestrian heading rule,
+    // for the whole of it.
+    const d = new MotionContextDetector();
+    for (let i = 0; i < 15; i++) {
+      const t = i * 16;
+      d.push({ t, accelVariance: 1.2, isStationary: false, cadenceHz: 0, gnssSpeedMps: 1.4, gnssSpeedT: t });
+    }
+    expect(d.current).not.toBe('VEHICLE');
+
+    // And nothing was written down, so real evidence still lands.
+    for (let i = 15; i < 300; i++) {
+      const t = i * 16;
+      d.push({ t, accelVariance: 1.2, isStationary: false, cadenceHz: 2, gnssSpeedMps: 1.4, gnssSpeedT: t });
+    }
+    expect(d.current).toBe('PEDESTRIAN');
+  });
+
+  it('★ and the latch is what made it permanent — a walker keeps walking', () => {
+    // The same opening, then GNSS goes. Before, the outage branch held the
+    // VEHICLE verdict that the first second had invented and there was no way
+    // back. The classifier must not be carrying one.
+    const d = new MotionContextDetector();
+    for (let i = 0; i < 15; i++) {
+      const t = i * 16;
+      d.push({ t, accelVariance: 1.2, isStationary: false, cadenceHz: 0, gnssSpeedMps: 1.4, gnssSpeedT: t });
+    }
+    for (let i = 15; i < 400; i++) {
+      const t = i * 16;
+      // No GNSS speed at all from here on.
+      d.push({ t, accelVariance: 1.2, isStationary: false, cadenceHz: 2 });
+    }
+    expect(d.current).toBe('PEDESTRIAN');
+  });
+
+  it('a car crawling in traffic is still a car once there is evidence', () => {
+    // The other side of the same coin, and the reason the change is narrow:
+    // once the variance window HAS filled, a quiet handset with no footfall at
+    // 3 m/s is a vehicle and must stay one.
+    const d = new MotionContextDetector();
+    for (let i = 0; i < 300; i++) {
+      const t = i * 16;
+      d.push({ t, accelVariance: 0.05, isStationary: false, cadenceHz: 0, gnssSpeedMps: 3, gnssSpeedT: t });
+    }
+    expect(d.current).toBe('VEHICLE');
+  });
+
   it('★ refuses to call anything above a run a walk', () => {
     // Even with a convincing rhythm. 7 m/s is 25 km/h and nobody covers that
     // on their legs for the length of a demo.
