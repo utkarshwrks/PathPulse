@@ -4,40 +4,40 @@
   <text x="24" y="48" font-size="12" fill="#64748b">12 runs per configuration · lower is better · dashed line is the &lt;10% target</text>
   <text x="198" y="76.4" text-anchor="end" font-size="13" fill="#cbd5e1">naive</text>
   <rect x="210" y="56" width="600.0" height="30" rx="4" fill="#f97316" />
-  <text x="820.0" y="76.4" font-size="13" fill="#e2e8f0">59.5%</text>
+  <text x="820.0" y="76.4" font-size="13" fill="#e2e8f0">60.4%</text>
   <text x="198" y="116.4" text-anchor="end" font-size="13" fill="#cbd5e1">filtered</text>
-  <rect x="210" y="96" width="598.1" height="30" rx="4" fill="#f97316" />
-  <text x="818.1" y="116.4" font-size="13" fill="#e2e8f0">59.3%</text>
+  <rect x="210" y="96" width="598.2" height="30" rx="4" fill="#f97316" />
+  <text x="818.2" y="116.4" font-size="13" fill="#e2e8f0">60.2%</text>
   <text x="198" y="156.4" text-anchor="end" font-size="13" fill="#cbd5e1">zaru</text>
-  <rect x="210" y="136" width="582.1" height="30" rx="4" fill="#f97316" />
-  <text x="802.1" y="156.4" font-size="13" fill="#e2e8f0">57.8%</text>
+  <rect x="210" y="136" width="591.0" height="30" rx="4" fill="#f97316" />
+  <text x="811.0" y="156.4" font-size="13" fill="#e2e8f0">59.5%</text>
   <text x="198" y="196.4" text-anchor="end" font-size="13" fill="#cbd5e1">zupt</text>
-  <rect x="210" y="176" width="580.0" height="30" rx="4" fill="#f97316" />
-  <text x="800.0" y="196.4" font-size="13" fill="#e2e8f0">57.6%</text>
+  <rect x="210" y="176" width="570.6" height="30" rx="4" fill="#f97316" />
+  <text x="790.6" y="196.4" font-size="13" fill="#e2e8f0">57.4%</text>
   <text x="198" y="236.4" text-anchor="end" font-size="13" fill="#cbd5e1">nhc</text>
-  <rect x="210" y="216" width="337.7" height="30" rx="4" fill="#f97316" />
-  <text x="557.7" y="236.4" font-size="13" fill="#e2e8f0">33.5%</text>
+  <rect x="210" y="216" width="361.5" height="30" rx="4" fill="#f97316" />
+  <text x="581.5" y="236.4" font-size="13" fill="#e2e8f0">36.4%</text>
   <text x="198" y="276.4" text-anchor="end" font-size="13" fill="#cbd5e1">speedclamp</text>
-  <rect x="210" y="256" width="304.8" height="30" rx="4" fill="#f97316" />
-  <text x="524.8" y="276.4" font-size="13" fill="#e2e8f0">30.2%</text>
+  <rect x="210" y="256" width="333.1" height="30" rx="4" fill="#f97316" />
+  <text x="553.1" y="276.4" font-size="13" fill="#e2e8f0">33.5%</text>
   <text x="198" y="316.4" text-anchor="end" font-size="13" fill="#cbd5e1">highpass</text>
-  <rect x="210" y="296" width="146.7" height="30" rx="4" fill="#eab308" />
-  <text x="366.7" y="316.4" font-size="13" fill="#e2e8f0">14.6%</text>
+  <rect x="210" y="296" width="177.5" height="30" rx="4" fill="#eab308" />
+  <text x="397.5" y="316.4" font-size="13" fill="#e2e8f0">17.9%</text>
   <text x="198" y="356.4" text-anchor="end" font-size="13" fill="#cbd5e1">full</text>
-  <rect x="210" y="336" width="74.8" height="30" rx="4" fill="#22c55e" />
-  <text x="294.8" y="356.4" font-size="13" fill="#e2e8f0">7.4%</text>
+  <rect x="210" y="336" width="151.8" height="30" rx="4" fill="#eab308" />
+  <text x="371.8" y="356.4" font-size="13" fill="#e2e8f0">15.3%</text>
   <text x="198" y="396.4" text-anchor="end" font-size="13" fill="#cbd5e1">full_forwardbias</text>
-  <rect x="210" y="376" width="76.7" height="30" rx="4" fill="#22c55e" />
-  <text x="296.7" y="396.4" font-size="13" fill="#e2e8f0">7.6%</text>
+  <rect x="210" y="376" width="154.3" height="30" rx="4" fill="#eab308" />
+  <text x="374.3" y="396.4" font-size="13" fill="#e2e8f0">15.5%</text>
   <text x="198" y="436.4" text-anchor="end" font-size="13" fill="#cbd5e1">eskf</text>
-  <rect x="210" y="416" width="97.5" height="30" rx="4" fill="#22c55e" />
-  <text x="317.5" y="436.4" font-size="13" fill="#e2e8f0">9.7%</text>
+  <rect x="210" y="416" width="138.6" height="30" rx="4" fill="#eab308" />
+  <text x="358.6" y="436.4" font-size="13" fill="#e2e8f0">13.9%</text>
   <text x="198" y="476.4" text-anchor="end" font-size="13" fill="#cbd5e1">greedy</text>
-  <rect x="210" y="456" width="61.8" height="30" rx="4" fill="#22c55e" />
-  <text x="281.8" y="476.4" font-size="13" fill="#e2e8f0">6.1%</text>
+  <rect x="210" y="456" width="141.1" height="30" rx="4" fill="#eab308" />
+  <text x="361.1" y="476.4" font-size="13" fill="#e2e8f0">14.2%</text>
   <text x="198" y="516.4" text-anchor="end" font-size="13" fill="#cbd5e1">particle</text>
-  <rect x="210" y="496" width="111.2" height="30" rx="4" fill="#eab308" />
-  <text x="331.2" y="516.4" font-size="13" fill="#e2e8f0">11.0%</text>
-  <line x1="310.8" y1="48" x2="310.8" y2="548" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 4" />
-  <text x="316.8" y="562" font-size="11" fill="#38bdf8">10% target</text>
+  <rect x="210" y="496" width="178.4" height="30" rx="4" fill="#eab308" />
+  <text x="398.4" y="516.4" font-size="13" fill="#e2e8f0">17.9%</text>
+  <line x1="309.4" y1="48" x2="309.4" y2="548" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 4" />
+  <text x="315.4" y="562" font-size="11" fill="#38bdf8">10% target</text>
 </svg>

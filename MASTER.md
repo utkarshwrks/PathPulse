@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.27** · APK 7.43 MB · 1,681 tests · 60,224 lines
-**7.4 % mean drift on simulated logs · 28.9 % on real vehicle sensors**
+**Build v0.28** · APK 7.43 MB · 1,773 tests · 60,224 lines
+**39.9 % mean drift on OUR OWN PHONE · 29.7 % on real vehicle sensors · 15.3 % simulated**
 
 ---
 
@@ -1747,7 +1747,7 @@ of raster tiles — a **43× reduction**.
 
 # 20 · Tests
 
-**1,681 tests across 102 files.** `pnpm test` runs them; `pnpm typecheck` and
+**1,773 tests across 102 files.** `pnpm test` runs them; `pnpm typecheck` and
 `pnpm lint:core-purity` complete the gate.
 
 ## 20.1 What a test looks like here
@@ -1817,8 +1817,9 @@ Every claim this project makes, and exactly what backs it.
 
 | Claim | Tier | Backing | Caveat |
 |---|---|---|---|
-| 7.4 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
-| 28.9 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
+| 39.9 % mean drift | **F** | `pnpm eval:tier-f` | **Our own handset, our own vehicle, our own roads.** The tier §22 said did not exist. It is the arbiter now |
+| 15.3 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
+| 29.7 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
 | 27° heading error over 60 s | **R** | `pnpm eval:heading` | Real vehicle sensors. The number drift % cannot see — see §24.11 |
 | 0 ms handover | **S** | `pnpm ablation` | Structural — there is no transition code path |
@@ -1827,13 +1828,21 @@ Every claim this project makes, and exactly what backs it.
 | 8.03× compression | Measured | `graphCodec` tests | Real OSM extracts |
 | 3.5 MB per 100 km | Measured | Cell planning | Real Overpass responses |
 | APK 7.43 MB | Measured | Clean Gradle build | |
-| 1,681 tests | Measured | `pnpm test` | |
+| 1,773 tests | Measured | `pnpm test` | |
 | Zero deps in `nav-core` | Enforced | `pnpm lint:core-purity` | |
 
-**What we have never measured:** a drive with our own phone, in our own vehicle,
-through a real tunnel, against surveyed ground truth. That is Tier F, it does not
-exist, and `data/replay/README.md` says so. **Every number above should be read
-as an upper bound on the estimator, not an estimate of the product.**
+**Tier F now exists**, and it changed the answer. The app records its own raw
+sensor stream (Events → *Record ride*), so a ride produces a `drive_*.jsonl`
+that the same harness scores. The first one measured **39.9 %** where the
+simulator said 7.4 % — the published figure was describing a simulator.
+
+Four guards were added or restored on its evidence, all of which cost simulated
+drift: §24.15. **When Tier S and Tier F disagree, Tier F wins**, and it has now
+disagreed and won three times.
+
+**What we still have never measured:** a drive against *surveyed* ground truth.
+Tier F's truth is the handset's own GNSS, which is good to a few metres and not
+to centimetres. Every number here remains an upper bound on the estimator.
 
 Saying this out loud is not modesty. It is the only thing that makes the numbers
 we *do* publish worth anything.
@@ -2332,6 +2341,109 @@ it freezes one.
 
 **Tier R: 30.9 % → 28.9 % mean, p90 70.5 % → 60.4 %, worst 73.0 % → 62.9 %.**
 
+## 24.15 Tier F arrived and overruled the simulator three times
+
+**§22 has said since it was written** that a drive with our own phone, in our own
+vehicle, does not exist. The blocker was never the harness — `pnpm eval:record`
+runs on a laptop and nobody rides with one. The app records its own raw stream
+now (`lib/sensorRecorder.ts`), so a ride produces a `drive_*.jsonl` that
+`tierOf()` classifies Tier F and every existing tool reads.
+
+**First ride: 5.5 minutes, 42,032 samples at 127 Hz, 276 fixes** — and a
+magnetometer on every sample, which the replay corpus has never had, so every
+heading finding to date was made without one.
+
+**It measured 39.9 % where the simulator says 15.3 % and IO-VNBD says 29.7 %.**
+
+### What it found
+
+**The stationary latch never opened outwards.** A window beginning at a red light
+latched `STATIONARY` and held it for 60 s while the vehicle drove 216 m; the
+estimate advanced 15. §24.14's latch was written one-way for VEHICLE and the
+reverse was never written. `isStationary` going false is the same class of
+evidence as it going true.
+
+**The road-class clamp never fired once.** It declined whenever any plausible
+neighbour was a class the table has no opinion about — and the Jabalpur extract
+carries 987 service ways among 9,462, so in a city there is always one inside
+the trust radius. `ceil` read nothing while the estimate ran 18 → 68 km/h and
+drew 946 m over a 304 m stretch. The matched way keeps its veto; a neighbour is
+a possibility, not a belief.
+
+**The trust gate treated no evidence as a pass.** This ride's outage began 20 s
+in, with the vehicle stopped until then, so no pair had cleared `minSpeedMps` —
+and the model asserted 92 km/h on a scooter, unchecked. A model withheld costs
+the chain its best inference; a model admitted without evidence costs an outage.
+
+**And the ML window buffer was aliasing.** It decimates 127 Hz to 10 Hz by
+dropping samples, with no filter. A four-stroke single fires at 12.5–25 Hz and
+road noise runs to 60; all of it folds into the 0–5 Hz band the model reads as
+speed. IO-VNBD logged at 10 Hz *natively*, so the network only ever saw a
+properly band-limited signal. Fixed with the Butterworth the estimator already
+uses, configured from the measured input rate so a 10 Hz replay is untouched.
+
+### The bill
+
+| config | **Tier F** | Tier S | Tier R |
+|---|---|---|---|
+| before | 52.6 % | **7.4 %** | 28.9 % |
+| + speed ceiling | 46.3 % | 15.3 % | 30.1 % |
+| + trust gate needs evidence | 48.6 % | 8.1 % | — |
+| **both, shipped** | **39.9 %** | 15.3 % | 29.7 % |
+
+Tier S doubles. The standing rule is that the real tier wins, and the most real
+one available is our own phone on our own roads.
+
+## 24.16 Three Phase 2 ideas that did not survive contact
+
+Kept with their numbers, because a negative result is worth more on the record
+than in a commit message.
+
+**Fixed-lag Viterbi (§2.3).** `viterbi` had built a backpointer array on every
+call since it was written and read only the final column — a filtering matcher
+wearing a trellis. Walking it back is correct and is now implemented, with
+identity lagging and position live so the marker cannot be dragged backwards.
+Tier F: lag 0 → 39.9 %, lag 3 → 40.0 %, lag 5 → 39.9 %, lag 8 → 42.9 %, lag 12
+→ 43.1 %. Neutral at best. Ships at 0. This ride has few junctions taken during
+an outage, which is exactly the case it exists for.
+
+**Spectral stationarity (§2.6).** The premise was that variance cannot separate
+a running two-wheeler at rest from a moving one, and spectral shape can.
+Measured, it is the other way round:
+
+| | stopped p50 | moving p50 |
+|---|---|---|
+| peak-bin / in-band power | 0.184 | 0.263 |
+| variance of accel magnitude | 0.302 | 5.427 |
+
+The spectral ratio overlaps almost completely. Variance separates by eighteen
+times. No FFT was added. What the same measurement *did* find is why §24.10's
+adaptive gate never engaged: it was built from the stopped **p90** (4.343),
+which is above the moving p05 (1.002), so the separation guard refused it every
+time. Built from the p50 instead, the gate lands at 0.45 inside a clean gap.
+
+**M1's uncertainty head (§2.2).** A log-variance output under Gaussian NLL, so
+the filter can down-weight instead of the gate suppressing. Built and trained —
+MAE 2.828 against the shipped 2.758, so the mean is unharmed. Then the
+acceptance test §2.2 itself names:
+
+| sigma, m/s | p10 | p50 | p90 |
+|---|---|---|---|
+| car (IO-VNBD test) | 3.45 | 4.49 | 5.55 |
+| two-wheeler (Tier F) | 3.79 | 4.78 | 5.58 |
+
+**1.06×.** And on those same windows the head's mean reads 15.8 m/s on a ride
+doing about 5.5 — over-reading threefold, with its own uncertainty output
+unmoved.
+
+That gap is not a training problem. A Gaussian NLL head learns **aleatoric**
+uncertainty, the irreducible noise in data it was shown. A two-wheeler is
+**epistemic** — data it was never shown — and heteroscedastic heads are known to
+be confidently wrong out of distribution, which is exactly the regime this was
+meant to defend. Getting it would need an ensemble, MC dropout or an explicit
+density model, and none of those is thirty parameters. `mlSpeedTrustGate` stays
+the primary defence.
+
 ---
 
 # 25 · Build, deploy and workflows
@@ -2340,7 +2452,7 @@ it freezes one.
 
 ```bash
 pnpm install
-pnpm test                 # 1,681 tests
+pnpm test                 # 1,773 tests
 pnpm typecheck
 pnpm lint:core-purity     # nav-core must stay pure
 
@@ -2442,6 +2554,7 @@ addition rather than a refactor.
 | **20** | **Worldwide offline coverage** — codec, cell grid, LOD, prefetch, rolling re-anchor, eviction |
 | **21** | **Tier R** — IO-VNBD converted to a replay corpus; scoring on real sensors |
 | **22** | The speed-runaway fix; APK 7.41 MB |
+| **25** | Phase 1.5 and Phase 2: the pedestrian latch (§24.14), Tier F and the four things it found (§24.15), and three ideas measured and refused (§24.16) |
 | **24** | Phase 1 of the dead-reckoning brief: a road-class speed ceiling (§24.12), the HMM shipping, the ESKF measured and refused (§24.13), turns that admit when they never settled, and a marker that stops claiming a point |
 | **23** | The scooter build: the speed model checked against the receiver (§24.9), a stop detector that learns this vehicle (§24.10), and a bounded lean so a bad speed can no longer rewrite the heading (§24.11). `pnpm eval:heading` added, because none of it was visible in drift % |
 
@@ -2495,7 +2608,7 @@ needs a battery measurement we have not taken.
 
 ## 28.5 CI
 
-The repository has `keepalive.yml` and nothing that runs the 1,681 tests on push.
+The repository has `keepalive.yml` and nothing that runs the 1,773 tests on push.
 For a project whose entire credibility rests on those tests being green, that is
 a gap.
 
@@ -2523,7 +2636,7 @@ Every script in `package.json`.
 ## Quality gate
 | Command | Does |
 |---|---|
-| `pnpm test` | **1,681 tests** |
+| `pnpm test` | **1,773 tests** |
 | `pnpm test:watch` | `nav-core` in watch mode |
 | `pnpm typecheck` | Every package |
 | `pnpm lint:core-purity` | **Fails if `nav-core` gains an import or a dependency** |
@@ -2534,6 +2647,7 @@ Every script in `package.json`.
 | `pnpm eval` | A single run |
 | `pnpm ablation` | `docs/benchmarks.md` + `.csv` + `.json` + `ablation.svg` |
 | `pnpm eval:tier-r` | `docs/benchmarks-tier-r.md` — **real sensors** |
+| `pnpm eval:tier-f` | `docs/benchmarks-tier-f.md` — **our own phone**. The arbiter |
 | `pnpm eval:heading` | Heading error and speed bias per outage window (§24.11). `--fast` for a subset, `--set key=value` to override any engine config |
 | `pnpm eval:alignment` | `docs/alignment.md` |
 | `pnpm eval:offroad` | `docs/offroad.md` |
