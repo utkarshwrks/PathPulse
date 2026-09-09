@@ -192,13 +192,16 @@ describe('StationarityDetector learns this vehicle', () => {
   });
 
   it('is bounded however wide the measured gap is', () => {
+    // learnMaxRatio is a guard against a degenerate learned distribution, not
+    // the operative limit — see its note. What actually bounds the gate is
+    // learnSeparationFactor against the moving quantile.
     const d = new StationarityDetector();
     for (let i = 0; i < 150; i++) {
       d.observeLabelled(false, 5, 2);
       d.observeLabelled(true, 500, 200);
     }
-    expect(d.thresholds.accelVariance).toBeLessThanOrEqual(0.015 * 8);
-    expect(d.thresholds.gyroMean).toBeLessThanOrEqual(0.02 * 8);
+    expect(d.thresholds.accelVariance).toBeLessThanOrEqual(0.015 * 64);
+    expect(d.thresholds.gyroMean).toBeLessThanOrEqual(0.02 * 64);
   });
 
   it('only ever raises the gate, never tightens it', () => {
@@ -219,5 +222,95 @@ describe('StationarityDetector learns this vehicle', () => {
     }
     expect(d.thresholds.learned).toBe(false);
     expect(d.thresholds.accelVariance).toBe(0.015);
+  });
+});
+
+/**
+ * ★ THE FIRST TIER F RIDE, AS THE DISTRIBUTIONS IT ACTUALLY MEASURED ★
+ *
+ * A two-wheeler in Jabalpur with the engine running at every stop. Variance of
+ * accelerometer magnitude over 256-sample windows, labelled by the nearest fix:
+ *
+ *   stopped   p50 0.302   p75 1.378   p90 4.343
+ *   moving    p05 1.002   p10 1.076   p25 1.831
+ *
+ * Two findings live in those two rows, and the second one killed a hypothesis.
+ */
+describe('the learned gate, against real two-wheeler distributions', () => {
+  /** Draw a sample matching a measured quantile profile, deterministically. */
+  function fill(d: StationarityDetector, moving: boolean, quantiles: number[]) {
+    for (let i = 0; i < 150; i++) {
+      const v = quantiles[i % quantiles.length]!;
+      d.observeLabelled(moving, v, moving ? 0.06 : 0.002);
+    }
+  }
+  /**
+   * Ten equally-weighted values reproducing each class's measured quantile
+   * profile — so the p50 of the synthetic sample really is the p50 that was
+   * measured, rather than an artefact of how many values were listed.
+   */
+  const STOPPED = [0.038, 0.05, 0.08, 0.115, 0.2, 0.302, 0.7, 1.378, 3.0, 4.343];
+  const MOVING = [1.002, 1.3, 1.831, 3.0, 5.427, 8.0, 10.434, 13.0, 15.537, 17.96];
+
+  it('★ p90 of stopped sits above p05 of moving, which is why it declined forever', () => {
+    // 4.343 against 1.002. A gate built on the stopped p90 is above most of
+    // the moving distribution, so the separation guard correctly refused it —
+    // every time, on the one vehicle the mechanism was written for.
+    const d = new StationarityDetector({ learnStoppedQuantile: 0.9 });
+    fill(d, false, STOPPED);
+    fill(d, true, MOVING);
+    expect(d.thresholds.learned).toBe(false);
+  });
+
+  it('★ and p50 sits below it, which is a clean gap', () => {
+    const d = new StationarityDetector();
+    fill(d, false, STOPPED);
+    fill(d, true, MOVING);
+    expect(d.thresholds.learned).toBe(true);
+    // 0.302 * 1.5 = 0.45, under the 1.002 * 0.7 = 0.70 the moving side allows.
+    expect(d.thresholds.accelVariance).toBeGreaterThan(0.3);
+    expect(d.thresholds.accelVariance).toBeLessThan(0.7);
+  });
+
+  it('★ the gate reaches a value the old cap could not', () => {
+    // learnMaxRatio was 8, capping at 0.12 — and this vehicle's stopped median
+    // is 0.302, so the cap alone would have blocked it even with the quantile
+    // right. A number from nowhere was overruling one measured from the data.
+    const d = new StationarityDetector();
+    fill(d, false, STOPPED);
+    fill(d, true, MOVING);
+    expect(d.thresholds.accelVariance).toBeGreaterThan(0.015 * 8);
+  });
+
+  it('a stopped two-wheeler now reads as stopped', () => {
+    const d = new StationarityDetector();
+    fill(d, false, STOPPED);
+    fill(d, true, MOVING);
+    // The median stopped window: engine running, phone on the bars.
+    let last = d.evaluate();
+    for (let i = 0; i < 200; i++) {
+      const v = 0.55 * (i % 2 === 0 ? 1 : -1); // variance ~0.30
+      last = d.push(0, 0, 9.81 + v, 0.001, 0, 0);
+    }
+    expect(last.isStationary).toBe(true);
+  });
+
+  it('and a moving one still does not', () => {
+    const d = new StationarityDetector();
+    fill(d, false, STOPPED);
+    fill(d, true, MOVING);
+    let last = d.evaluate();
+    for (let i = 0; i < 200; i++) {
+      const v = 2.33 * (i % 2 === 0 ? 1 : -1); // variance ~5.4, the moving p50
+      last = d.push(0, 0, 9.81 + v, 0.06, 0, 0);
+    }
+    expect(last.isStationary).toBe(false);
+  });
+
+  it('still declines when a vehicle genuinely does not separate', () => {
+    const d = new StationarityDetector();
+    fill(d, false, [4, 5, 6]);
+    fill(d, true, [4.5, 5.5, 6.5]);
+    expect(d.thresholds.learned).toBe(false);
   });
 });

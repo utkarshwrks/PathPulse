@@ -49,8 +49,33 @@ export interface StationarityConfig {
   learnWindow: number;
   /** Samples of BOTH classes required before the learned gate is used. */
   learnMinObservations: number;
-  /** Headroom above the stopped p90, so an unseen idle still lands inside. */
+  /** Headroom above the stopped quantile, so an unseen idle still lands inside. */
   learnMargin: number;
+  /**
+   * Which quantile of the STOPPED distribution the gate is built from.
+   *
+   * ★ p90 WAS THE WRONG END, AND IT MADE THE MECHANISM DECLINE FOREVER ★
+   *
+   * Measured on the first Tier F ride, over 256-sample windows labelled by the
+   * nearest fix — a two-wheeler in Jabalpur, engine running at every stop:
+   *
+   *   stopped   p50 0.302   p75 1.378   p90 4.343
+   *   moving    p05 1.002   p10 1.076   p25 1.831
+   *
+   * Read the two middle columns together. The stopped p90 is 4.34 and the
+   * moving p05 is 1.00, so a gate built on p90 is ABOVE most of the moving
+   * distribution — `learnSeparationFactor` correctly refused it, every time,
+   * and the adaptive gate never engaged on the one vehicle it was written for.
+   *
+   * The stopped p50 is 0.302 against a moving p05 of 1.002. That is a clean
+   * gap, and a gate at 0.45 sits inside it. The cost of the lower quantile is
+   * that only about half of stopped windows clear it, so ZUPT arms at some
+   * stops rather than at all of them — which is the correct trade, because a
+   * missed stop forfeits a calibration and a false one zeroes a real velocity.
+   */
+  learnStoppedQuantile: number;
+  /** And which quantile of the MOVING distribution bounds it. See above. */
+  learnMovingQuantile: number;
   /**
    * The learned gate must sit this far below the moving p10.
    *
@@ -86,9 +111,23 @@ export const DEFAULT_STATIONARITY_CONFIG: StationarityConfig = {
   adaptive: true,
   learnWindow: 300,
   learnMinObservations: 100,
-  learnMargin: 1.6,
+  learnMargin: 1.5,
+  learnStoppedQuantile: 0.5,
+  learnMovingQuantile: 0.05,
   learnSeparationFactor: 0.7,
-  learnMaxRatio: 8,
+  // ★ THE REAL BOUND IS THE MOVING DISTRIBUTION, NOT A MULTIPLE OF A CONSTANT ★
+  //
+  // This was 8, which caps the gate at 0.12 — and the vehicle that needs it
+  // sits at 0.302 when stopped, so the cap alone would have blocked the gate
+  // even once the quantile was right. A number pulled from nowhere was
+  // overruling one measured from the data.
+  //
+  // It stays, high, as a guard against a degenerate learned distribution
+  // rather than as the operative limit. What actually decides is
+  // `learnSeparationFactor` against the moving quantile, which is a bound with
+  // an argument behind it: the gate may not rise into the range where this
+  // vehicle has been observed to move.
+  learnMaxRatio: 64,
 };
 
 export interface StationarityResult {
@@ -225,8 +264,10 @@ export class StationarityDetector {
     moving: readonly number[],
     configured: number,
   ): number | null {
-    const stoppedHigh = quantile(stopped, 0.9) * this.config.learnMargin;
-    const movingLow = quantile(moving, 0.1) * this.config.learnSeparationFactor;
+    const stoppedHigh =
+      quantile(stopped, this.config.learnStoppedQuantile) * this.config.learnMargin;
+    const movingLow =
+      quantile(moving, this.config.learnMovingQuantile) * this.config.learnSeparationFactor;
     if (!Number.isFinite(stoppedHigh) || !Number.isFinite(movingLow)) return null;
     // No gap on this vehicle: its idle is as loud as its cruise, and moving the
     // gate would buy a missed stop with a false one. Decline.
