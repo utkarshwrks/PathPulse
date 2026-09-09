@@ -121,6 +121,21 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--patience", type=int, default=10)
+    ap.add_argument(
+        "--heteroscedastic",
+        action="store_true",
+        help=(
+            "Predict log-variance alongside the mean, under Gaussian NLL. "
+            "Phase 2, 2.2 — a model that cannot be down-weighted is a model "
+            "that has to be right."
+        ),
+    )
+    ap.add_argument(
+        "--out",
+        type=str,
+        default="model.pt",
+        help="Filename under ml/results/, so a variance run does not overwrite the shipped one.",
+    )
     args = ap.parse_args()
 
     seed_everything(SEED)
@@ -137,13 +152,42 @@ def main() -> None:
     s_va, s_te = npz["s_val"], npz["s_test"]
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    model = SpeedCNN().to(device)
+    model = SpeedCNN(heteroscedastic=args.heteroscedastic).to(device)
     print(f"SpeedCNN {model.n_params} params on {device}")
     print(f"train {tuple(Xtr.shape)}  val {tuple(Xva.shape)}  test {tuple(Xte.shape)}\n")
 
     # Huber rather than MSE: a few windows sit right where the vehicle brakes
     # hard, and MSE would let those dominate the gradient.
-    loss_fn = nn.HuberLoss(delta=1.0)
+    huber = nn.HuberLoss(delta=1.0)
+
+    def gaussian_nll(out: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Negative log-likelihood of a Gaussian the model parameterises itself.
+
+        ★ THE LOSS THAT MAKES UNCERTAINTY MEAN SOMETHING ★
+
+            L = 0.5 * ( log_var + (y - mu)^2 / exp(log_var) )
+
+        The second term is a squared error the model may DIVIDE by its own
+        predicted variance, which is the whole mechanism: on a window it cannot
+        read, inflating the variance buys down the error term. The first term
+        is what stops it inflating everything — variance is only worth claiming
+        where it is genuinely earned.
+
+        Clamped, because the failure mode is degenerate rather than
+        approximate: a model that drives log_var to minus infinity on the
+        windows it happens to fit divides by zero and takes the gradient with
+        it. -6 is a sigma of 5 cm and 6 is 20 m/s, and nothing outside that is
+        a claim about road speed.
+        """
+        mu = out[:, 0]
+        log_var = out[:, 1].clamp(-6.0, 6.0)
+        return 0.5 * (log_var + (target - mu) ** 2 / log_var.exp()).mean()
+
+    def loss_fn(out: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return gaussian_nll(out, target) if args.heteroscedastic else huber(out, target)
+
+    def mean_of(out: torch.Tensor) -> torch.Tensor:
+        return out[:, 0] if args.heteroscedastic else out
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
@@ -170,8 +214,9 @@ def main() -> None:
 
         model.eval()
         with torch.no_grad():
-            val_pred = model(Xva.to(device)).cpu()
-            val_loss = loss_fn(val_pred, yva).item()
+            val_out = model(Xva.to(device)).cpu()
+            val_loss = loss_fn(val_out, yva).item()
+            val_pred = mean_of(val_out)
         sched.step()
 
         m = metrics(np.clip(val_pred.numpy(), 0, None), yva.numpy(), s_va)
@@ -211,8 +256,43 @@ def main() -> None:
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        te_cnn = model(Xte.to(device)).cpu().numpy()
+        te_out = model(Xte.to(device)).cpu().numpy()
+    te_cnn = te_out[:, 0] if args.heteroscedastic else te_out
     cnn_m = metrics(np.clip(te_cnn, 0, None), yte.numpy(), s_te)
+
+    # ★ IS THE UNCERTAINTY WORTH ANYTHING? ★
+    #
+    # A variance head that is merely present proves nothing. The claim it has
+    # to earn is that predicted sigma CORRELATES with actual error — that the
+    # windows it says it cannot read are the windows it gets wrong. Reported
+    # as the error on the most-confident and least-confident deciles: if they
+    # are the same number, the head has learned to emit a constant and
+    # shipping it is worse than the gate it replaces.
+    unc = None
+    if args.heteroscedastic:
+        sigma = np.exp(0.5 * np.clip(te_out[:, 1], -6.0, 6.0))
+        err = np.abs(np.clip(te_cnn, 0, None) - yte.numpy())
+        order = np.argsort(sigma)
+        d = max(1, len(order) // 10)
+        unc = {
+            "sigma_p10": float(np.quantile(sigma, 0.1)),
+            "sigma_p50": float(np.quantile(sigma, 0.5)),
+            "sigma_p90": float(np.quantile(sigma, 0.9)),
+            "mae_most_confident_decile": float(err[order[:d]].mean()),
+            "mae_least_confident_decile": float(err[order[-d:]].mean()),
+            "spearman_sigma_vs_error": float(
+                np.corrcoef(np.argsort(np.argsort(sigma)), np.argsort(np.argsort(err)))[0, 1]
+            ),
+        }
+        print(
+            f"\n  uncertainty head: sigma p10 {unc['sigma_p10']:.2f} "
+            f"p50 {unc['sigma_p50']:.2f} p90 {unc['sigma_p90']:.2f} m/s"
+        )
+        print(
+            f"  MAE on most-confident decile {unc['mae_most_confident_decile']:.3f} "
+            f"vs least-confident {unc['mae_least_confident_decile']:.3f} m/s "
+            f"(rank corr {unc['spearman_sigma_vs_error']:.3f})"
+        )
 
     # ── Baselines ────────────────────────────────────────────────────────────
     ridge = ridge_baseline()
@@ -236,14 +316,23 @@ def main() -> None:
             f"{m.get('drift30_signed_pct', float('nan')):>9.2f}"
         )
 
-    torch.save({"state_dict": model.state_dict(), "n_params": model.n_params}, RESULTS / "model.pt")
-    (RESULTS / "train_metrics.json").write_text(
+    torch.save(
+        {
+            "state_dict": model.state_dict(),
+            "n_params": model.n_params,
+            "heteroscedastic": args.heteroscedastic,
+        },
+        RESULTS / args.out,
+    )
+    (RESULTS / (args.out.replace(".pt", "_metrics.json"))).write_text(
         json.dumps(
             {
                 "epochs_run": len(history),
                 "best_val_drift30_pct": best_val,
                 "n_params": model.n_params,
                 "test": {"cnn": cnn_m, "ridge": ridge_m, "constant": const_m},
+                "heteroscedastic": args.heteroscedastic,
+                "uncertainty": unc,
                 "history": history,
             },
             indent=2,
@@ -266,8 +355,8 @@ def main() -> None:
     a2.set_xlabel("epoch"); a2.set_ylabel("validation MAE (m/s)")
     a2.set_title("Validation speed error"); a2.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(RESULTS / "training_curves.png", dpi=150)
-    print(f"\n✔ {RESULTS/'model.pt'}, training_curves.png, train_metrics.json")
+    fig.savefig(RESULTS / args.out.replace(".pt", "_curves.png"), dpi=150)
+    print(f"\n✔ {RESULTS/args.out}, curves and metrics beside it")
 
 
 if __name__ == "__main__":
