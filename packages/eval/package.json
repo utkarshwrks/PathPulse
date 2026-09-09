@@ -16,7 +16,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "tier-r": "tsx src/tierR.ts",
-    "trail": "tsx src/trailreport.ts"
+    "trail": "tsx src/trailreport.ts",
+    "heading": "tsx src/drdiag.ts"
   },
   "dependencies": {
     "@pathpulse/nav-core": "workspace:*",

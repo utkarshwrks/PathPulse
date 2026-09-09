@@ -235,3 +235,77 @@ describe('★ telling a bike from a car', () => {
     expect(d.state.samples).toBe(0);
   });
 });
+
+/**
+ * ★ THE COUPLING THAT TURNED A SPEED BUG INTO A HEADING BUG ★
+ *
+ * Field report, a scooter: "it is about the correct prediction in dead
+ * reckoning it goes anywhere ... it just do hit and trail."
+ *
+ * Lean is inferred from `sin(lean) = v * w / g`, which is LINEAR in v, and
+ * during an outage v is an estimate rather than a measurement. The correction
+ * then divides by cos(lean). So an over-read speed does not merely inflate
+ * distance — it rewrites the heading, which is the one quantity an outage has
+ * no other way to repair, and once the heading is past `maxHeadingMismatchDeg`
+ * map matching stops matching and the marker is released to wander.
+ */
+describe('a lean inferred from a speed we may not believe', () => {
+  /** The ride in the report: 30 km/h true, with the model reading 89 km/h. */
+  const TRUE_MPS = 8.3;
+  const OVERREAD_MPS = 24.7;
+  /** An ordinary corner, smoothed — not a pothole. */
+  const CORNER_RAD_S = 0.35;
+
+  it('★ an over-read speed used to double the rate of every corner', () => {
+    // Unbounded, which is what shipped: cos(61.8 deg) is 0.47.
+    const NO_CAP = Math.PI / 2;
+    const honest = leanCompensatedYawRate(TRUE_MPS, CORNER_RAD_S, NO_CAP);
+    const inflated = leanCompensatedYawRate(OVERREAD_MPS, CORNER_RAD_S, NO_CAP);
+    expect(honest / CORNER_RAD_S).toBeLessThan(1.1);
+    expect(inflated / CORNER_RAD_S).toBeGreaterThan(2);
+  });
+
+  it('★ and the bound holds it to what a road rider can actually produce', () => {
+    const inflated = leanCompensatedYawRate(OVERREAD_MPS, CORNER_RAD_S);
+    // 1 / cos(40 deg) = 1.305, and nothing above it however wrong the speed is.
+    expect(inflated / CORNER_RAD_S).toBeLessThanOrEqual(1.306);
+  });
+
+  it('costs a real lean nothing — every angle a rider uses is under the cap', () => {
+    // A scooter in traffic at 40 km/h taking a brisk corner leans about 20 deg.
+    for (const [v, w] of [
+      [8.3, 0.15],
+      [11.1, 0.25],
+      [13.9, 0.3],
+      [16.7, 0.2],
+    ] as const) {
+      expect(leanCompensatedYawRate(v, w)).toBeCloseTo(
+        leanCompensatedYawRate(v, w, Math.PI / 2),
+        9,
+      );
+    }
+  });
+
+  it('bounds the correction however absurd the inputs get', () => {
+    for (const v of [0, 5, 25, 40, 100, 1000]) {
+      for (const w of [0.05, 0.3, 0.6, 1.2, 3]) {
+        const r = leanCompensatedYawRate(v, w) / w;
+        expect(r).toBeGreaterThanOrEqual(0.999);
+        expect(r).toBeLessThanOrEqual(1.306);
+      }
+    }
+  });
+
+  it('★ the whole 40-to-84 degree band used to pass through, and does not now', () => {
+    // ★ A NUMERICAL GUARD IS NOT A PHYSICAL ONE ★ applyLeanCompensation refused
+    // only once cos fell below 0.1 — 84 degrees — so everything between 40 and
+    // 84 multiplied the yaw rate by 1.3 to 9.6. Nothing in that band is a lean.
+    // 20 m/s puts sin(lean) = v*w/g across the whole band without saturating:
+    // 0.32 rad/s is 41 degrees, 0.48 is 78.
+    const RATES = [0.32, 0.36, 0.42, 0.48];
+    const worst = Math.max(...RATES.map((w) => leanCompensatedYawRate(20, w, Math.PI / 2) / w));
+    expect(worst).toBeGreaterThan(2.5);
+    const bounded = Math.max(...RATES.map((w) => leanCompensatedYawRate(20, w) / w));
+    expect(bounded).toBeLessThanOrEqual(1.306);
+  });
+});

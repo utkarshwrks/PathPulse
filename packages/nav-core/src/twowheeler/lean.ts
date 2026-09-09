@@ -54,6 +54,46 @@
 import { GRAVITY_MPS2 } from '../alignment/gravity.js';
 
 /**
+ * The most a road-going two-wheeler leans, radians.
+ *
+ * ★ THE LEAN IS INFERRED FROM A SPEED WE MAY NOT BE ENTITLED TO BELIEVE ★
+ *
+ * `sin(lean) = v * w / g` is LINEAR IN v, and during an outage `v` is not
+ * measured — it is whatever the speed chain currently believes. So an error in
+ * the speed estimate is an error in the inferred lean, and because the
+ * correction is `1 / cos(lean)` that error is then applied to the heading,
+ * which is the one quantity an outage has no other way to fix.
+ *
+ * Worked on the field report's ride — a scooter at a true 8.3 m/s, with the
+ * speed model reading 24.7 (see `mlSpeedTrustGate`), taking an ordinary corner
+ * at a smoothed 0.35 rad/s:
+ *
+ *   speed used   sin(lean)   lean     correction
+ *     8.3 m/s      0.296     17.2°      1.05x     <- what the bike did
+ *    24.7 m/s      0.881     61.8°      2.11x     <- what the engine applied
+ *
+ * A 90-degree corner integrated as 190 degrees. The estimate then points down
+ * a road at right angles to the one the rider is on, which is past
+ * `maxHeadingMismatchDeg`, so map matching stops matching and the marker is
+ * released to wander. "it goes anywhere ... it just do hit and trail."
+ *
+ * The old bound was numerical rather than physical — `applyLeanCompensation`
+ * refused only once cos fell below 0.1, which is 84 degrees, and everything
+ * between 40 and 84 degrees passed through multiplying the yaw rate by 1.3 to
+ * 9.6. Nothing in that band is a lean. A rider on a public road, on a scooter,
+ * in traffic, does not exceed about 40 degrees — MotoGP is 60 and that is with
+ * slicks, a closed circuit and a knee on the floor.
+ *
+ * So an inference past 40 degrees is not a report about the bike; it is a
+ * report that one of the inputs is wrong. Clamping keeps the compensation
+ * intact for every lean a road rider actually produces — at 40 degrees the
+ * correction is still a full 1.31x — and bounds what a bad speed can do to the
+ * heading. Which is the right shape: the failure it prevents is unbounded, and
+ * the cost when it binds is that a corner is under-rotated by a few per cent.
+ */
+export const DEFAULT_MAX_LEAN_RAD = (40 * Math.PI) / 180;
+
+/**
  * Lean angle from speed and the MEASURED yaw rate, radians.
  *
  * Signed: positive means leaning right, matching a positive (clockwise) yaw
@@ -64,11 +104,20 @@ import { GRAVITY_MPS2 } from '../alignment/gravity.js';
  * solution when v*w exceeds g: that would be a lean past 90 degrees, which is
  * a crash rather than a corner. It happens transiently from noise at low speed,
  * and clamping is the honest answer — the bike is at its limit, not inverted.
+ *
+ * And it is bounded well before that by what a road rider does. See
+ * `DEFAULT_MAX_LEAN_RAD`.
  */
-export function leanAngleRad(speedMps: number, measuredYawRateRadPerSec: number): number {
+export function leanAngleRad(
+  speedMps: number,
+  measuredYawRateRadPerSec: number,
+  maxLeanRad: number = DEFAULT_MAX_LEAN_RAD,
+): number {
   if (!Number.isFinite(speedMps) || !Number.isFinite(measuredYawRateRadPerSec)) return 0;
   const s = (Math.max(0, speedMps) * measuredYawRateRadPerSec) / GRAVITY_MPS2;
-  return Math.asin(Math.max(-0.999, Math.min(0.999, s)));
+  const raw = Math.asin(Math.max(-0.999, Math.min(0.999, s)));
+  const cap = Number.isFinite(maxLeanRad) ? Math.abs(maxLeanRad) : DEFAULT_MAX_LEAN_RAD;
+  return Math.max(-cap, Math.min(cap, raw));
 }
 
 /**
@@ -93,10 +142,11 @@ export function leanAngleRad(speedMps: number, measuredYawRateRadPerSec: number)
 export function leanCompensatedYawRate(
   speedMps: number,
   measuredYawRateRadPerSec: number,
+  maxLeanRad: number = DEFAULT_MAX_LEAN_RAD,
 ): number {
   return applyLeanCompensation(
     measuredYawRateRadPerSec,
-    leanAngleRad(speedMps, measuredYawRateRadPerSec),
+    leanAngleRad(speedMps, measuredYawRateRadPerSec, maxLeanRad),
   );
 }
 

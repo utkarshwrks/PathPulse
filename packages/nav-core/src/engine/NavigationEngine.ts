@@ -486,6 +486,21 @@ export interface EngineConfig extends ConstraintFlags {
   /** How long one way must stay matched before it may correct the heading, ms. */
   roadHeadingAidMinStableMs: number;
 
+  /**
+   * The most a road-going two-wheeler is assumed to lean, degrees.
+   *
+   * ★ THE ONE PLACE A BAD SPEED CAN CORRUPT THE HEADING ★
+   *
+   * Lean is inferred from `sin(lean) = v * w / g`, and during an outage `v` is
+   * an estimate rather than a measurement. The correction is `1 / cos(lean)`,
+   * so an over-read speed inflates every corner — and the heading is the one
+   * quantity an outage cannot otherwise repair. See `DEFAULT_MAX_LEAN_RAD` for
+   * the worked field case: a scooter at a true 8.3 m/s with the model reading
+   * 24.7 turned a 90-degree corner into 190 degrees.
+   *
+   * 0 disables the bound and restores the numerical-only guard.
+   */
+  maxLeanDeg: number;
   /** Phase 14's matcher settings. A shape, not a switch — see residualConfig. */
   hmmConfig: Partial<HmmConfig>;
   /**
@@ -708,6 +723,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   maxHeadingGateDeg: 90,
   roadHeadingAidDegPerSec: 2,
   roadHeadingAidMinStableMs: 3_000,
+  maxLeanDeg: 40,
   eskf: false,
   autoAlign: true,
   useMlMotion: true,
@@ -1775,7 +1791,17 @@ export class NavigationEngine {
           // road noise cannot reach it.
           const aLean = Math.min(1, Math.max(0, dtMs / LEAN_TAU_MS));
           this.leanYawRateLp += aLean * (yawRate - this.leanYawRateLp);
-          this.lastLeanRad = leanAngleRad(this.dr.current.speedMps, this.leanYawRateLp);
+          // ★ AND THE LEAN IS BOUNDED BY WHAT A ROAD RIDER DOES ★ See
+          // `maxLeanDeg`. The speed this is inferred from is an estimate
+          // during an outage, and the correction divides by cos(lean), so an
+          // unbounded inference lets a speed error rewrite the heading.
+          this.lastLeanRad = leanAngleRad(
+            this.dr.current.speedMps,
+            this.leanYawRateLp,
+            this.config.maxLeanDeg > 0
+              ? (this.config.maxLeanDeg * Math.PI) / 180
+              : Math.PI / 2,
+          );
           // Everything downstream — the heading integration, the turn
           // detector, the ESKF, the particle filter — reads `yawRate`. There
           // is exactly one place to correct it, and this is it.

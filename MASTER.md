@@ -3,7 +3,7 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.22** · APK 7.50 MB · 1,656 tests · 60,224 lines
+**Build v0.23** · APK 7.42 MB · 1,681 tests · 60,224 lines
 **6.1 % mean drift on simulated logs · 30.9 % on real vehicle sensors**
 
 ---
@@ -683,7 +683,7 @@ are marked ⊘ and explained in §21.
 │  apps/web     │      │ edge-engine  │      │ packages/eval  │
 │  map · HUD    │      │ 200 Hz CLI   │      │ tiers S/R/F    │
 │  Capacitor    │      │ FOG/tactical │      │ ablation       │
-│  APK 7.50 MB  │      │ headless     │      │ 0 ms handover  │
+│  APK 7.42 MB  │      │ headless     │      │ 0 ms handover  │
 └───────────────┘      └──────────────┘      └────────────────┘
 ```
 
@@ -1738,7 +1738,7 @@ of raster tiles — a **43× reduction**.
 | | |
 |---|---|
 | **APK** | **7.50 MB** |
-| Tests | **1,656** passing |
+| Tests | **1,681** passing |
 | Source | **60,224 lines**, 98 test files |
 | `nav-core` runtime dependencies | **zero** |
 
@@ -1747,7 +1747,7 @@ of raster tiles — a **43× reduction**.
 
 # 20 · Tests
 
-**1,656 tests across 102 files.** `pnpm test` runs them; `pnpm typecheck` and
+**1,681 tests across 102 files.** `pnpm test` runs them; `pnpm typecheck` and
 `pnpm lint:core-purity` complete the gate.
 
 ## 20.1 What a test looks like here
@@ -1819,13 +1819,14 @@ Every claim this project makes, and exactly what backs it.
 | 6.9 % mean drift | **S** | `pnpm ablation` | Simulated sensors |
 | 30.9 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset** |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
+| 27° heading error over 60 s | **R** | `pnpm eval:heading` | Real vehicle sensors. The number drift % cannot see — see §24.11 |
 | 0 ms handover | **S** | `pnpm ablation` | Structural — there is no transition code path |
 | 7.1 % at 90° mount | **S** | `pnpm eval:alignment` | Simulated rotation of real logs |
 | 200 Hz on edge | Sim | `pnpm edge:bench` | ~83,000 Hz sustained; IMU rows are datasheet noise models, not hardware |
 | 8.03× compression | Measured | `graphCodec` tests | Real OSM extracts |
 | 3.5 MB per 100 km | Measured | Cell planning | Real Overpass responses |
-| APK 7.50 MB | Measured | Clean Gradle build | |
-| 1,656 tests | Measured | `pnpm test` | |
+| APK 7.42 MB | Measured | Clean Gradle build | |
+| 1,681 tests | Measured | `pnpm test` | |
 | Zero deps in `nav-core` | Enforced | `pnpm lint:core-purity` | |
 
 **What we have never measured:** a drive with our own phone, in our own vehicle,
@@ -2102,6 +2103,90 @@ at 8× the configured value however wide the measured gap is.
 enough that the learned gate never engages, which is the correct behaviour and
 also why this could not have been found without a field report.
 
+## 24.11 A bad speed rewrote the heading, through the lean
+
+**Symptom:** *"it is not just about speed it is about the correct prediction in
+dead reckoning it goes anywhere ... it just do hit and trail."* On a scooter the
+estimate did not merely run too far — it turned down streets the rider never
+took, zigzagged across a grid, and crossed a railway line.
+
+**How it was found:** by decomposing the Tier R error instead of reading the
+headline. Drift % hides this completely — road snapping keeps the marker on *a*
+road, so cross-track error stays small and the number looks respectable while
+the map looks wrong. Measured directly, **heading error averages 27 degrees over
+a 60 s outage**, and sampled against time it turns out not to be a steady drift
+at all: it is flat for long stretches and spikes at corners, to 27 and 46
+degrees, after which the estimate is on the wrong street.
+
+**Cause:** §18B infers the lean from
+
+    sin(lean) = v * w / g
+
+which is **linear in v** — and during an outage `v` is not measured, it is
+whatever the speed chain believes. The correction is `1 / cos(lean)`. So a speed
+error does not stay a speed error; it is multiplied into the heading, which is
+the one quantity an outage has no other way to repair. Worked on the ride from
+§24.9, taking an ordinary corner at a smoothed 0.35 rad/s:
+
+| speed used | sin(lean) | lean | correction |
+|---|---|---|---|
+| 8.3 m/s — what the bike did | 0.296 | 17.2° | 1.05× |
+| 24.7 m/s — what the model said | 0.881 | 61.8° | **2.11×** |
+
+**A 90-degree corner integrated as 190 degrees.** The heading is then past
+`maxHeadingMismatchDeg`, so map matching stops matching, the marker is released,
+and it wanders — which is the reported behaviour exactly, and it compounds every
+corner.
+
+**Fix:** bound the inferred lean at what a road-going two-wheeler actually does.
+The old guard was numerical rather than physical — `applyLeanCompensation`
+refused only once `cos` fell below 0.1, which is **84 degrees**, so the entire
+band from 40 to 84 passed through multiplying the yaw rate by 1.3 to 9.6. Nothing
+in that band is a lean; MotoGP is 60 degrees, with slicks and a closed circuit.
+An inference past 40 degrees is not a report about the bike, it is a report that
+an input is wrong.
+
+```ts
+export const DEFAULT_MAX_LEAN_RAD = (40 * Math.PI) / 180;
+```
+
+At the cap the correction is still a full 1.31×, so **every lean a road rider
+produces is unaffected** — the four ordinary corners in `twowheeler.test.ts`
+come out bit-for-bit identical. What changes is that no speed error, however
+large, can move the heading by more than 31 %.
+
+**Two negative results measured on the way, both kept:**
+
+`pnpm eval:heading --fast`, mean over eight 60 s outage windows:
+
+| tried | heading error over 60 s |
+|---|---|
+| **no road graph at all** | **26.1°** |
+| shipped | 27.3° |
+| stability gate on bearing, not way id | 28.3° |
+| HMM map matching (`hmmMatch`) | 31.4° |
+| road heading aid at 6 °/s | 33.0° |
+| road heading aid at 12 °/s | 39.9° |
+
+Read the top row first, because it is the uncomfortable one: **on this corpus
+the road graph does not improve the heading at all.** The gyro alone is
+marginally better than the gyro plus every map mechanism we have, and
+strengthening the road heading aid makes it monotonically worse. That is not a
+tuning result. It is a statement about road CHOICE — steering toward a road the
+matcher picked only helps if the matcher picked the right road, and four
+configurations agree that it often does not.
+
+Two things this does **not** say. It does not say snapping is worthless: it is
+worth 14.6 % → 6.1 % of drift and 15.7 m → 0.3 m of distance-to-road (§20), and
+none of that is heading. And it does not settle the HMM, because these logs are
+motorway and arterial car drives — they contain none of the parallel
+carriageways, dense grids and flyovers the HMM exists for, which are exactly
+what the field report is riding through. `hmmMatch` stays off and stays a
+toggle; what it needs is Tier F, not another run on this corpus.
+
+The bounded lean is therefore the whole of the fix that could be validated
+here. The rest of the heading budget is an open item — §28.2.
+
 ---
 
 # 25 · Build, deploy and workflows
@@ -2110,7 +2195,7 @@ also why this could not have been found without a field report.
 
 ```bash
 pnpm install
-pnpm test                 # 1,656 tests
+pnpm test                 # 1,681 tests
 pnpm typecheck
 pnpm lint:core-purity     # nav-core must stay pure
 
@@ -2212,6 +2297,7 @@ addition rather than a refactor.
 | **20** | **Worldwide offline coverage** — codec, cell grid, LOD, prefetch, rolling re-anchor, eviction |
 | **21** | **Tier R** — IO-VNBD converted to a replay corpus; scoring on real sensors |
 | **22** | The speed-runaway fix; APK 7.41 MB |
+| **23** | The scooter build: the speed model checked against the receiver (§24.9), a stop detector that learns this vehicle (§24.10), and a bounded lean so a bad speed can no longer rewrite the heading (§24.11). `pnpm eval:heading` added, because none of it was visible in drift % |
 
 Two entries are worth pointing at:
 
@@ -2263,7 +2349,7 @@ needs a battery measurement we have not taken.
 
 ## 28.5 CI
 
-The repository has `keepalive.yml` and nothing that runs the 1,656 tests on push.
+The repository has `keepalive.yml` and nothing that runs the 1,681 tests on push.
 For a project whose entire credibility rests on those tests being green, that is
 a gap.
 
@@ -2291,7 +2377,7 @@ Every script in `package.json`.
 ## Quality gate
 | Command | Does |
 |---|---|
-| `pnpm test` | **1,656 tests** |
+| `pnpm test` | **1,681 tests** |
 | `pnpm test:watch` | `nav-core` in watch mode |
 | `pnpm typecheck` | Every package |
 | `pnpm lint:core-purity` | **Fails if `nav-core` gains an import or a dependency** |
@@ -2302,6 +2388,7 @@ Every script in `package.json`.
 | `pnpm eval` | A single run |
 | `pnpm ablation` | `docs/benchmarks.md` + `.csv` + `.json` + `ablation.svg` |
 | `pnpm eval:tier-r` | `docs/benchmarks-tier-r.md` — **real sensors** |
+| `pnpm eval:heading` | Heading error and speed bias per outage window (§24.11). `--fast` for a subset, `--set key=value` to override any engine config |
 | `pnpm eval:alignment` | `docs/alignment.md` |
 | `pnpm eval:offroad` | `docs/offroad.md` |
 | `pnpm eval:drift-dataset` | Drift training data |
