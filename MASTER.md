@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.24** · APK 7.43 MB · 1,681 tests · 60,224 lines
-**7.4 % mean drift on simulated logs · 29.1 % on real vehicle sensors**
+**Build v0.25** · APK 7.43 MB · 1,681 tests · 60,224 lines
+**7.4 % mean drift on simulated logs · 28.9 % on real vehicle sensors**
 
 ---
 
@@ -1818,7 +1818,7 @@ Every claim this project makes, and exactly what backs it.
 | Claim | Tier | Backing | Caveat |
 |---|---|---|---|
 | 7.4 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
-| 29.1 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
+| 28.9 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
 | 27° heading error over 60 s | **R** | `pnpm eval:heading` | Real vehicle sensors. The number drift % cannot see — see §24.11 |
 | 0 ms handover | **S** | `pnpm ablation` | Structural — there is no transition code path |
@@ -2276,6 +2276,61 @@ filter's own accumulated vertical drift, weighted three times looser than
 horizontal and folded into the same chi-squared as the fix we cared about. Two
 dimensions now. Worth 652 → 626 re-seeds on its own — which is also how we know
 it was not the main cause.
+
+## 24.14 A mounted vehicle became a pedestrian, and the estimate froze
+
+**Symptom, introduced by Phase 1.** Field video, a rigidly mounted handset on a
+vehicle in city traffic:
+
+```
+DEAD RECKONING  [ON FOOT]   0 km/h  [STEPS]   drift est 8.4 m
+distance 704 m -> 707 m -> 708 m       no gnss 40.4 s
+```
+
+The estimate advanced 23 m while the vehicle covered 174 m. Recovery error went
+from **4.58 % to 20.74 %**.
+
+**Not what it looked like.** The brief diagnosed the classifier consuming the
+estimator's own speed. It does not — `gnssSpeedMps` is real Doppler. The bug is
+born *before* the outage: at 01:21 in the video, with GNSS healthy, the badge
+already read `ON FOOT` at 5 km/h.
+
+All three PEDESTRIAN conditions were satisfied and none was wrong alone. A
+scooter over broken surface breaches `pedestrianVarianceThreshold`. Potholes,
+speed bumps and engine harmonics land inside `StepDetector`'s 0.6–3.5 Hz band,
+so a cadence is reported. Crawling at 1.4 m/s is inside
+`pedestrianMaxSpeedMps`. That verdict went into `gnssBacked`, and the outage
+branch held it for the whole outage. A mounted phone has no cadence, so
+`speedMps(0)` is 0, so the marker stopped.
+
+**Phase 1 did not create this.** It was masked: the ML model was over-reading at
+60–90 km/h, which held the speed above the pedestrian ceiling. The road-class
+clamp brought speed down through it and the latch fired. Fixing one bug exposed
+the other.
+
+**The fix that did not work, and why it matters.** A five-second confirm before
+a vehicle may become a pedestrian. A mounted handset on a bad road produces
+that signal *continuously* — twenty seconds of crawling outlasts a five-second
+timer, a sixty-second one, and any timer at all. **Variance and cadence cannot
+separate these cases; from the IMU alone they are the same signal.**
+
+**What can separate them is a measurement.** A person walking at 1.4 m/s was not
+doing 12 m/s a moment ago; a vehicle crawling at 1.4 m/s was. So
+`vehicleMemoryMs` remembers when GNSS last measured a speed no pedestrian
+reaches — evidence `vehicleSpeedMps` already treats as decisive — and a vehicle
+may not become a pedestrian within a minute of one. A rider who parks and walks
+away is recognised a minute later; a vehicle in traffic is never misread.
+
+The outage latch is now explicit, timestamped and on the Device screen. The
+brief asked for release on sustained cadence: that cannot work either, for the
+same reason, so **the only release is `isStationary`** — a raw-sensor decision
+that already arms ZUPT. And the step model is refused outright to any carrier
+GNSS last saw driving, because getting that wrong does not degrade an estimate,
+it freezes one.
+
+`test/pedestrian-latch.test.ts` is built from this video.
+
+**Tier R: 30.9 % → 28.9 % mean, p90 70.5 % → 60.4 %, worst 73.0 % → 62.9 %.**
 
 ---
 

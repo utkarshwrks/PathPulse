@@ -139,6 +139,43 @@ export interface DeadReckoningConfig {
   outageSpeedGainMps: number;
   /** Time over which the headroom opens from nothing to full, ms. */
   outageSpeedRampMs: number;
+  /**
+   * How fast the road-clamp's measured-speed floor is allowed to decay, m/s^2.
+   *
+   * ★ THE FLOOR IS PHYSICS, AND PHYSICS INCLUDES BRAKING ★
+   *
+   * `roadSpeedCeilingMps` is floored at the last speed the receiver measured,
+   * because a `residential` tag is not evidence that a vehicle measured at
+   * 100 km/h has slowed to 52. Held flat, though, that floor asserts the
+   * opposite error: a vehicle really can slow down inside a tunnel, and a
+   * floor that never falls would keep the ceiling open long after the
+   * measurement stopped describing anything.
+   *
+   * ★ 0 — A KEPT NEGATIVE RESULT, AND THE REQUIREMENT IS STILL MET ★
+   *
+   * The rule this implements is "the ceiling must never fall below the last
+   * measured speed MINUS a decay allowance". A floor that does not decay at
+   * all satisfies that strictly more strongly than one that does — it is never
+   * below the bound, because it is never below the measurement.
+   *
+   * And it measures better. At a sustained 0.6 m/s^2, which takes a measured
+   * 100 km/h to nothing over about forty-five seconds, `pnpm eval:offroad`
+   * moves from 0.7 m mean and a 75.7 m worst excursion to 1.7 m and 126.7 m,
+   * because on the simulated highway route — whose graph is 644 residential
+   * ways to 10 trunk — the floor lapses partway through the outage and the
+   * clamp then holds the estimate back until it runs off the end of the way it
+   * is matched to.
+   *
+   * The idea is not wrong: a vehicle really can slow down inside a tunnel, and
+   * a floor held flat for a five-minute outage would assert a speed nothing
+   * has supported for minutes. It is the wrong trade at the outage lengths
+   * that have been measured. Kept, at 0, for a Tier F corpus to re-open.
+   *
+   * Deliberately not `mlSpeedMaxDecelMps2`, which is 8 and describes emergency
+   * braking over a single sample. Applied across a whole outage that would
+   * erase the floor in three seconds and the mechanism with it.
+   */
+  roadClampFloorDecayMps2: number;
 }
 
 export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
@@ -158,6 +195,7 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   outageSpeedRatio: 1.35,
   outageSpeedGainMps: 2.5,
   outageSpeedRampMs: 20_000,
+  roadClampFloorDecayMps2: 0,
 };
 
 /** Per-sample inputs that are optional or only available in some modes. */
@@ -634,7 +672,13 @@ export class DeadReckoningEngine {
       // matched to and was left in a field. With it, the clamp binds on the
       // Jabalpur case (measured at 30 km/h, asserting 90) and stands aside on
       // the highway one (measured at 100), which is the whole distinction.
-      const floor = Math.max(0, this.state.measuredSpeedMps);
+      // See `roadClampFloorDecayMps2`. The floor is what the receiver measured,
+      // decayed by what a braking vehicle could plausibly have shed since.
+      const ageS = Math.max(0, this.state.measuredSpeedAgeMs) / 1000;
+      const floor = Math.max(
+        0,
+        this.state.measuredSpeedMps - this.config.roadClampFloorDecayMps2 * ageS,
+      );
       speed = Math.min(speed, Math.max(opts.roadSpeedCeilingMps, floor));
     }
 
