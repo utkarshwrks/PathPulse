@@ -98,6 +98,7 @@ describe('describeTurn', () => {
     durationMs: 4000,
     fromHeadingDeg: 0,
     toHeadingDeg: 90,
+    settled: true,
   };
 
   it('reads the way a driver would say it', () => {
@@ -352,5 +353,69 @@ describe('NavigationEngine — turns reach the event log', () => {
     const { states, events } = drive(Array<number>(500).fill(0));
     expect(states[states.length - 1]!.lastTurn).toBeUndefined();
     expect(events.filter((e) => e.type === 'TURN')).toHaveLength(0);
+  });
+});
+
+/**
+ * ★ THE FROZEN `U-TURN 287°` ★
+ *
+ * Every dead-reckoning screenshot from the Jabalpur ride showed the same
+ * `last turn — U-TURN 287° @ 1226:47` while the heading moved through 158,
+ * 150, 147, 189, 194. The first hypothesis was that the detector is gated off
+ * during DEAD_RECKONING; measured on the Tier R replays, it is not — it fires
+ * two to five times per 60 s outage, tracking the real corners.
+ *
+ * What it was is this: a rotation that never settles, runs to maxDurationMs,
+ * accumulates thirty seconds of noise, and is classified as a manoeuvre nobody
+ * made. It then reopens, so the HUD updates once every thirty seconds and
+ * always with nonsense.
+ */
+describe('a rotation that never settles is not a turn', () => {
+  const DT = 20;
+
+  /**
+   * Continuous rotation with no straight section, which is what an amplified
+   * yaw rate looks like. Fast enough to breach `triggerDeg` in `windowMs`.
+   */
+  function neverSettles(d: TurnDetector, degPerSec: number, ms: number) {
+    const events: TurnEvent[] = [];
+    let heading = 0;
+    for (let t = DT; t <= ms; t += DT) {
+      heading += (degPerSec * DT) / 1000;
+      const e = d.update(t, (degPerSec * Math.PI) / 180, DT, 12, heading);
+      if (e) events.push(e);
+    }
+    return events;
+  }
+
+  it('★ is reported, but marked unsettled rather than as a U-turn a rider made', () => {
+    const d = new TurnDetector({ maxDurationMs: 20_000 });
+    // 15 deg/s breaches the 40-degree trigger inside the 3 s sweep, then never
+    // straightens: 20 seconds later it is force-closed at 300 degrees.
+    const events = neverSettles(d, 15, 21_000);
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const forced = events.find((e) => !e.settled);
+    expect(forced).toBeDefined();
+    expect(Math.abs(forced!.deltaDeg)).toBeGreaterThan(250);
+    expect(d.forcedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a turn the vehicle actually came out of is settled', () => {
+    const d = new TurnDetector();
+    const a = straight(d, 2, 0);
+    const b = turn(d, 90, 4, a.t);
+    const c = straight(d, 3, b.t, b.headingDeg);
+    const done = [...b.events, ...c.events];
+    expect(done.length).toBeGreaterThanOrEqual(1);
+    expect(done.every((e) => e.settled)).toBe(true);
+    expect(d.forcedCount).toBe(0);
+  });
+
+  it('the forced count resets with the detector', () => {
+    const d = new TurnDetector({ maxDurationMs: 20_000 });
+    neverSettles(d, 15, 21_000);
+    expect(d.forcedCount).toBeGreaterThan(0);
+    d.reset();
+    expect(d.forcedCount).toBe(0);
   });
 });

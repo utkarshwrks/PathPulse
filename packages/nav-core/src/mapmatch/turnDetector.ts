@@ -38,6 +38,30 @@ export interface TurnEvent {
   /** Heading when the turn began and when it ended, degrees. */
   fromHeadingDeg: number;
   toHeadingDeg: number;
+  /**
+   * True when the vehicle actually came out of the turn and went straight.
+   *
+   * ★ 287 DEGREES IS NOT A U-TURN, IT IS A DETECTOR THAT LOST THE PLOT ★
+   *
+   * Field ride: every dead-reckoning screenshot showed the same frozen
+   * `last turn — U-TURN 287° @ 1226:47` while the heading moved through 158,
+   * 150, 147, 189, 194. The rotation never settled below `straightDegPerSec`
+   * for `settleMs`, so it ran to `maxDurationMs`, accumulated thirty seconds
+   * of amplified gyro noise, and was force-closed and classified — as a
+   * manoeuvre no rider made. It then reopened immediately, so the HUD updated
+   * once every thirty seconds and always with nonsense.
+   *
+   * The underlying cause was the unbounded lean compensation multiplying the
+   * yaw rate by up to 9.6x (see `twowheeler/lean.ts`), and that is fixed. But
+   * a force-close is a statement that the detector could not find the end of
+   * the turn, and it should not be reported identically to one that ended
+   * where the vehicle straightened up. A roundabout or a spiral ramp is a real
+   * rotation and still reported; it is simply reported as unsettled.
+   *
+   * Phase 17's relocaliser reads turns as a location fingerprint, and a
+   * fingerprint built from a rotation nobody made is worse than none.
+   */
+  settled: boolean;
 }
 
 export interface TurnDetectorConfig {
@@ -133,6 +157,7 @@ export class TurnDetector {
   private straightSinceMs: number | null = null;
   private lastTurn: TurnEvent | null = null;
   private turnCount = 0;
+  private forcedTurns = 0;
 
   constructor(config: Partial<TurnDetectorConfig> = {}) {
     this.config = { ...DEFAULT_TURN_CONFIG, ...config };
@@ -144,6 +169,18 @@ export class TurnDetector {
 
   get count(): number {
     return this.turnCount;
+  }
+
+  /**
+   * Turns that ran to `maxDurationMs` without the vehicle straightening up.
+   *
+   * Exposed because a rising count is the signature of a yaw rate that is too
+   * noisy to detect turns from at all — see `TurnEvent.settled`. On the
+   * roadside that is the difference between "no turns here" and "the detector
+   * is broken", and they look identical without it.
+   */
+  get forcedCount(): number {
+    return this.forcedTurns;
   }
 
   /** True while a turn is in progress, for the HUD's live indicator. */
@@ -211,7 +248,7 @@ export class TurnDetector {
     if (Math.abs(rateDegPerSec) < this.config.straightDegPerSec) {
       if (this.straightSinceMs === null) this.straightSinceMs = tMs;
       if (tMs - this.straightSinceMs >= this.config.settleMs) {
-        return this.close(tMs, headingDeg);
+        return this.close(tMs, headingDeg, true);
       }
     } else {
       this.straightSinceMs = null;
@@ -220,13 +257,13 @@ export class TurnDetector {
     // A rotation that never settles is a roundabout, a spiral ramp, or a bad
     // gyro. Close it rather than accumulating for ever.
     if (tMs - this.turnStartedAtMs >= this.config.maxDurationMs) {
-      return this.close(tMs, headingDeg);
+      return this.close(tMs, headingDeg, false);
     }
 
     return null;
   }
 
-  private close(tMs: number, headingDeg: number): TurnEvent | null {
+  private close(tMs: number, headingDeg: number, settled: boolean): TurnEvent | null {
     const total = this.turnTotalDeg;
     const startedAtMs = this.turnStartedAtMs;
     const fromHeadingDeg = this.turnStartHeadingDeg;
@@ -250,9 +287,11 @@ export class TurnDetector {
       // bearing; it is a bug that reads as one.
       fromHeadingDeg: normalizeAngle360(fromHeadingDeg),
       toHeadingDeg: normalizeAngle360(headingDeg),
+      settled,
     };
     this.lastTurn = event;
     this.turnCount++;
+    if (!settled) this.forcedTurns++;
     return event;
   }
 
@@ -265,5 +304,6 @@ export class TurnDetector {
     this.straightSinceMs = null;
     this.lastTurn = null;
     this.turnCount = 0;
+    this.forcedTurns = 0;
   }
 }

@@ -1141,6 +1141,14 @@ export class NavigationEngine {
      */
     roadSpeedCeilingMps: number | undefined;
     roadSpeedCeilingSource: RoadSpeedCeilingSource;
+    /**
+     * Turns that ran to `maxDurationMs` without the vehicle straightening up.
+     *
+     * A rising count is the signature of a yaw rate too noisy to detect turns
+     * from — the field's frozen `U-TURN 287°`. Without it, "no turns here" and
+     * "the detector is broken" look identical on the roadside.
+     */
+    forcedTurns: number;
     matchedRoadName: string | null;
     matchedRoadDistanceM: number | null;
     hasRoadGraph: boolean;
@@ -1243,6 +1251,7 @@ export class NavigationEngine {
       roadSnapAppliedFraction: this.roadSnapAppliedFraction,
       roadSpeedCeilingMps: this.roadSpeedCeilingMps,
       roadSpeedCeilingSource: this.roadSpeedCeilingSource,
+      forcedTurns: this.turns.forcedCount,
       matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
       matchedRoadDistanceM: this.lastMatch?.distanceM ?? null,
       hasRoadGraph: this.roadGraph !== null,

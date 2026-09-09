@@ -227,6 +227,7 @@ describe('★ turn relocalisation', () => {
     startedAtMs: 0,
     durationMs: 4000,
     kind: deltaDeg > 0 ? 'RIGHT_90' : 'LEFT_90',
+    settled: true,
     deltaDeg,
     fromHeadingDeg: 0,
     toHeadingDeg: deltaDeg,
