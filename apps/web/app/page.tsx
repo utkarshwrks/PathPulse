@@ -24,6 +24,7 @@ import DeviceInfo from '@/components/DeviceInfo';
 import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
 import { positionDisplay } from '@/lib/positionDisplay';
+import { contextWarning } from '@/lib/contextWarning';
 import TrailLayer from '@/components/TrailLayer';
 import MatchedRoadLayer from '@/components/MatchedRoadLayer';
 import OfflineBasemapLayer from '@/components/OfflineBasemapLayer';
@@ -442,6 +443,11 @@ export default function Home() {
             ? positionDisplay(shownPosition.alongM, shownPosition.crossM).notice
             : null
         }
+        contextWarning={contextWarning(
+          navState?.mode ?? null,
+          nav.diagnostics.motionContext,
+          nav.diagnostics.speedSource,
+        )}
         navState={navState}
         error={kind === 'live' ? live.error : null}
         mapSourceLabel={styleInfo.label}

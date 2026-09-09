@@ -22,6 +22,8 @@ import { DEFAULT_CONTROLS, type EngineDiagnostics } from '@/hooks/useNavigationE
 afterEach(cleanup);
 
 const DIAGNOSTICS: EngineDiagnostics = {
+  contextLatched: false,
+  contextLatchedAt: null,
   roadSpeedCeilingMps: 52 / 3.6,
   roadSpeedCeilingSource: 'class',
   motionState: 'BRAKING',

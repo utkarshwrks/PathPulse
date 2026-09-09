@@ -42,6 +42,17 @@ interface HudProps {
    * disagree about the threshold.
    */
   positionNotice?: string | null;
+  /**
+   * A warning when the engine is dead reckoning a vehicle it has decided is a
+   * pedestrian, or null.
+   *
+   * ★ THIS EXACT STATE IS A KNOWN FAILURE SIGNATURE ★ A rigidly mounted phone
+   * has no step cadence, so the pedestrian speed path resolves to zero and the
+   * estimate freezes — 704 m to 708 m across forty seconds while the vehicle
+   * covered 174 m. It is fixed, and it must still be visible on the roadside
+   * without a laptop if it ever comes back.
+   */
+  contextWarning?: string | null;
 }
 
 /**
@@ -113,6 +124,7 @@ export function nearestCorner(x: number, y: number, width: number, height: numbe
 export default function Hud({
   modeReason,
   positionNotice,
+  contextWarning,
   navState,
   updateHz,
   imuHz,
@@ -412,6 +424,14 @@ export default function Hud({
           the marker stops being a claim about a point.
           See lib/positionDisplay.ts for where the threshold comes from.
         */}
+        {contextWarning ? (
+          <div className="mt-2 rounded border border-red-500/40 bg-red-500/15 px-1.5 py-1 text-[10px] leading-snug text-red-200">
+            <span className="font-semibold uppercase tracking-wide">context looks wrong</span>
+            <br />
+            <span className="font-mono">{contextWarning}</span>
+          </div>
+        ) : null}
+
         {positionNotice ? (
           <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/15 px-1.5 py-1 text-[10px] leading-snug text-amber-200">
             <span className="font-mono">{positionNotice}</span>

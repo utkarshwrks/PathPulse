@@ -309,6 +309,21 @@ function SensorsTab({
           }
         />
         <Row k="CEILING FROM" v={diagnostics.roadSpeedCeilingSource} />
+        {/*
+          ★ THE LATCH, VISIBLE ★ The motion context is held at whatever it was
+          when GNSS was lost — nobody gets out of the car in a tunnel. It was
+          already being held implicitly, and implicitly is how one wrong
+          reading in slow traffic became the verdict for an entire outage with
+          nothing on screen to say so. See MotionContextDetector.latched.
+        */}
+        <Row
+          k="CONTEXT LATCH"
+          v={
+            diagnostics.contextLatched
+              ? `held ${diagnostics.motionContext.toLowerCase()}`
+              : 'open'
+          }
+        />
       </Group>
 
       {/*

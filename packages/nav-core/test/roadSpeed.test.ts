@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_ROAD_SPEED_RATCHET,
@@ -158,5 +159,63 @@ describe('RoadSpeedCeilingRatchet', () => {
     r.reset();
     expect(r.current.ceilingMps).toBeUndefined();
     expect(r.current.source).toBe('none');
+  });
+});
+
+/**
+ * ★ THE CLAMP IS OUTPUT-ONLY, AND THAT HAS TO BE CHECKED, NOT ASSERTED ★
+ *
+ * The standing rule is that nothing derived from the road graph may enter the
+ * estimator's belief, and the Phase 1 regression is the general form of why:
+ * anything that consumes the estimator's own output as an input to
+ * classification closes a loop with no sensor in it.
+ *
+ * A road-derived ceiling reaching the context classifier, the step detector or
+ * the stationarity detector would be a second route into exactly that loop —
+ * clamp lowers the speed, low speed looks like a pedestrian, pedestrian
+ * freezes the estimate, frozen estimate stays slow. So this is a structural
+ * test over the source, not a behavioural one: behaviour can pass by accident.
+ */
+describe('the road-class ceiling cannot reach anything upstream of classification', () => {
+  const read = (p: string) =>
+    readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
+
+  const FORBIDDEN = ['roadSpeedCeiling', 'roadSpeedClamp', 'roadMaxSpeedMps', 'maxspeed'];
+
+  it('the context classifier does not mention it', () => {
+    const src = read('motion/context.ts');
+    for (const name of FORBIDDEN) expect(src).not.toContain(name);
+  });
+
+  it('the step detector does not mention it', () => {
+    const src = read('motion/steps.ts');
+    for (const name of FORBIDDEN) expect(src).not.toContain(name);
+  });
+
+  it('the stationarity detector does not mention it', () => {
+    const src = read('filters/stationarity.ts');
+    for (const name of FORBIDDEN) expect(src).not.toContain(name);
+  });
+
+  it('★ nor does the classifier take the estimator\'s own speed, by any name', () => {
+    // The general form of the Phase 1 regression. The classifier's inputs are
+    // raw sensor statistics and GNSS Doppler; an estimator speed would close a
+    // loop with nothing measured in it.
+    const src = read('motion/context.ts');
+    for (const name of ['NavigationState', 'velocityMps', 'drSpeed', 'estimatedSpeed']) {
+      expect(src).not.toContain(name);
+    }
+  });
+
+  it('and the engine applies it only through PropagateOptions', () => {
+    // One consumer, one direction. If the ceiling is ever read anywhere else
+    // in the engine, this catches it.
+    const src = read('engine/NavigationEngine.ts');
+    const uses = src.split('this.roadSpeedCeilingMps').length - 1;
+    // The declaration, the two assignments in applyRoadSpeedCeiling, the reset,
+    // the propagate option and the diagnostics field. Nothing that feeds a
+    // filter, a classifier or a detector.
+    expect(uses).toBeLessThanOrEqual(8);
+    expect(src).toContain('roadSpeedCeilingMps: this.roadSpeedCeilingMps');
   });
 });

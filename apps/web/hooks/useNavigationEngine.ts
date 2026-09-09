@@ -104,6 +104,9 @@ export interface EngineDiagnostics {
   mlError: string | null;
   /** What the carrier is doing — a walk and a drive are not the same problem. */
   motionContext: MotionContext;
+  /** See MotionContextDetector.latched — the context held across an outage. */
+  contextLatched: boolean;
+  contextLatchedAt: number | null;
   motionReason: string;
   /** True while the vehicle-trained speed model is held back as out-of-domain. */
   mlSuppressed: boolean;
@@ -163,6 +166,8 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   mlLatencyMs: NaN,
   mlError: null,
   motionContext: 'UNKNOWN',
+  contextLatched: false,
+  contextLatchedAt: null,
   motionReason: 'no samples yet',
   mlSuppressed: false,
   gnssSpeedAgeMs: Number.POSITIVE_INFINITY,
