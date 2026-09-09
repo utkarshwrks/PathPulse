@@ -4,6 +4,7 @@ import {
   ROAD_CLASS_SPEED_KPH,
   RoadSpeedCeilingRatchet,
   roadSpeedCeiling,
+  type RoadSpeedCeilingSource,
 } from '../src/constraints/roadSpeed.js';
 
 const TOL = 1.3;
@@ -73,7 +74,11 @@ describe('RoadSpeedCeilingRatchet', () => {
   const none = { ceilingMps: undefined, source: 'none' as const };
 
   /** Offer the same ceiling until the hold expires, and return what is in force. */
-  function settle(r: RoadSpeedCeilingRatchet, from: number, offer: typeof slow) {
+  function settle(
+    r: RoadSpeedCeilingRatchet,
+    from: number,
+    offer: { ceilingMps: number; source: RoadSpeedCeilingSource },
+  ) {
     let held = r.update(from, offer);
     for (let t = from + 20; t <= from + HOLD + 20; t += 20) held = r.update(t, offer);
     return held;

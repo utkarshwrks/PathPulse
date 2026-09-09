@@ -291,6 +291,24 @@ function SensorsTab({
           k="COVERAGE"
           v={`${(diagnostics.roadSnapAppliedFraction * 100).toFixed(0)} %`}
         />
+        {/*
+          ★ THE CLAMP HAS TO BE VISIBLE FIRING ★ A ceiling that silently
+          truncates a speed looks exactly like an estimator that happens to
+          agree with it. The source matters as much as the number: `maxspeed`
+          is the way's own tag, `class` is the highway-class fallback that does
+          the work in India, and `none` means the map declined — because there
+          was no trusted match, or because a plausible neighbour was a class we
+          have no opinion about. See constraints/roadSpeed.ts.
+        */}
+        <Row
+          k="SPEED CEILING"
+          v={
+            diagnostics.roadSpeedCeilingMps === undefined
+              ? '—'
+              : `${(diagnostics.roadSpeedCeilingMps * 3.6).toFixed(0)} km/h`
+          }
+        />
+        <Row k="CEILING FROM" v={diagnostics.roadSpeedCeilingSource} />
       </Group>
 
       {/*

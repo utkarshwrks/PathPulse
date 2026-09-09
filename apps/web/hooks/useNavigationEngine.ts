@@ -83,6 +83,15 @@ export interface EngineDiagnostics {
   accelVariance: number;
   gyroMean: number;
   roadSnapAppliedFraction: number;
+  /**
+   * The road-derived speed ceiling in force, and where it came from.
+   *
+   * Rendered on the Device screen because a clamp that cannot be seen firing
+   * is indistinguishable from an estimator that happens to agree with it, and
+   * the difference is what a rider standing beside a road needs to know.
+   */
+  roadSpeedCeilingMps: number | undefined;
+  roadSpeedCeilingSource: 'maxspeed' | 'class' | 'none';
   matchedRoadName: string | null;
   matchedRoadDistanceM: number | null;
   hasRoadGraph: boolean;
@@ -143,6 +152,8 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   accelVariance: NaN,
   gyroMean: NaN,
   roadSnapAppliedFraction: 0,
+  roadSpeedCeilingMps: undefined,
+  roadSpeedCeilingSource: 'none',
   matchedRoadName: null,
   matchedRoadDistanceM: null,
   hasRoadGraph: false,
