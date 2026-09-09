@@ -600,3 +600,87 @@ describe('the speed model is checked against the receiver that can check it', ()
     expect(Math.max(...speeds) * 3.6).toBeGreaterThan(80);
   });
 });
+
+/**
+ * ★ DROPPING SAMPLES IS NOT SAMPLING, IT IS ALIASING ★
+ *
+ * `SpeedWindowBuffer` decimates by keeping one sample every 100 ms. On the
+ * handset that is one in thirteen — the IMU arrives at about 127 Hz — and
+ * taking every thirteenth sample of a signal with energy above 5 Hz does not
+ * remove that energy. It FOLDS it into the 0-5 Hz band, where it is
+ * arithmetically indistinguishable from real vehicle acceleration.
+ *
+ * A four-stroke single at 1500-3000 rpm fires at 12.5-25 Hz. Chain, road and
+ * suspension noise runs to 60. All of it lands inside the band the model reads
+ * as speed, so the louder the vehicle the faster the model thinks it is going
+ * — which no amount of retraining could fix, because the fault is in the
+ * signal rather than in the weights.
+ */
+describe('the speed model is fed a band-limited signal', () => {
+  const MEAN12 = new Array(12).fill(0);
+  const STD12 = new Array(12).fill(1);
+
+  /** A pure tone at `hz`, sampled at `rateHz`, pushed through the buffer. */
+  function toneWindow(hz: number, rateHz: number, antiAlias: boolean): Float32Array | null {
+    const b = new SpeedWindowBuffer(ML_WINDOW_SAMPLES, false, antiAlias);
+    const dt = 1000 / rateHz;
+    // Long enough to fill a 6 s window at 10 Hz with margin.
+    for (let i = 0; i < rateHz * 12; i++) {
+      const t = i * dt;
+      const v = Math.sin((2 * Math.PI * hz * t) / 1000);
+      b.push(t, v, 0, 9.81, 0, 0, 0);
+    }
+    return b.buildWindow(MEAN12, STD12);
+  }
+
+  function amplitude(w: Float32Array | null, n = ML_WINDOW_SAMPLES): number {
+    if (!w) return 0;
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const v = w[i]!;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    return (max - min) / 2;
+  }
+
+  it('★ a 25 Hz tone folds straight into the band without the filter', () => {
+    // 25 Hz sampled at 10 Hz aliases to 5 Hz — engine firing frequency, read
+    // as vehicle dynamics.
+    const folded = amplitude(toneWindow(25, 127, false));
+    expect(folded).toBeGreaterThan(0.5);
+  });
+
+  it('★ and is removed by it', () => {
+    const filtered = amplitude(toneWindow(25, 127, true));
+    expect(filtered).toBeLessThan(0.1);
+  });
+
+  it('leaves real vehicle dynamics alone', () => {
+    // 1 Hz is braking and cornering — the signal the model is supposed to read.
+    const passed = amplitude(toneWindow(1, 127, true));
+    expect(passed).toBeGreaterThan(0.5);
+  });
+
+  it('★ stands down on a stream already at the target rate', () => {
+    // IO-VNBD logged its handset at 10 Hz natively, so the sensor's own
+    // anti-alias ran before that rate existed. Filtering it again removes real
+    // content and adds lag — measured as Tier R 31.3 % to 32.2 %.
+    const a = toneWindow(1, 10, true);
+    const b = toneWindow(1, 10, false);
+    expect(a).not.toBeNull();
+    for (let i = 0; i < ML_WINDOW_SAMPLES; i++) {
+      expect(a![i]!).toBeCloseTo(b![i]!, 6);
+    }
+  });
+
+  it('never emits a non-finite value, however hostile the input', () => {
+    const b = new SpeedWindowBuffer(ML_WINDOW_SAMPLES, false, true);
+    for (let i = 0; i < 2000; i++) {
+      b.push(i * 8, NaN, Infinity, 9.81, -Infinity, 0, NaN);
+    }
+    const w = b.buildWindow(MEAN12, STD12);
+    if (w) for (const v of w) expect(Number.isFinite(v)).toBe(true);
+  });
+});

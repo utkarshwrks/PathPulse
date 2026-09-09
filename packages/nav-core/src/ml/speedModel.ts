@@ -8,6 +8,8 @@
  * the Phase 16 edge engine.
  */
 
+import { LowPassFilter } from '../filters/lowpass.js';
+
 /**
  * Constants shared with the Python side. These are a CONTRACT: they must match
  * `ml/config.py` and the `scaler.json` shipped beside the weights, or the
@@ -338,6 +340,42 @@ export class MockSpeedPredictor implements SpeedPredictor {
  */
 export class SpeedWindowBuffer {
   private readonly buf: Float32Array;
+  /**
+   * One low-pass per channel, run at the INPUT rate, ahead of the decimation.
+   *
+   * ★ DROPPING SAMPLES IS NOT SAMPLING, IT IS ALIASING ★
+   *
+   * This class decimates by accepting one sample every 100 ms and discarding
+   * the rest. On the handset that is one in thirteen — the IMU arrives at
+   * about 127 Hz — and taking every thirteenth sample of a signal with energy
+   * above 5 Hz does not remove that energy. It FOLDS it, into the 0-5 Hz band,
+   * where it is arithmetically indistinguishable from real vehicle
+   * acceleration.
+   *
+   * A four-stroke single at 1500-3000 rpm fires at 12.5-25 Hz. Chain, road and
+   * suspension noise on an Indian road runs to 60. All of it lands inside the
+   * band the model reads as speed, and the louder the vehicle the faster the
+   * model thinks it is going — which is the field report, and which no amount
+   * of retraining could fix, because the fault is in the signal rather than in
+   * the weights.
+   *
+   * ★ AND IT IS NOT WHAT THE MODEL WAS TRAINED ON ★
+   *
+   * IO-VNBD logged its smartphone at 10 Hz NATIVELY. The sensor's own
+   * anti-alias filter ran before that rate was ever produced, so every
+   * training window is a properly band-limited 10 Hz signal. Ours was a
+   * decimated 127 Hz one. The two are not the same measurement and the network
+   * has only ever seen the first.
+   *
+   * 4 Hz against a 5 Hz Nyquist: below the fold, above everything a vehicle
+   * does. `LowPassFilter` is the same second-order Butterworth the estimator
+   * already uses on acceleration, and it is maximally flat in the passband —
+   * ripple here would distort the very dynamics the model reads.
+   */
+  private readonly antiAlias: LowPassFilter[] | null;
+  private lastInputT: number | null = null;
+  /** See the rate note in push(): only a stream above the target rate folds. */
+  private inputAboveTarget = false;
   private count = 0;
   private head = 0;
   private nextAcceptT: number | null = null;
@@ -364,8 +402,19 @@ export class SpeedWindowBuffer {
      * See `canonicaliseMountFrame`.
      */
     private readonly canonicaliseMount = false,
+    /**
+     * Band-limit each channel before decimating. See `antiAlias`.
+     *
+     * On by default because the alternative is aliasing, and off only for
+     * callers already handing over a signal at the target rate — a replay of a
+     * 10 Hz corpus filters nothing and gains nothing.
+     */
+    antiAlias = true,
   ) {
     this.buf = new Float32Array(windowSamples * ML_RAW_CHANNELS);
+    this.antiAlias = antiAlias
+      ? Array.from({ length: ML_RAW_CHANNELS }, () => new LowPassFilter(4, 100))
+      : null;
   }
 
   /** True when the sample was taken (i.e. it landed on the 10 Hz grid). */
@@ -393,6 +442,52 @@ export class SpeedWindowBuffer {
       this.nextAcceptT = null;
     }
     this.lastT = t;
+    // ★ THE FILTER RUNS ON EVERY SAMPLE, THE RING TAKES ONE IN THIRTEEN ★
+    // Filtering only the samples that are kept would filter nothing: the
+    // energy being removed is carried by the ones that are not.
+    let v0 = ax;
+    let v1 = ay;
+    let v2 = az;
+    let v3 = gx;
+    let v4 = gy;
+    let v5 = gz;
+    if (this.antiAlias) {
+      // The handset's rate wanders between 14 and 127 Hz, and a Butterworth
+      // designed for the wrong rate is not the filter it says it is — see
+      // LowPassFilter.setSampleRate.
+      if (this.lastInputT !== null) {
+        const dt = t - this.lastInputT;
+        if (dt > 0 && dt < 1000) {
+          const hz = 1000 / dt;
+          // ★ A SIGNAL ALREADY AT THE TARGET RATE MUST NOT BE FILTERED AGAIN ★
+          //
+          // IO-VNBD logged its handset at 10 Hz NATIVELY, so the sensor's own
+          // anti-alias ran before that rate existed and every training window
+          // is already band-limited. Filtering it a second time removes real
+          // content and adds lag rather than removing a fold, and it measures
+          // exactly that way: Tier R went 31.3 % to 32.2 % with the filter
+          // applied unconditionally.
+          //
+          // There is no fold to remove below twice the target rate, so below
+          // it the filter stands down. The handset arrives at about 127 Hz and
+          // is filtered; a replay of a 10 Hz corpus is passed through
+          // untouched. Self-configuring, because the rate is the only thing
+          // that decides and it is measured rather than assumed.
+          this.inputAboveTarget = hz > ML_SAMPLE_RATE_HZ * 2;
+          if (this.inputAboveTarget) for (const f of this.antiAlias) f.setSampleRate(hz);
+        }
+      }
+      const raw = [ax, ay, az, gx, gy, gz];
+      if (this.inputAboveTarget) {
+        const out: number[] = [];
+        for (let i = 0; i < ML_RAW_CHANNELS; i++) {
+          const x = raw[i]!;
+          out.push(this.antiAlias[i]!.push(Number.isFinite(x) ? x : 0));
+        }
+        [v0, v1, v2, v3, v4, v5] = out as [number, number, number, number, number, number];
+      }
+    }
+    this.lastInputT = t;
     if (this.nextAcceptT !== null && t < this.nextAcceptT) return false;
     // Re-base rather than accumulate: after a pause (a backgrounded tab, a
     // stalled sensor) advancing by one period at a time would accept a burst
@@ -400,7 +495,7 @@ export class SpeedWindowBuffer {
     // the wrong rate.
     this.nextAcceptT = t + this.periodMs;
 
-    const v = [ax, ay, az, gx, gy, gz];
+    const v = [v0, v1, v2, v3, v4, v5];
     for (let i = 0; i < ML_RAW_CHANNELS; i++) {
       const x = v[i]!;
       this.buf[this.head * ML_RAW_CHANNELS + i] = Number.isFinite(x) ? x : 0;
@@ -459,6 +554,9 @@ export class SpeedWindowBuffer {
     this.head = 0;
     this.nextAcceptT = null;
     this.lastT = null;
+    this.lastInputT = null;
+    this.inputAboveTarget = false;
+    if (this.antiAlias) for (const f of this.antiAlias) f.reset();
     this.buf.fill(0);
   }
 }
