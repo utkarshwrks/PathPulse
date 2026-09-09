@@ -23,6 +23,7 @@ import PermissionGate from '@/components/PermissionGate';
 import DeviceInfo from '@/components/DeviceInfo';
 import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
+import { positionDisplay } from '@/lib/positionDisplay';
 import TrailLayer from '@/components/TrailLayer';
 import MatchedRoadLayer from '@/components/MatchedRoadLayer';
 import OfflineBasemapLayer from '@/components/OfflineBasemapLayer';
@@ -426,6 +427,8 @@ export default function Home() {
             lon={shownPosition!.lon}
             headingDeg={navState?.headingDeg ?? 0}
             mode={navState?.mode ?? 'INITIALIZING'}
+            alongM={shownPosition!.alongM}
+            crossM={shownPosition!.crossM}
           />
         ) : null}
       </MapView>
@@ -434,6 +437,11 @@ export default function Home() {
       <Hud
         speedSource={nav.diagnostics.speedSource}
         modeReason={nav.diagnostics.modeReason}
+        positionNotice={
+          shownPosition
+            ? positionDisplay(shownPosition.alongM, shownPosition.crossM).notice
+            : null
+        }
         navState={navState}
         error={kind === 'live' ? live.error : null}
         mapSourceLabel={styleInfo.label}

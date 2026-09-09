@@ -34,6 +34,14 @@ interface HudProps {
    * as a contradiction without this.
    */
   modeReason?: string | null;
+  /**
+   * A line saying the position is no longer worth a point marker, or null.
+   *
+   * Computed by `lib/positionDisplay.ts` and passed in rather than derived
+   * here, so the marker fading out and the words explaining why cannot
+   * disagree about the threshold.
+   */
+  positionNotice?: string | null;
 }
 
 /**
@@ -104,6 +112,7 @@ export function nearestCorner(x: number, y: number, width: number, height: numbe
 
 export default function Hud({
   modeReason,
+  positionNotice,
   navState,
   updateHz,
   imuHz,
@@ -390,6 +399,22 @@ export default function Hud({
         {modeReason ? (
           <div className="mt-2 rounded bg-amber-500/10 px-1.5 py-1 text-[10px] leading-snug text-amber-300">
             {modeReason}
+          </div>
+        ) : null}
+
+        {/*
+          ★ THE ESTIMATOR WAS BEING HONEST AND THE SCREEN WAS NOT ★
+          At the end of the field ride's 52 s outage the panel read
+          `uncert. 88/5 m` — a number nobody reads as a warning — while the map
+          drew an arrow at a point. `ConfidenceEllipse` draws the covariance
+          truthfully and `VehicleMarker` now fades the arrow out, but a shape
+          alone does not say what it means. This does, in words, at the moment
+          the marker stops being a claim about a point.
+          See lib/positionDisplay.ts for where the threshold comes from.
+        */}
+        {positionNotice ? (
+          <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/15 px-1.5 py-1 text-[10px] leading-snug text-amber-200">
+            <span className="font-mono">{positionNotice}</span>
           </div>
         ) : null}
 

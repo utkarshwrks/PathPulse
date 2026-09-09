@@ -407,3 +407,22 @@ describe('★ W7 — the HUD gets out of the way', () => {
     expect(outer.className).toContain('pointer-events-none');
   });
 });
+
+/**
+ * ★ THE WORDS THAT GO WITH THE FADING ARROW ★
+ *
+ * `uncert. 88/5 m` is a number nobody reads as a warning. This is the same
+ * fact, said — and it appears at exactly the moment the arrow stops being a
+ * claim about a point.
+ */
+describe('position uncertainty notice', () => {
+  it('shows the notice when one is supplied', () => {
+    renderHud({ positionNotice: 'position uncertain — \u00b190 m along road' });
+    expect(screen.getByText(/position uncertain/)).toBeTruthy();
+  });
+
+  it('says nothing when the estimate is worth a point marker', () => {
+    renderHud({ positionNotice: null });
+    expect(screen.queryByText(/position uncertain/)).toBeNull();
+  });
+});

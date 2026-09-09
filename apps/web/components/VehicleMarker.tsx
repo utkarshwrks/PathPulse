@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import maplibregl, { type Marker } from 'maplibre-gl';
 import type { NavMode } from '@pathpulse/nav-core';
 import { MODE_COLORS } from '@/config/modes';
+import { positionDisplay } from '@/lib/positionDisplay';
 import { useMap } from './MapContext';
 
 /**
@@ -25,6 +26,15 @@ interface VehicleMarkerProps {
   lon: number;
   headingDeg: number | null;
   mode: NavMode;
+  /**
+   * Along-track and cross-track 1-sigma uncertainty, metres.
+   *
+   * The marker degrades as these grow — see `lib/positionDisplay.ts`. At the
+   * end of the field ride's 52 s outage the estimator was reporting 88/5 and
+   * this component was still drawing a crisp arrow at a point.
+   */
+  alongM?: number;
+  crossM?: number;
 }
 
 /**
@@ -34,7 +44,14 @@ interface VehicleMarkerProps {
  * the smoothing. Golden Rule #6: the dot must never appear to teleport — a
  * jumping marker reads as a bug to a judge even when the math is right.
  */
-export default function VehicleMarker({ lat, lon, headingDeg, mode }: VehicleMarkerProps) {
+export default function VehicleMarker({
+  lat,
+  lon,
+  headingDeg,
+  mode,
+  alongM,
+  crossM,
+}: VehicleMarkerProps) {
   const map = useMap();
   const markerRef = useRef<Marker | null>(null);
   const arrowRef = useRef<HTMLDivElement | null>(null);
@@ -152,8 +169,36 @@ export default function VehicleMarker({ lat, lon, headingDeg, mode }: VehicleMar
     if (arrowRef.current) {
       arrowRef.current.style.transform = `rotate(${lastHeadingRef.current}deg)`;
       arrowRef.current.style.color = MODE_COLORS[mode];
+      // The arrow fades rather than vanishing, for the same reason the marker
+      // eases rather than teleporting: a thing that disappears reads as a bug.
+      arrowRef.current.style.transition =
+        'transform 220ms ease-out, color 300ms linear, opacity 300ms linear';
     }
   }, [headingDeg, mode]);
+
+  /**
+   * ★ THE ARROW STOPS CLAIMING WHAT THE FILTER NO LONGER KNOWS ★
+   *
+   * `ConfidenceEllipse` already draws the covariance honestly — a polygon in
+   * geographic coordinates, sized in metres, rotated to the heading. What it
+   * could not do is stop the arrow sitting on top of it, and an arrow is a
+   * claim to a POINT. At the end of the field ride's outage the estimator was
+   * reporting 88 m of along-track uncertainty, the ellipse was drawing a smear
+   * the length of a city block, and the arrow in the middle of it was still
+   * saying "here".
+   *
+   * So above `bandOnlyM` the arrow fades out and the ellipse speaks alone. It
+   * fades rather than vanishing for the same reason the marker eases rather
+   * than teleporting: a thing that disappears reads as a bug.
+   *
+   * Presentation only. The estimator does not know this exists.
+   */
+  useEffect(() => {
+    const arrow = arrowRef.current;
+    if (!arrow) return;
+    const d = positionDisplay(alongM ?? Number.NaN, crossM ?? Number.NaN);
+    arrow.style.opacity = d.showMarker ? '1' : '0';
+  }, [alongM, crossM]);
 
   return null;
 }
