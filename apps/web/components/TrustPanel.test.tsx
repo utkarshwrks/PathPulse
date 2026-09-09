@@ -22,6 +22,8 @@ import { DEFAULT_CONTROLS, type EngineDiagnostics } from '@/hooks/useNavigationE
 afterEach(cleanup);
 
 const DIAGNOSTICS: EngineDiagnostics = {
+  roadSpeedCeilingMps: 52 / 3.6,
+  roadSpeedCeilingSource: 'class',
   motionState: 'BRAKING',
   vehicleType: 'TWO_WHEELER',
   vehicleTypeConfidence: 0.8,

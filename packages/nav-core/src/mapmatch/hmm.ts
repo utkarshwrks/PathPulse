@@ -342,6 +342,7 @@ export class HmmMapMatcher {
         wayId: seg.wayId,
         name: way?.name,
         maxspeedKph: way?.maxspeed,
+        highway: way?.highway,
         arcLengthM: seg.arcStartM + t * seg.lengthM,
         enu: { e: pe, n: pn },
         distanceM,

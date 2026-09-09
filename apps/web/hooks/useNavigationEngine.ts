@@ -306,7 +306,7 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // demonstrated in nav-core/test/hmm.test.ts — a parallel service road, a
   // divided carriageway and a flyover, each of which greedy matching gets
   // wrong. Kept as a toggle so that can be shown rather than described.
-  hmmMatch: false,
+  hmmMatch: true,
   // Phase 13, Model 3. OFF, and it stays off: measured with a route-disjoint
   // split it makes along-track error three to eight times worse, because city
   // and highway feature distributions barely overlap and the network

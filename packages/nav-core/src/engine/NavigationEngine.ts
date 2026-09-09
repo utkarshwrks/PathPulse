@@ -769,7 +769,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   useMlMotion: true,
   useMlResidual: false,
   useMlGnssQuality: true,
-  hmmMatch: false,
+  hmmMatch: true,
   particleFilter: false,
   turnRelocalisation: false,
   twoWheeler: true,
@@ -981,6 +981,19 @@ export class NavigationEngine {
   private particleOffset: EnuPoint = { e: 0, n: 0 };
   /** Consecutive trusted fixes the filter has rejected. See updateEskf. */
   private eskfGatedFixes = 0;
+  /**
+   * How many times the filter has been re-seeded because three consecutive
+   * fixes ran gated.
+   *
+   * ★ A RESET IS THE FILTER SAYING ITS OWN STATE IS WRONG ★
+   *
+   * Rare is healthy — it is the escape hatch that stops a diverged filter
+   * sitting confidently lost. Frequent means the GNSS gate is mis-tuned for
+   * real fix noise, and the filter must not be trusted until that is fixed.
+   * The two are indistinguishable without a number, which is why this is on
+   * Diagnostics rather than only in the event log.
+   */
+  private eskfResets = 0;
   /** Phase 12. Runs always; consulted only when `config.autoAlign` is on. */
   private readonly autoAlign = new AutoAlignment();
   /** Phase 13, Model 2. Inert until a classifier is supplied. */
@@ -1149,6 +1162,8 @@ export class NavigationEngine {
      * "the detector is broken" look identical on the roadside.
      */
     forcedTurns: number;
+    /** See `eskfResets`. Rare is healthy; frequent means the gate is mis-tuned. */
+    eskfResets: number;
     matchedRoadName: string | null;
     matchedRoadDistanceM: number | null;
     hasRoadGraph: boolean;
@@ -1252,6 +1267,7 @@ export class NavigationEngine {
       roadSpeedCeilingMps: this.roadSpeedCeilingMps,
       roadSpeedCeilingSource: this.roadSpeedCeilingSource,
       forcedTurns: this.turns.forcedCount,
+      eskfResets: this.eskfResets,
       matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
       matchedRoadDistanceM: this.lastMatch?.distanceM ?? null,
       hasRoadGraph: this.roadGraph !== null,
@@ -3432,8 +3448,31 @@ export class NavigationEngine {
       // A gate at chi-squared(3) 99.9 % — wide enough that a hard manoeuvre is
       // never mistaken for a bad fix, tight enough to reject the multipath
       // jump that would otherwise be swallowed whole.
+      // ★ TWO COMPONENTS, BECAUSE WE ONLY HAVE TWO ★
+      //
+      // This used to pass `[e, n, 0]`, and the zero was not a measurement — it
+      // was a placeholder that the filter could not tell from one. The
+      // innovation it produced was `0 - nominal.position[2]`, which is the
+      // filter's own accumulated vertical drift, weighted by a variance three
+      // times the horizontal one and folded into the same chi-squared as the
+      // fix we actually cared about.
+      //
+      // That closes a loop. Vertical drift inflates the NIS, the NIS breaches
+      // the gate, the gate rejects the horizontal fix that would have
+      // corrected the horizontal state, the vertical goes on drifting because
+      // nothing else observes it, and three rejections later the filter
+      // re-seeds. Measured over the two Tier R logs with the ESKF newly live:
+      // 652 re-seeds across 625 log-minutes, roughly one every 45 seconds.
+      // That is not the escape hatch working, it is a filter that never
+      // converges.
+      //
+      // A handset GNSS altitude exists but is far worse than its horizontal
+      // solution and the estimator has nothing to do with it. So the honest
+      // update is two-dimensional: `updateGnssPosition` leaves the vertical
+      // innovation at zero when no third component is supplied, which says
+      // "no information" rather than "you are at zero".
       const posUpdate = this.eskf.updateGnssPosition(
-        [input.gnssEnu.e, input.gnssEnu.n, 0],
+        [input.gnssEnu.e, input.gnssEnu.n],
         accuracy,
         16.3,
       );
@@ -3464,6 +3503,7 @@ export class NavigationEngine {
             gyroBias: [0, 0, 0],
           });
           this.eskfGatedFixes = 0;
+          this.eskfResets++;
           this.log.push({
             t: input.tMs,
             type: 'ESKF_RESET',
@@ -3993,6 +4033,7 @@ export class NavigationEngine {
     this.dr.reset();
     this.eskf.reset();
     this.eskfGatedFixes = 0;
+    this.eskfResets = 0;
     this.recovery.reset();
     this.attitude.reset();
     this.turns.reset();

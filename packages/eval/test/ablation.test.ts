@@ -101,7 +101,7 @@ describe('ablation over the committed logs', () => {
     // particle (Phase 17's filter, which helps in the city and hurts on the
     // highway — asserted separately, because the average of those two is the
     // least informative number available).
-    const notShipped = new Set(['full_forwardbias', 'eskf', 'hmm', 'particle']);
+    const notShipped = new Set(['full_forwardbias', 'eskf', 'greedy', 'particle']);
     const shipped = ABLATION_ORDER.filter((n) => !notShipped.has(n));
     for (let i = 1; i < shipped.length; i++) {
       const prev = get(shipped[i - 1]!);
@@ -167,10 +167,16 @@ describe('ablation over the committed logs', () => {
     // The tolerance below is against an absolute figure now, not a multiple of
     // a moving baseline, or an improvement to the shipped chain would keep
     // failing this test for the wrong reason.
-    const hmm = get('hmm');
-    expect(hmm.mean).toBeGreaterThan(get('full').mean);
-    // But it must stay in the same league. A matcher that diverges is a bug.
-    expect(hmm.mean).toBeLessThan(15);
+    // ★ AND THE ROW FLIPPED WHEN THE HMM STARTED SHIPPING ★ `full` now
+    // includes `hmmMatch`, so the comparison is against `greedy` — the
+    // nearest-road-plus-continuity matcher it replaced. Same measurement,
+    // opposite sign: the greedy matcher is still the better of the two on
+    // these logs, and that stays on the record rather than disappearing
+    // because the default moved.
+    const greedy = get('greedy');
+    expect(greedy.mean).toBeLessThan(get('full').mean);
+    // But both must stay in the same league. A matcher that diverges is a bug.
+    expect(get('full').mean).toBeLessThan(15);
   });
 
   it('★ records where the particle filter helps and where it does not', () => {

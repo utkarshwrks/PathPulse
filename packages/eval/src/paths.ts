@@ -48,7 +48,17 @@ export const ABLATION_ORDER = [
   'full',
   'full_forwardbias',
   'eskf',
-  'hmm',
+  // ★ `greedy` REPLACED `hmm` WHEN THE HMM STARTED SHIPPING ★
+  //
+  // `hmm` was `full` plus `hmmMatch`. Now that `hmmMatch` is on by default,
+  // `full` already is that run and the two rows were byte-identical — a
+  // comparison of a configuration with itself, which measures nothing and
+  // whose assertion in ablation.test.ts duly started failing against itself.
+  //
+  // The measurement worth keeping is the other direction: what the shipped
+  // chain costs relative to the greedy nearest-road matcher it replaced. Same
+  // number, opposite sign, and it stays visible.
+  'greedy',
   'particle',
 ];
 

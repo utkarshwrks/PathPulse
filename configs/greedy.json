@@ -1,0 +1,11 @@
+{
+  "name": "greedy",
+  "description": "The shipped configuration with map matching back to nearest-road-plus-continuity instead of the Newson-Krumm HMM. Kept as the comparison now that `hmmMatch` ships on — `full` and `hmm` would otherwise be the same run, and a row that compares a configuration with itself measures nothing.",
+  "engine": {
+    "medianFilter": true, "lowPass": true,
+    "nhc": true, "zupt": true, "zaru": true,
+    "speedClamp": true, "accelHighPass": true,
+    "forwardBias": false, "roadSnap": true,
+    "hmmMatch": false
+  }
+}

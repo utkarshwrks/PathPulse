@@ -82,6 +82,16 @@ export interface RunResult {
    */
   alignmentDeg: number | null;
   /**
+   * Times the error-state filter re-seeded itself after three consecutive
+   * fixes ran gated.
+   *
+   * Reported by the harness because `eskf` shipping on makes its reset rate a
+   * thing that has to be watched: rare is the escape hatch working, frequent
+   * is the GNSS gate mis-tuned for real fix noise, and the two are
+   * indistinguishable without a count.
+   */
+  eskfResets: number;
+  /**
    * Phase 13, Model 3: one row per dead-reckoning sample — the engine's own
    * feature vector, and the error it turned out to have.
    *
@@ -242,5 +252,6 @@ export function runEval(samples: readonly SensorSample[], opts: RunOptions): Run
     truth,
     alignmentDeg: align.isCalibrated ? (align.yawOffsetRad * 180) / Math.PI : null,
     driftRows,
+    eskfResets: diagnostics.eskfResets,
   };
 }
