@@ -4,7 +4,7 @@
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
 **Build v0.23** · APK 7.42 MB · 1,681 tests · 60,224 lines
-**6.1 % mean drift on simulated logs · 30.9 % on real vehicle sensors**
+**7.4 % mean drift on simulated logs · 29.1 % on real vehicle sensors**
 
 ---
 
@@ -1802,6 +1802,7 @@ Being able to name what is off is part of being able to trust what is on.
 
 | Feature | State | Why |
 |---|---|---|
+| **Error-state Kalman filter** | ⊘ off | **Not on the old reasoning.** Switched on and measured against real handset data it re-seeds every 45 seconds — 652 times across 625 log-minutes — because the process noise understates the real error by roughly 18x in sigma. §24.13. A retune, not a flag flip. |
 | **Map-aided particle filter** | ⊘ off | Best cross-track in the table (21.8 m) and a worse mean (11.5 % vs 6.9 %). 500 hypotheses cost battery. It is the right tool for junction ambiguity and the wrong default for a phone on a long drive. |
 | **Forward-bias estimator** | ⊘ off | **Measurably worse** since the high-pass exists: 6.9 % → 10.8 %. Kept in the tree and in the table as a recorded negative result. |
 | **Turn relocaliser** | ⊘ off | Depends on the particle filter. |
@@ -1816,8 +1817,8 @@ Every claim this project makes, and exactly what backs it.
 
 | Claim | Tier | Backing | Caveat |
 |---|---|---|---|
-| 6.9 % mean drift | **S** | `pnpm ablation` | Simulated sensors |
-| 30.9 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset** |
+| 7.4 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
+| 29.1 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
 | 27° heading error over 60 s | **R** | `pnpm eval:heading` | Real vehicle sensors. The number drift % cannot see — see §24.11 |
 | 0 ms handover | **S** | `pnpm ablation` | Structural — there is no transition code path |
@@ -2187,6 +2188,95 @@ toggle; what it needs is Tier F, not another run on this corpus.
 The bounded lean is therefore the whole of the fix that could be validated
 here. The rest of the heading budget is an open item — §28.2.
 
+## 24.12 Jabalpur — the speed ran ahead and took the map with it
+
+**Symptom:** a two-wheeler in city traffic on residential and tertiary ways,
+GNSS off for 52 s. The estimate diverged onto roads the vehicle never took and
+then locked onto a parallel street one block west.
+
+```
+t+25.5s   64 km/h [ML]  hdg 158°   dist  994 m   uncert 37/5 m
+t+51.9s   48 km/h [ML]  hdg 189°   dist 1329 m   uncert 88/5 m
+recovery  44 km/h [ML]  hdg 194°   dist 1649 m   drift 197.0 m
+```
+
+655 m in the final 26 s is a sustained 90 km/h, on streets where 40 is the
+limit.
+
+**Cause, in order:** the speed model over-reads on a two-wheeler (§24.9); the
+over-stated speed pushes the estimate ahead ALONG the road; it crosses a
+junction the vehicle has not physically reached; snapping commits to a branch
+there; and `continuityMaxMismatchDeg` then makes staying on the wrong way
+cheaper than leaving it. **The matcher is not broken — it is being handed a
+position that has already left the truth.**
+
+`mlSpeedTrustGate` is structurally blind to this: it compares the model against
+GNSS Doppler, and while GNSS is healthy the model is in domain and the ratio is
+fine. It diverges only once the fix drops, which is the window the gate cannot
+observe. The only remaining ceiling was `maxSpeedMps` at 144 km/h.
+
+**Fix:** bound the speed by the class of road it is matched to
+(`constraints/roadSpeed.ts`). `maxspeed` has been carried through the codec
+since it was written and consumed by exactly one caller that decides whether a
+match is close enough to believe; it never bounded anything. The `highway`
+class carries the work because `maxspeed` tagging is sparse in India — 37 of
+9,462 ways in the Jabalpur extract — and no format change was needed, because
+the codec already stores the class as an index into a per-graph string table.
+
+Three things the first attempt got wrong, all caught by `pnpm eval:offroad`,
+which took the drawn marker's worst excursion from 40 m to 99.6 m:
+
+- **Service roads are excluded from the table.** They are the most numerous
+  class in every graph we hold — 7,940 of 15,022 ways in IO-VNBD S3c — and
+  carry the lowest ceiling, which makes them simultaneously the likeliest wrong
+  match and the most damaging one. `speedLimitTrustDistanceM` already records
+  this failure for the `maxspeed` path; that mechanism survived it only because
+  the tag is so rare that it almost never fired.
+- **The ceiling is the maximum over every plausible nearby road**, not the one
+  the matcher picked. A clamp does not have to choose: near both a trunk road
+  and a residential street, the honest statement is "at most the faster of
+  them". If any plausible neighbour is a class we have no opinion about, there
+  is no ceiling at all.
+- **It is floored at the last speed the receiver measured.** A map is an
+  assumption and a Doppler speed is a measurement. A `residential` tag is not
+  evidence that a vehicle measured at 100 km/h has slowed to 52.
+
+With all three, off-road returns to baseline exactly — 0.3 m mean, 40.0 m
+worst. The clamp binds on Jabalpur and stands aside on the simulated highway
+route, which is the whole distinction.
+
+`roadSpeedCeilingMps` and `roadSpeedCeilingSource` are on the Device screen: a
+clamp that silently truncates a speed is indistinguishable from an estimator
+that happens to agree with it.
+
+## 24.13 The ESKF has been re-seeding twice a minute
+
+**Found by enabling it.** `eskf` was off on the strength of mean drift over
+simulated logs. Switched on and measured against real handset data, the guard
+that exists to stop a diverged filter sitting confidently lost fires
+constantly: **652 re-seeds across 625 log-minutes, roughly one every 45
+seconds.** That is not an escape hatch working; it is a filter that never
+converges — and it explains why the `eskf` ablation row has always been worse
+than `full`. That row has been measuring this.
+
+**Measured, not guessed.** Median NIS on a position update is **30.5 against a
+gate of 16.3**, so more than half of all fixes are rejected as outliers. The
+innovations are real: these logs carry one fix every nine seconds, the filter
+propagates unaided across that gap and arrives about **23 m** out, while its own
+covariance has grown to about **1.3 m**. `IMU_NOISE.PHONE_MEMS` understates the
+error by roughly **eighteen times in sigma**.
+
+That is a retune with a blast radius across every ESKF test and published
+figure, so it is Phase 2 work and the flag stays off. `eskfResets` is on
+Diagnostics, because rare and frequent are indistinguishable without a count.
+
+**One thing fixed on the way:** the position update was being handed
+`[e, n, 0]`, and the zero was not a measurement. Its innovation was the
+filter's own accumulated vertical drift, weighted three times looser than
+horizontal and folded into the same chi-squared as the fix we cared about. Two
+dimensions now. Worth 652 → 626 re-seeds on its own — which is also how we know
+it was not the main cause.
+
 ---
 
 # 25 · Build, deploy and workflows
@@ -2297,6 +2387,7 @@ addition rather than a refactor.
 | **20** | **Worldwide offline coverage** — codec, cell grid, LOD, prefetch, rolling re-anchor, eviction |
 | **21** | **Tier R** — IO-VNBD converted to a replay corpus; scoring on real sensors |
 | **22** | The speed-runaway fix; APK 7.41 MB |
+| **24** | Phase 1 of the dead-reckoning brief: a road-class speed ceiling (§24.12), the HMM shipping, the ESKF measured and refused (§24.13), turns that admit when they never settled, and a marker that stops claiming a point |
 | **23** | The scooter build: the speed model checked against the receiver (§24.9), a stop detector that learns this vehicle (§24.10), and a bounded lean so a bad speed can no longer rewrite the heading (§24.11). `pnpm eval:heading` added, because none of it was visible in drift % |
 
 Two entries are worth pointing at:
