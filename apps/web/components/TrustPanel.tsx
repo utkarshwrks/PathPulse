@@ -519,6 +519,11 @@ const TOGGLES: Array<{
     hint: 'The IO-VNBD-trained CNN, used for speed when GNSS is gone. Inert until the model loads — see the SENSORS tab.',
   },
   {
+    key: 'roadSpeedClamp', group: 'core',
+    label: 'Road-class speed ceiling',
+    hint: 'A residential street admits 52 km/h, a tertiary 65. Jabalpur: a scooter asserted 90 through a 52 s outage and finished 197 m out. Floored at the last measured speed, so a measurement always outranks the map.',
+  },
+  {
     key: 'mlSpeedTrustGate', group: 'core',
     label: 'AI speed: check against GNSS',
     hint: 'Stops using the model once the receiver has shown it wrong on this vehicle. A scooter read 89 km/h at 30; the fix is to coast from the last measured speed instead.',

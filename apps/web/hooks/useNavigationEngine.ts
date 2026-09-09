@@ -223,6 +223,11 @@ export const DEFAULT_CONTROLS: EngineControls = {
   accelHighPass: true,
   adaptiveTimeout: true,
   roadSnap: true,
+  // The class of road bounds a dead-reckoning speed. Jabalpur: a two-wheeler
+  // on residential streets asserted a sustained 90 km/h through a 52 s outage
+  // and finished 197 m out on a street one block west. The only ceiling was
+  // maxSpeedMps at 144 km/h.
+  roadSpeedClamp: true,
   // On by default, but inert until the ONNX model actually loads — the engine
   // checks the predictor is ready before consulting it.
   useMlSpeed: true,
@@ -633,6 +638,7 @@ export function useNavigationEngine(): NavEngineOutput {
         accelHighPass: next.accelHighPass,
         adaptiveTimeout: next.adaptiveTimeout,
         roadSnap: next.roadSnap,
+        roadSpeedClamp: next.roadSpeedClamp,
         mlVehicleOnly: next.mlVehicleOnly,
         pedestrianHeadingFromGnss: next.pedestrianHeadingFromGnss,
         pedestrianHeadingFromMagnetometer: next.pedestrianHeadingFromMagnetometer,

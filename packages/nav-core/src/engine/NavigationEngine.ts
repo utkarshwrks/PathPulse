@@ -179,6 +179,28 @@ export interface ConstraintFlags {
   /** Pull the estimate across onto the nearest plausible road. */
   roadSnap: boolean;
   /**
+   * Bound a dead-reckoning speed by the class of road it is matched to.
+   *
+   * ★ THE ONLY CEILING WAS 144 km/h, AND IT STOPPED NOTHING ★
+   *
+   * Field ride, Jabalpur, a two-wheeler on residential and tertiary streets
+   * with GNSS off for 52 s: the estimate asserted a sustained 90 km/h, covered
+   * 655 m in the final 26 seconds, and finished 197 m from truth on a street
+   * one block west. Everything after the speed follows from it — the estimate
+   * runs ahead ALONG the road, crosses a junction the vehicle has not reached,
+   * snapping commits to a branch there, and `continuityMaxMismatchDeg` makes
+   * staying on the wrong way cheaper than leaving it.
+   *
+   * See `constraints/roadSpeed.ts` for the table, why the `highway` class
+   * carries the work rather than `maxspeed`, and why service roads are
+   * excluded.
+   *
+   * ★ STILL A CLAMP, NEVER A MEASUREMENT ★ It truncates the output of the
+   * speed chain and is not offered to the filter as an observation. The map
+   * corrects what is SHOWN; the estimator keeps its own opinion.
+   */
+  roadSpeedClamp: boolean;
+  /**
    * Use the IO-VNBD-trained CNN for speed when GNSS Doppler is unavailable.
    *
    * Only has an effect once a predictor has been supplied AND reports ready —
@@ -508,28 +530,6 @@ export interface EngineConfig extends ConstraintFlags {
    * 0 disables the bound and restores the numerical-only guard.
    */
   maxLeanDeg: number;
-  /**
-   * Bound a dead-reckoning speed by the class of road it is matched to.
-   *
-   * ★ THE ONLY CEILING WAS 144 km/h, AND IT STOPPED NOTHING ★
-   *
-   * Field ride, Jabalpur, a two-wheeler on residential and tertiary streets
-   * with GNSS off for 52 s: the estimate asserted a sustained 90 km/h, covered
-   * 655 m in the final 26 seconds, and finished 197 m from the truth on a
-   * street one block west. Everything after the speed follows from it — the
-   * estimate runs ahead ALONG the road, crosses a junction the vehicle has not
-   * reached, snapping commits to a branch there, and `continuityMaxMismatchDeg`
-   * makes staying on the wrong way cheaper than leaving it.
-   *
-   * See `constraints/roadSpeed.ts` for the table and why the `highway` class
-   * carries the work rather than `maxspeed`.
-   *
-   * ★ STILL A CLAMP, NEVER A MEASUREMENT ★ It truncates the output of the
-   * speed chain and is not offered to the filter as an observation. The map
-   * corrects what is SHOWN; the estimator keeps its own opinion. That rule is
-   * what makes road snapping auditable and it is not being bent here.
-   */
-  roadSpeedClamp: boolean;
   /**
    * Multiplier on the road-derived ceiling before it binds.
    *
