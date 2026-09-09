@@ -10,6 +10,61 @@ export interface StationarityConfig {
    * Leaving is immediate — see the asymmetry note below.
    */
   enterHoldSamples: number;
+  /**
+   * Learn what "stopped" sounds like on THIS vehicle, from GNSS-labelled
+   * samples, and spend it when GNSS is gone.
+   *
+   * ★ THE THRESHOLDS BELOW WERE MEASURED ON A CAR, AND A SCOOTER IS NOT ONE ★
+   *
+   * Field report: "if i stop during dead reckoning then also it appear to be
+   * moving". The chain is only ever arrested by ZUPT, ZUPT is only ever armed
+   * by this detector, and this detector's gate is a car's engine-off variance
+   * distribution. A running two-wheeler idling at a light shakes the handset
+   * well past 0.015 — so `isStationary` never went true, ZUPT never fired, and
+   * the speed model went on asserting a speed at a machine that was standing
+   * still. The estimate then drove off down the map on its own, which is
+   * exactly the failure ZUPT was written to prevent, reintroduced by a
+   * threshold that does not describe this vehicle.
+   *
+   * ★ THE SAME TRICK THE REST OF THIS PROJECT ALREADY PLAYS ★
+   *
+   * `StrideModel` learns metres-per-step from GNSS while it is free.
+   * `MagneticHeading` learns the grip offset the same way. Both are an unknown
+   * constant of the CARRIER, unobservable from the IMU alone, measured against
+   * GNSS while it costs nothing and spent during the outage. The idle
+   * signature of the vehicle you happen to be on is exactly that shape.
+   *
+   * ★ AND UNLIKE THE SPEED CALIBRATOR, IT CANNOT BE CONFIDENTLY WRONG ★
+   *
+   * `MlSpeedCalibrator` is a kept negative result because a fitted multiplier
+   * feeds straight into an integrated quantity: get it wrong and the error
+   * accumulates for the whole outage. This fits nothing and multiplies
+   * nothing. It moves a CLASSIFICATION boundary, and it is only allowed to
+   * move it into a gap that the data has demonstrated is there — see
+   * `learnSeparationFactor`. Where the two distributions overlap on this
+   * vehicle, it declines and the configured value stands.
+   */
+  adaptive: boolean;
+  /** Labelled samples kept per class. At 50 Hz this is six seconds of each. */
+  learnWindow: number;
+  /** Samples of BOTH classes required before the learned gate is used. */
+  learnMinObservations: number;
+  /** Headroom above the stopped p90, so an unseen idle still lands inside. */
+  learnMargin: number;
+  /**
+   * The learned gate must sit this far below the moving p10.
+   *
+   * ★ THIS IS THE WHOLE SAFETY ARGUMENT ★ A false stop is far more expensive
+   * than a missed one: it zeroes a real velocity mid-drive and teaches the
+   * bias estimators from a moving vehicle. So the gate is never raised on the
+   * strength of the stopped samples alone — it is raised into a gap that the
+   * MOVING samples have independently confirmed is empty. If this vehicle's
+   * idle is as loud as its cruise, there is no gap, and the answer is to
+   * decline rather than to guess.
+   */
+  learnSeparationFactor: number;
+  /** Hard ceiling on the learned gate, as a multiple of the configured one. */
+  learnMaxRatio: number;
 }
 
 export const DEFAULT_STATIONARITY_CONFIG: StationarityConfig = {
@@ -28,6 +83,12 @@ export const DEFAULT_STATIONARITY_CONFIG: StationarityConfig = {
   accelVarianceThreshold: 0.015,
   gyroMeanThreshold: 0.02,
   enterHoldSamples: 25,
+  adaptive: true,
+  learnWindow: 300,
+  learnMinObservations: 100,
+  learnMargin: 1.6,
+  learnSeparationFactor: 0.7,
+  learnMaxRatio: 8,
 };
 
 export interface StationarityResult {
@@ -36,6 +97,22 @@ export interface StationarityResult {
   confidence: number;
   accelVariance: number;
   gyroMean: number;
+}
+
+/** The gate actually in force, and whether it was learned. See `adaptive`. */
+export interface StationarityThresholds {
+  accelVariance: number;
+  gyroMean: number;
+  learned: boolean;
+  stoppedObservations: number;
+  movingObservations: number;
+}
+
+/** p-quantile of an unsorted sample, nearest-rank. */
+function quantile(values: readonly number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))));
+  return sorted[i] ?? Number.NaN;
 }
 
 /**
@@ -55,6 +132,11 @@ export class StationarityDetector {
   private readonly gyroMags: number[] = [];
   private readonly config: StationarityConfig;
   private consecutiveInThreshold = 0;
+  /** GNSS-labelled samples, for the learned gate. See `adaptive`. */
+  private readonly stoppedAccelVar: number[] = [];
+  private readonly stoppedGyroMean: number[] = [];
+  private readonly movingAccelVar: number[] = [];
+  private readonly movingGyroMean: number[] = [];
 
   constructor(config: Partial<StationarityConfig> = {}) {
     this.config = { ...DEFAULT_STATIONARITY_CONFIG, ...config };
@@ -72,6 +154,88 @@ export class StationarityDetector {
     return this.evaluate();
   }
 
+  /**
+   * One GNSS-labelled sample of what this vehicle sounds like.
+   *
+   * @param moving whether the receiver reported the vehicle in motion
+   *
+   * Called by the engine only while GNSS is healthy and only from a fix it
+   * trusts — a multipath speed labelling a stop as motion would teach exactly
+   * the wrong gap. Fed the SAME statistics `evaluate` gates on, so the learned
+   * threshold and the live measurement are the same quantity.
+   */
+  observeLabelled(moving: boolean, accelVariance: number, gyroMean: number): void {
+    if (!this.config.adaptive) return;
+    if (!Number.isFinite(accelVariance) || !Number.isFinite(gyroMean)) return;
+    const vars = moving ? this.movingAccelVar : this.stoppedAccelVar;
+    const gyros = moving ? this.movingGyroMean : this.stoppedGyroMean;
+    vars.push(accelVariance);
+    gyros.push(gyroMean);
+    if (vars.length > this.config.learnWindow) vars.shift();
+    if (gyros.length > this.config.learnWindow) gyros.shift();
+  }
+
+  /**
+   * The gate in force right now.
+   *
+   * Raised into the gap between this vehicle's stopped and moving
+   * distributions when there demonstrably is one, and left at the configured
+   * value when there is not. Only ever RAISED: a learned gate tighter than the
+   * measured default would be a claim about the sensor rather than about the
+   * vehicle, and the default already carries that.
+   */
+  get thresholds(): StationarityThresholds {
+    const base = {
+      accelVariance: this.config.accelVarianceThreshold,
+      gyroMean: this.config.gyroMeanThreshold,
+      learned: false,
+      stoppedObservations: this.stoppedAccelVar.length,
+      movingObservations: this.movingAccelVar.length,
+    };
+    if (!this.config.adaptive) return base;
+    if (
+      this.stoppedAccelVar.length < this.config.learnMinObservations ||
+      this.movingAccelVar.length < this.config.learnMinObservations
+    ) {
+      return base;
+    }
+    const accel = this.learnedGate(
+      this.stoppedAccelVar,
+      this.movingAccelVar,
+      this.config.accelVarianceThreshold,
+    );
+    const gyro = this.learnedGate(
+      this.stoppedGyroMean,
+      this.movingGyroMean,
+      this.config.gyroMeanThreshold,
+    );
+    if (accel === null && gyro === null) return base;
+    return {
+      accelVariance: accel ?? base.accelVariance,
+      gyroMean: gyro ?? base.gyroMean,
+      learned: true,
+      stoppedObservations: base.stoppedObservations,
+      movingObservations: base.movingObservations,
+    };
+  }
+
+  /** null when the two distributions do not separate. See `learnSeparationFactor`. */
+  private learnedGate(
+    stopped: readonly number[],
+    moving: readonly number[],
+    configured: number,
+  ): number | null {
+    const stoppedHigh = quantile(stopped, 0.9) * this.config.learnMargin;
+    const movingLow = quantile(moving, 0.1) * this.config.learnSeparationFactor;
+    if (!Number.isFinite(stoppedHigh) || !Number.isFinite(movingLow)) return null;
+    // No gap on this vehicle: its idle is as loud as its cruise, and moving the
+    // gate would buy a missed stop with a false one. Decline.
+    if (!(stoppedHigh < movingLow)) return null;
+    const gate = Math.min(stoppedHigh, configured * this.config.learnMaxRatio);
+    // Raised only. See `thresholds`.
+    return gate > configured ? gate : null;
+  }
+
   evaluate(): StationarityResult {
     // Refuse to answer until the window is full. Declaring "stationary" from
     // three samples would fire ZUPT mid-drive and zero a real velocity.
@@ -84,8 +248,9 @@ export class StationarityDetector {
       this.accelMags.reduce((s, v) => s + (v - aMean) ** 2, 0) / this.accelMags.length;
     const gyroMean = this.gyroMags.reduce((s, v) => s + v, 0) / this.gyroMags.length;
 
-    const accelOk = accelVariance < this.config.accelVarianceThreshold;
-    const gyroOk = gyroMean < this.config.gyroMeanThreshold;
+    const gate = this.thresholds;
+    const accelOk = accelVariance < gate.accelVariance;
+    const gyroOk = gyroMean < gate.gyroMean;
     const inThreshold = accelOk && gyroOk;
 
     // ★ DELIBERATELY ASYMMETRIC ★
@@ -104,8 +269,8 @@ export class StationarityDetector {
 
     // Confidence is the worse of the two margins — a signal is only as
     // trustworthy as its weakest axis.
-    const accelMargin = 1 - accelVariance / this.config.accelVarianceThreshold;
-    const gyroMargin = 1 - gyroMean / this.config.gyroMeanThreshold;
+    const accelMargin = 1 - accelVariance / gate.accelVariance;
+    const gyroMargin = 1 - gyroMean / gate.gyroMean;
     const confidence = isStationary
       ? Math.max(0, Math.min(1, Math.min(accelMargin, gyroMargin)))
       : 0;
@@ -117,5 +282,9 @@ export class StationarityDetector {
     this.accelMags.length = 0;
     this.gyroMags.length = 0;
     this.consecutiveInThreshold = 0;
+    this.stoppedAccelVar.length = 0;
+    this.stoppedGyroMean.length = 0;
+    this.movingAccelVar.length = 0;
+    this.movingGyroMean.length = 0;
   }
 }

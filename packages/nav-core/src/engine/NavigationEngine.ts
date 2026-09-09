@@ -244,6 +244,69 @@ export interface ConstraintFlags {
    */
   calibrateMlSpeed: boolean;
   /**
+   * Stop consulting the speed model once GNSS has shown it to be wrong.
+   *
+   * ★ THE MEASUREMENT ABOVE, SPENT AS A VERDICT RATHER THAN A MULTIPLIER ★
+   *
+   * `calibrateMlSpeed` is off because a fitted scale feeds an integrated
+   * quantity and its tail is worse than the model it corrects. That argument
+   * is about the FIT. It says nothing about the pairs themselves, which are
+   * free, arrive at 1 Hz, and are the only evidence anywhere in this system
+   * about whether the network is describing the vehicle actually being ridden.
+   *
+   * Field report, a scooter at an indicated 25-30 km/h with the receiver
+   * blocked for 45 s: `[ML] 89 km/h`, 2274 m of distance on a ride of well
+   * under a kilometre, and an orange trail sprawled across three streets it
+   * never went down. IO-VNBD is cars; a two-wheeler's vibration signature is
+   * not in the training set, and the model answered roughly three times the
+   * truth. The receiver had been contradicting it, out loud, every second of
+   * the drive that preceded the outage.
+   *
+   * So: while the ratio of measured to predicted stays inside
+   * `minTrustRatio`..`maxTrustRatio` — the same bounds the calibrator already
+   * argues separate "miscalibrated" from "wrong" — nothing changes at all.
+   * Outside them the model is not offered to the chain, which falls through to
+   * integrating from the last Doppler speed. That is the arm the ablation
+   * measures everything against, and it is also exactly what the field asked
+   * for: "just catch the speed in which u missed location then in that mean
+   * speed u take it".
+   *
+   * ★ WHY THIS HAS NO TAIL ★ Suppression cannot be confidently wrong in the
+   * expensive direction, because it asserts nothing. The worst case is that a
+   * good model is withheld and the estimate is exactly as good as the
+   * `full`-minus-ML arm, which is measured. A bad model asserts a speed, and
+   * an asserted speed integrates.
+   */
+  mlSpeedTrustGate: boolean;
+  /**
+   * Bound an inferred speed by the last one GNSS measured.
+   *
+   * ★ OFF — A KEPT NEGATIVE RESULT, AND A CLOSE ONE ★
+   *
+   * The reasoning is good and it is not a fit: anchor the outage on the speed
+   * the receiver measured as it went, and let an inferred speed stray from it
+   * by headroom that opens over twenty seconds. It caps the field report's
+   * 89 km/h at 49 and cannot be wrong in the expensive direction, because it
+   * only ever removes speed.
+   *
+   * What it also removes is real acceleration. On the ablation corpus — car
+   * drives, where the model is in domain and the vehicle genuinely speeds up
+   * inside the outage window — the shipped `full` arm went from 6.1 % mean
+   * drift to 14.2 %, and p90 from 15.1 % to 44.3 %, with the median untouched
+   * at 4.6 %. That shape is the whole story: the bound is inert on most
+   * windows and truncates the ones where the vehicle accelerated hardest.
+   *
+   * `mlSpeedTrustGate` reaches the same field failure by asking whether the
+   * model is describing this vehicle at all, which costs nothing when it is.
+   * So this is the second answer to a question already answered, kept because
+   * it is the right answer for a DIFFERENT failure — a model that is fine
+   * while GNSS is up and goes wrong the moment it is not, which the gate
+   * cannot see and this would still catch.
+   *
+   * See `DeadReckoningConfig.outageSpeedCeiling` for the mechanism.
+   */
+  outageSpeedCeiling: boolean;
+  /**
    * ★ PHASE 11 ★ Take position from the error-state Kalman filter instead of
    * from open-loop integration, while dead reckoning.
    *
@@ -640,6 +703,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   pedestrianHeadingFromGnss: true,
   pedestrianHeadingFromMagnetometer: true,
   calibrateMlSpeed: false,
+  mlSpeedTrustGate: true,
+  outageSpeedCeiling: false,
   maxHeadingGateDeg: 90,
   roadHeadingAidDegPerSec: 2,
   roadHeadingAidMinStableMs: 3_000,
@@ -810,6 +875,8 @@ export class NavigationEngine {
   private readonly mlCalibrator = new MlSpeedCalibrator();
   /** Raw model output before calibration, so the calibrator scores the model. */
   private lastMlRawMps = Number.NaN;
+  /** Latch so `mlSpeedTrustGate` logs its verdict once, not at 10 Hz. */
+  private mlDistrusted = false;
   private mlScalerMean: readonly number[] = [0, 0, 0, 0, 0, 0];
   private mlScalerStd: readonly number[] = [1, 1, 1, 1, 1, 1];
   private lastMlInferenceT: number | null = null;
@@ -937,6 +1004,7 @@ export class NavigationEngine {
         maxSpeedMps: this.config.maxSpeedMps,
       },
       distanceFloorMps: this.config.distanceFloorMps,
+      outageSpeedCeiling: this.config.outageSpeedCeiling,
     });
   }
 
@@ -966,6 +1034,7 @@ export class NavigationEngine {
         maxSpeedMps: this.config.maxSpeedMps,
       },
       distanceFloorMps: this.config.distanceFloorMps,
+      outageSpeedCeiling: this.config.outageSpeedCeiling,
     });
     this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
     if (!this.config.roadSnap) {
@@ -1144,6 +1213,7 @@ export class NavigationEngine {
     this.mlBuffer.reset();
     this.mlCalibrator.reset();
     this.lastMlRawMps = Number.NaN;
+    this.mlDistrusted = false;
     this.magHeading.reset();
     this.mlSmoother.reset();
     this.lastMlSpeedMps = Number.NaN;
@@ -1370,6 +1440,41 @@ export class NavigationEngine {
       if (this.config.lowPass) a = this.accelLowPass.push(a[0], a[1], a[2]);
 
       this.lastStationarity = this.stationarity.push(ax, ay, az, gx, gy, gz);
+
+      // ★ TEACH THE STOP DETECTOR WHAT THIS VEHICLE SOUNDS LIKE ★
+      //
+      // See `StationarityConfig.adaptive`. The gate below ZUPT is a car's
+      // engine-off variance distribution, and a two-wheeler idling at a light
+      // sits well above it — so on a scooter `isStationary` never went true,
+      // ZUPT never fired, and "if i stop during dead reckoning then also it
+      // appear to be moving".
+      //
+      // The label has to come from a measurement, and only from one we trust:
+      // a multipath speed calling a stop "moving" would teach the gap shut
+      // from the wrong side. Held for `gnssSpeedHoldMs` at most, because a
+      // speed from five seconds ago does not describe this sample.
+      if (this.lastGnssSpeed !== null && Number.isFinite(this.lastStationarity.accelVariance)) {
+        const labelAgeMs = sample.t - this.lastGnssSpeed.t;
+        if (labelAgeMs >= 0 && labelAgeMs <= this.config.gnssSpeedHoldMs) {
+          // A deliberate dead zone between the two classes. Creeping in
+          // traffic is neither a stop nor a cruise, and labelling it either
+          // way is how the gap gets taught wrong.
+          const mps = this.lastGnssSpeed.mps;
+          if (mps < 0.5) {
+            this.stationarity.observeLabelled(
+              false,
+              this.lastStationarity.accelVariance,
+              this.lastStationarity.gyroMean,
+            );
+          } else if (mps > 3) {
+            this.stationarity.observeLabelled(
+              true,
+              this.lastStationarity.accelVariance,
+              this.lastStationarity.gyroMean,
+            );
+          }
+        }
+      }
 
       // ★ THE STEP SIGNAL IS THE RAW MAGNITUDE ★ Not the filtered value: the
       // low-pass exists to remove road vibration before integration and it
@@ -1921,7 +2026,10 @@ export class NavigationEngine {
         // Exactly the trick one line above, pointed at the other quantity that
         // has to survive an outage. Paired against the model's most recent
         // opinion, uncalibrated — see `lastMlRawMps`.
-        if (this.config.calibrateMlSpeed && Number.isFinite(this.lastMlRawMps)) {
+        if (
+          (this.config.calibrateMlSpeed || this.config.mlSpeedTrustGate) &&
+          Number.isFinite(this.lastMlRawMps)
+        ) {
           this.mlCalibrator.observe(sample.t, speedForFix, this.lastMlRawMps);
         }
         // Held, not consumed. See `gnssSpeedHoldMs`.
@@ -3477,6 +3585,25 @@ export class NavigationEngine {
       }
     }
     if (!Number.isFinite(this.lastMlSpeedMps)) return undefined;
+    // ★ AND SPEND IT FIRST AS A VERDICT ★ See `mlSpeedTrustGate`. Silent until
+    // enough pairs exist, so a short session, a handset that never had a fix,
+    // and every replay in the corpus are untouched.
+    if (this.config.mlSpeedTrustGate && !this.mlCalibrator.isTrusted(tMs)) {
+      if (!this.mlDistrusted) {
+        this.mlDistrusted = true;
+        this.log.push({
+          t: tMs,
+          type: 'ML_SUPPRESSED',
+          message:
+            `speed model held back — GNSS measures ` +
+            `${this.mlCalibrator.rawRatioAt(tMs).toFixed(2)}x what it predicts, ` +
+            `so it is not describing this vehicle`,
+          data: { ratio: Number(this.mlCalibrator.rawRatioAt(tMs).toFixed(3)) },
+        });
+      }
+      return undefined;
+    }
+    this.mlDistrusted = false;
     // ★ SPEND WHAT GNSS TAUGHT US ABOUT THIS VEHICLE ★ See MlSpeedCalibrator.
     // Identity until enough pairs have been seen, so a short session or a
     // handset that never had a fix behaves exactly as before.
@@ -3743,6 +3870,7 @@ export class NavigationEngine {
     this.mlBuffer.reset();
     this.mlCalibrator.reset();
     this.lastMlRawMps = Number.NaN;
+    this.mlDistrusted = false;
     this.mlSmoother.reset();
     this.lastMlInferenceT = null;
     this.lastMlSpeedMps = Number.NaN;

@@ -300,6 +300,12 @@ describe('NavigationEngine + ML speed', () => {
     // The bound delays a wrong answer; it must not silence a right one. Given
     // long enough the estimate reaches what the model claims, so this is a
     // rate limit and not a ceiling.
+    //
+    // A model insisting on 25 m/s against a Doppler that measured 10 is out by
+    // 2.5x, which `mlSpeedTrustGate` would refuse — but only once it has seen
+    // `minObservations` pairs, and six seconds of 1 Hz fixes is six. So this
+    // still exercises the rate limit, which is what it is for. The gate's own
+    // behaviour is measured below.
     const e = new NavigationEngine();
     e.setSpeedPredictor(new MockSpeedPredictor(25), { mean: ZERO_MEAN, std: UNIT_STD });
     const out = run(e, { gnssMs: 6000, outageMs: 20_000 });
@@ -350,5 +356,218 @@ describe('NavigationEngine + ML speed', () => {
     // Channel 2 is az; its window starts at index 2 * ML_WINDOW_SAMPLES.
     const az = w[2 * ML_WINDOW_SAMPLES]!;
     expect(az).toBeGreaterThan(9);
+  });
+});
+
+/**
+ * ★ THE FIELD REPORT, AS A TEST ★
+ *
+ * A scooter ridden at an indicated 25-30 km/h through a city, the receiver
+ * blocked for 45 s, and the badge reading `[ML] 89 km/h` with 2274 m of
+ * distance banked. The model was reading a two-wheeler's vibration — nothing
+ * like the cars in IO-VNBD — and answering three times the truth, and nothing
+ * in the chain was entitled to disagree with it.
+ *
+ * "what the fuck is 80 71 speed in dead reckoning ... just catch the speed in
+ * which u missed location then in that mean speed u take it"
+ */
+describe('an inferred speed is bounded by the last measured one', () => {
+  // OFF by default — see `outageSpeedCeiling` for the measurement that put it
+  // there. These lock in the mechanism for the toggle and for the failure the
+  // trust gate cannot see: a model that goes wrong only once GNSS is gone.
+  const CEILING = { outageSpeedCeiling: true } as const;
+  const ZERO12 = new Array(12).fill(0);
+  const ONE12 = new Array(12).fill(1);
+
+  /** A phone on a machine that is genuinely still: no vibration to read. */
+  function stillSample(t: number): SensorSample {
+    return {
+      t,
+      imu: { ax: 0, ay: 0, az: 9.81, gx: 0, gy: 0, gz: 0 },
+    };
+  }
+
+  /** 8.3 m/s is 30 km/h — the ride in the report. */
+  const RIDE_MPS = 8.3;
+
+  function ride(engine: NavigationEngine, gnssMs: number, outageMs: number): number[] {
+    const speeds: number[] = [];
+    let t = 0;
+    for (; t < gnssMs; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: RIDE_MPS };
+      }
+      engine.update(s);
+    }
+    for (; t < gnssMs + outageMs; t += 20) {
+      speeds.push(engine.update(sample(t)).velocityMps);
+    }
+    return speeds;
+  }
+
+  it('★ 45 s of outage no longer reaches 89 km/h', () => {
+    const e = new NavigationEngine(CEILING);
+    // What the model actually said on the handset: three times the truth.
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    const speeds = ride(e, 6000, 45_000);
+    expect(e.currentSpeedSource).toBe('ML');
+    const worst = Math.max(...speeds);
+    // 8.3 * 1.35 + 2.5 = 13.7 m/s, or 49 km/h. Was 24.7 m/s — 89 km/h.
+    expect(worst).toBeLessThanOrEqual(13.71);
+    expect(worst * 3.6).toBeLessThan(50);
+  });
+
+  it('the bound opens gradually rather than snapping shut', () => {
+    const e = new NavigationEngine(CEILING);
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    const speeds = ride(e, 6000, 45_000);
+    // One second in, the estimate is still close to what was measured.
+    expect(speeds[50]!).toBeLessThan(RIDE_MPS + 2);
+    // And by the end it has been allowed the full headroom, not held at the
+    // Doppler value — this is a bound on an inference, not a refusal to make
+    // one. See `outageSpeedRampMs`.
+    expect(speeds[speeds.length - 1]!).toBeGreaterThan(RIDE_MPS + 3);
+  });
+
+  it('a model that agrees with the receiver is not touched at all', () => {
+    // ★ WHERE THE MODEL BEHAVES, THE BOUND NEVER BINDS ★ This is what makes
+    // the change safe to ship against the published drift figures.
+    const bounded = new NavigationEngine(CEILING);
+    const free = new NavigationEngine({ outageSpeedCeiling: false });
+    for (const e of [bounded, free]) {
+      e.setSpeedPredictor(new MockSpeedPredictor(RIDE_MPS), { mean: ZERO12, std: ONE12 });
+    }
+    const a = ride(bounded, 6000, 45_000);
+    const b = ride(free, 6000, 45_000);
+    for (let i = 0; i < a.length; i++) expect(a[i]!).toBeCloseTo(b[i]!, 6);
+  });
+
+  it('a genuine motorway speed keeps its headroom', () => {
+    // The bound is proportional as well as absolute, so it does not punish a
+    // fast vehicle for being fast: 25 m/s of Doppler buys 33.75 + 2.5.
+    const e = new NavigationEngine(CEILING);
+    e.setSpeedPredictor(new MockSpeedPredictor(30), { mean: ZERO12, std: ONE12 });
+    let t = 0;
+    for (; t < 6000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: 25 };
+      }
+      e.update(s);
+    }
+    let v = 0;
+    for (; t < 36_000; t += 20) v = e.update(sample(t)).velocityMps;
+    expect(v).toBeGreaterThan(29);
+  });
+
+  it('a stop mid-outage does not cap the pull-away at walking pace', () => {
+    // ★ A ZUPT IS KNOWLEDGE ABOUT NOW, NOT ABOUT THE ENVELOPE ★ See
+    // `measuredSpeedMps`. Anchoring the ceiling on the zero would leave the
+    // vehicle unable to exceed 2.5 m/s for the rest of the outage.
+    const e = new NavigationEngine(CEILING);
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    let t = 0;
+    for (; t < 6000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: RIDE_MPS };
+      }
+      e.update(s);
+    }
+    // A stop, then motion again — both without GNSS.
+    for (; t < 16_000; t += 20) e.update(stillSample(t));
+    let v = 0;
+    for (; t < 40_000; t += 20) v = e.update(sample(t)).velocityMps;
+    expect(v).toBeGreaterThan(RIDE_MPS);
+  });
+});
+
+/**
+ * ★ THE RECEIVER HAD BEEN CONTRADICTING THE MODEL ALL ALONG ★
+ *
+ * See `mlSpeedTrustGate`. On a scooter ridden at an indicated 25-30 km/h the
+ * IO-VNBD-trained network answered roughly three times the truth, and the
+ * chain anchored the velocity vector to it: `[ML] 89 km/h`, 2274 m of distance
+ * on a ride of well under a kilometre, and a trail sprawled across streets the
+ * rider never went down. Every second of the drive before that outage, the
+ * receiver reported a Doppler speed and the model reported its opinion of the
+ * same moment. Nothing compared them.
+ */
+describe('the speed model is checked against the receiver that can check it', () => {
+  const ZERO12 = new Array(12).fill(0);
+  const ONE12 = new Array(12).fill(1);
+  const RIDE_MPS = 8.3; // 30 km/h
+
+  function ride(engine: NavigationEngine, gnssMs: number, outageMs: number, gnssMps: number) {
+    let t = 0;
+    for (; t < gnssMs; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: gnssMps };
+      }
+      engine.update(s);
+    }
+    const speeds: number[] = [];
+    for (; t < gnssMs + outageMs; t += 20) speeds.push(engine.update(sample(t)).velocityMps);
+    return speeds;
+  }
+
+  it('★ a model reading three times the truth is not consulted in the outage', () => {
+    const e = new NavigationEngine();
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    const speeds = ride(e, 30_000, 45_000, RIDE_MPS);
+    expect(e.currentSpeedSource).not.toBe('ML');
+    // 89 km/h was 24.7 m/s. Coasting from the measured speed instead.
+    expect(Math.max(...speeds)).toBeLessThan(RIDE_MPS * 1.5);
+  });
+
+  it('★ and says so in the log rather than falling silent', () => {
+    const e = new NavigationEngine();
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    ride(e, 30_000, 10_000, RIDE_MPS);
+    const said = e.events.all.filter((x) => x.type === 'ML_SUPPRESSED');
+    expect(said.length).toBe(1);
+    expect(said[0]!.message).toContain('not describing this vehicle');
+  });
+
+  it('a model that agrees with the receiver is used exactly as before', () => {
+    const gated = new NavigationEngine();
+    const ungated = new NavigationEngine({ mlSpeedTrustGate: false });
+    for (const e of [gated, ungated]) {
+      e.setSpeedPredictor(new MockSpeedPredictor(RIDE_MPS * 1.1), { mean: ZERO12, std: ONE12 });
+    }
+    const a = ride(gated, 30_000, 45_000, RIDE_MPS);
+    const b = ride(ungated, 30_000, 45_000, RIDE_MPS);
+    expect(gated.currentSpeedSource).toBe('ML');
+    for (let i = 0; i < a.length; i++) expect(a[i]!).toBeCloseTo(b[i]!, 6);
+  });
+
+  it('says nothing at all before it has evidence', () => {
+    // ★ SILENT UNTIL IT HAS SOMETHING TO SAY ★ A handset that has only just
+    // acquired, or one that never gets a Doppler speed, must behave exactly as
+    // it did — the gate is an observation, and with no pairs there is none.
+    const e = new NavigationEngine();
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    ride(e, 5000, 4000, RIDE_MPS);
+    expect(e.currentSpeedSource).toBe('ML');
+  });
+
+  it('a model that under-reads by as much is refused too', () => {
+    // The bound is two-sided: a model reading a third of the truth costs
+    // distance just as surely, and is just as clearly describing something
+    // else.
+    const e = new NavigationEngine();
+    e.setSpeedPredictor(new MockSpeedPredictor(2.6), { mean: ZERO12, std: ONE12 });
+    ride(e, 30_000, 10_000, RIDE_MPS);
+    expect(e.currentSpeedSource).not.toBe('ML');
+  });
+
+  it('can be switched off, and then the field report reproduces', () => {
+    const e = new NavigationEngine({ mlSpeedTrustGate: false });
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    const speeds = ride(e, 30_000, 45_000, RIDE_MPS);
+    expect(e.currentSpeedSource).toBe('ML');
+    expect(Math.max(...speeds) * 3.6).toBeGreaterThan(80);
   });
 });

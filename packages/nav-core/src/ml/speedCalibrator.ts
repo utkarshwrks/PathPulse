@@ -70,6 +70,19 @@ export interface SpeedCalibratorConfig {
    * a different vehicle. Past this, the model is used as trained.
    */
   maxAgeMs: number;
+  /**
+   * Bounds outside which the model is not miscalibrated but WRONG.
+   *
+   * ★ THE SAME NUMBERS, ASKED A DIFFERENT QUESTION ★
+   *
+   * `minScale`/`maxScale` clamp the correction. These decide whether there is
+   * anything worth correcting — see `isTrusted`. Deliberately the same values,
+   * because the argument for them is the same one: a model out by more than
+   * this is describing a different vehicle, a different mount, or a different
+   * kind of road, and no multiplier makes it into evidence.
+   */
+  minTrustRatio: number;
+  maxTrustRatio: number;
 }
 
 export const DEFAULT_SPEED_CALIBRATOR_CONFIG: SpeedCalibratorConfig = {
@@ -79,6 +92,8 @@ export const DEFAULT_SPEED_CALIBRATOR_CONFIG: SpeedCalibratorConfig = {
   minScale: 0.6,
   maxScale: 1.7,
   maxAgeMs: 300_000,
+  minTrustRatio: 0.6,
+  maxTrustRatio: 1.7,
 };
 
 export interface SpeedCalibratorState {
@@ -86,6 +101,10 @@ export interface SpeedCalibratorState {
   observations: number;
   /** True when the scale is actually being applied. */
   active: boolean;
+  /** False once the model has been shown to be out of its domain. */
+  trusted: boolean;
+  /** The unclamped ratio, or NaN before there is enough to say. */
+  rawRatio: number;
 }
 
 export class MlSpeedCalibrator {
@@ -113,6 +132,63 @@ export class MlSpeedCalibrator {
       this.predicted.shift();
     }
     this.lastObservedT = tMs;
+  }
+
+  /**
+   * The unclamped ratio of what was measured to what the model said, or NaN
+   * when there is not enough to say.
+   */
+  rawRatioAt(tMs: number): number {
+    if (this.measured.length < this.config.minObservations) return Number.NaN;
+    if (this.lastObservedT !== null && tMs - this.lastObservedT > this.config.maxAgeMs) {
+      return Number.NaN;
+    }
+    let sm = 0;
+    let sp = 0;
+    for (let i = 0; i < this.measured.length; i++) {
+      sm += this.measured[i]!;
+      sp += this.predicted[i]!;
+    }
+    if (!(sp > 1e-6)) return Number.NaN;
+    const raw = sm / sp;
+    return Number.isFinite(raw) ? raw : Number.NaN;
+  }
+
+  /**
+   * Is this model saying anything about THIS vehicle worth listening to?
+   *
+   * ★ THE SAME MEASUREMENT, SPENT THE OTHER WAY ROUND ★
+   *
+   * Correcting the model with the learned scale is a kept negative result: a
+   * fitted multiplier feeds an integrated quantity, and over 16 outage windows
+   * it moved the median from 32.8 % to 29.5 % and the worst case from 131.5 %
+   * to 207.9 %. Better in the middle, much worse at the ends. The failure was
+   * in the FITTING — a two-minute fit is itself an estimate, and when the
+   * stretch it was fitted on is unrepresentative it is confidently wrong in
+   * the expensive direction.
+   *
+   * None of that argument survives when the same pairs are used to answer a
+   * BINARY question instead. A ratio of 0.34 is not a number to multiply by;
+   * it is the observation that this model, on this handset, on this vehicle,
+   * says three times what the receiver measures — and the honest response to
+   * that is to stop consulting it, not to scale it. Suppression has no tail:
+   * the chain falls back to integrating from the last measured speed, which is
+   * the arm the ablation compares everything else against.
+   *
+   * Field report, a scooter at an indicated 25-30 km/h with the receiver
+   * blocked: `[ML] 89 km/h` and 2274 m of distance banked on a ride of well
+   * under a kilometre. The receiver had been contradicting the model, out
+   * loud, at 1 Hz, for the whole of the drive that preceded it. Nothing was
+   * listening.
+   *
+   * Silent until `minObservations` pairs exist, so a short session, a handset
+   * that never had a fix, and every replay in the corpus behave exactly as
+   * they did.
+   */
+  isTrusted(tMs: number): boolean {
+    const raw = this.rawRatioAt(tMs);
+    if (!Number.isFinite(raw)) return true;
+    return raw >= this.config.minTrustRatio && raw <= this.config.maxTrustRatio;
   }
 
   /**
@@ -146,6 +222,8 @@ export class MlSpeedCalibrator {
       scale,
       observations: this.measured.length,
       active: this.measured.length >= this.config.minObservations && scale !== 1,
+      trusted: this.isTrusted(tMs),
+      rawRatio: this.rawRatioAt(tMs),
     };
   }
 

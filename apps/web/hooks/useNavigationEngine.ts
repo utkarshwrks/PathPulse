@@ -234,6 +234,22 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // and the worst case from 131.5% to 207.9%. Better in the middle, much
   // worse at the ends, which is not what a dead-reckoning system pays for.
   calibrateMlSpeed: false,
+  // ON. The pairs the calibrator collects are free and arrive at 1 Hz, and
+  // used as a VERDICT rather than a multiplier they carry no tail: while the
+  // receiver and the model agree to within the calibrator's own
+  // "miscalibrated vs wrong" bounds, nothing changes at all. Outside them the
+  // model is not offered to the chain, which coasts from the last Doppler
+  // speed instead. Field: a scooter at 25-30 km/h read `[ML] 89 km/h` through
+  // a 45 s outage and banked 2274 m, with the receiver contradicting the
+  // model every second of the drive before it.
+  mlSpeedTrustGate: true,
+  // OFF — a kept negative result. Capping an inferred speed at the last
+  // measured one plus headroom fixes the same field report, and costs the
+  // ablation's `full` arm 6.1% -> 14.2% mean drift (p90 15.1% -> 44.3%)
+  // because it truncates real acceleration inside an outage window. Kept
+  // toggleable: it still catches a model that goes wrong only once GNSS is
+  // gone, which the trust gate cannot see.
+  outageSpeedCeiling: false,
   // Phase 17. OFF by default, and the finding has REVERSED on real sensors.
   //
   // Tier S, simulated: 12.1% mean against the shipped chain's 6.1%. Tier R,

@@ -79,6 +79,66 @@ export interface DeadReckoningConfig {
   mlSpeedMaxAccelMps2: number;
   /** The most it may pull the estimate DOWN per second, m/s^2. See above. */
   mlSpeedMaxDecelMps2: number;
+  /**
+   * Bound an INFERRED speed by the last speed GNSS actually MEASURED.
+   *
+   * ★ THE RATE LIMIT WAS NEVER A CEILING, AND A LONG OUTAGE FOUND OUT ★
+   *
+   * `mlSpeedMaxAccelMps2` bounds how fast the model may move the estimate. It
+   * says nothing about where it may move it TO. Over one sample that is the
+   * same thing; over a forty-five second outage it is not, because 4 m/s^2 for
+   * forty-five seconds reaches anywhere at all, and the only thing left above
+   * it is the 40 m/s plausibility clamp.
+   *
+   * Field report, a scooter ridden at an indicated 25-30 km/h through a city,
+   * with the receiver blocked for 45 s:
+   *
+   *   no fix for 12 s ....... [ML] 73 km/h
+   *   no fix for 25 s ....... [ML] 59 km/h
+   *   no fix for 35 s ....... [ML] 65 km/h
+   *   no fix for 45 s ....... [ML] 89 km/h,  2274 m travelled
+   *
+   * "what the fuck is 80 71 speed in dead reckoning". The model was reading a
+   * two-wheeler's vibration — a signature nothing like the cars in IO-VNBD —
+   * and answering three times the truth, and the chain anchored the velocity
+   * vector to it outright. Every one of those km/h was integrated into
+   * distance, which is why a ride of well under a kilometre reported 2.3 km.
+   *
+   * ★ WHAT WE ACTUALLY KNOW, AND FOR HOW LONG ★
+   *
+   * At the instant the fixes stopped, the receiver had just MEASURED the
+   * speed. That measurement does not become worthless a second later — it
+   * becomes less certain, at a rate a vehicle's dynamics set. So the inferred
+   * speed is allowed to stray from it, by an amount that starts at nothing and
+   * grows over `outageSpeedRampMs` to
+   *
+   *   anchor * (outageSpeedRatio - 1) + outageSpeedGainMps
+   *
+   * Proportional AND absolute, because both failures are real: 35 % of a
+   * motorway speed is a plausible 30 km/h of headroom and 35 % of a crawl is
+   * nothing, so the constant carries the low end and the ratio the high one.
+   * On the ride above the ceiling settles at 8.3 * 1.35 + 2.5 = 13.7 m/s, or
+   * 49 km/h — still generous, and 40 km/h below what was on screen.
+   *
+   * ★ WHY THIS IS NOT THE CALIBRATOR AGAIN ★
+   *
+   * `MlSpeedCalibrator` is a kept negative result: a multiplicative scale
+   * FITTED over two minutes of driving, which was better in the median and
+   * much worse in the tail, because a fitted parameter can be confidently
+   * wrong in the expensive direction. This is a BOUND, not a fit. It has no
+   * parameters learned from data, it is anchored on a measurement rather than
+   * on a regression, and it can only ever REMOVE speed. Where the model is
+   * behaving the bound never binds and nothing changes at all — which is the
+   * same asymmetry `mlSpeedMaxAccelMps2` already argues for, applied over the
+   * whole outage rather than over one sample.
+   */
+  outageSpeedCeiling: boolean;
+  /** Fraction of the anchor speed the estimate may exceed it by. See above. */
+  outageSpeedRatio: number;
+  /** Absolute headroom above the anchor, m/s. Carries the low-speed end. */
+  outageSpeedGainMps: number;
+  /** Time over which the headroom opens from nothing to full, ms. */
+  outageSpeedRampMs: number;
 }
 
 export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
@@ -94,6 +154,10 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   distanceFloorMps: 0.3,
   mlSpeedMaxAccelMps2: 4,
   mlSpeedMaxDecelMps2: 8,
+  outageSpeedCeiling: false,
+  outageSpeedRatio: 1.35,
+  outageSpeedGainMps: 2.5,
+  outageSpeedRampMs: 20_000,
 };
 
 /** Per-sample inputs that are optional or only available in some modes. */
@@ -158,6 +222,24 @@ export interface DeadReckoningState {
   velocityEnu: { e: number; n: number };
   /** How long since speed was last anchored by GNSS or a ZUPT, ms. */
   unaidedMs: number;
+  /**
+   * The last speed GNSS MEASURED, m/s, and how long ago. See
+   * `outageSpeedCeiling`.
+   *
+   * ★ DELIBERATELY NOT `unaidedMs`, AND DELIBERATELY NOT ZEROED BY A ZUPT ★
+   *
+   * A ZUPT is knowledge about NOW — the vehicle is stopped, velocity is
+   * exactly zero — and it rightly resets `unaidedMs`, because the coasting
+   * decay is asking "how long since anything corrected this estimate". The
+   * ceiling asks a different question: how fast was this vehicle going the
+   * last time anybody actually measured it, because that is what bounds how
+   * fast it can plausibly be going now. A red light in the middle of a tunnel
+   * does not make the pre-tunnel cruise speed unknowable, and folding the stop
+   * into the anchor would cap the pull-away at walking pace for the rest of
+   * the outage.
+   */
+  measuredSpeedMps: number;
+  measuredSpeedAgeMs: number;
 }
 
 /**
@@ -180,6 +262,8 @@ export class DeadReckoningEngine {
     biases: { accel: [0, 0, 0], gyro: [0, 0, 0] },
     velocityEnu: { e: 0, n: 0 },
     unaidedMs: 0,
+    measuredSpeedMps: 0,
+    measuredSpeedAgeMs: 0,
   };
 
   private config: DeadReckoningConfig;
@@ -217,6 +301,12 @@ export class DeadReckoningEngine {
     this.recentFixes.push(fix);
     if (this.recentFixes.length > this.config.smoothingFixCount) this.recentFixes.shift();
     this.lastTrustedSpeed = fix.speedMps;
+    // The ceiling's anchor is a MEASUREMENT, and this is one. See
+    // `outageSpeedCeiling`.
+    if (Number.isFinite(fix.speedMps)) {
+      this.state.measuredSpeedMps = Math.max(0, fix.speedMps);
+      this.state.measuredSpeedAgeMs = 0;
+    }
   }
 
   /**
@@ -263,6 +353,10 @@ export class DeadReckoningEngine {
       n: fix.speedMps * Math.cos(h),
     };
     this.state.unaidedMs = 0;
+    if (Number.isFinite(fix.speedMps)) {
+      this.state.measuredSpeedMps = Math.max(0, fix.speedMps);
+      this.state.measuredSpeedAgeMs = 0;
+    }
     this.initialised = true;
   }
 
@@ -326,6 +420,14 @@ export class DeadReckoningEngine {
     const h = (this.state.headingDeg * Math.PI) / 180;
     this.state.velocityEnu = { e: medianSpeed * Math.sin(h), n: medianSpeed * Math.cos(h) };
     this.state.unaidedMs = 0;
+    // ★ THIS IS THE SPEED THE OUTAGE IS BOUNDED AGAINST ★ The median of the
+    // pre-outage window, which is the same robust view of "how fast was this
+    // vehicle going when the fixes stopped" that seeds the dynamics two lines
+    // up — not the single last fix, which is the one taken under the
+    // overpass. See `outageSpeedCeiling`.
+    this.state.measuredSpeedMps = Math.max(0, medianSpeed);
+    this.state.measuredSpeedAgeMs = 0;
+    this.lastTrustedSpeed = medianSpeed;
     this.initialised = true;
     return true;
   }
@@ -356,6 +458,9 @@ export class DeadReckoningEngine {
   ): Readonly<DeadReckoningState> {
     const dt = dtMs / 1000;
     if (dt <= 0 || dt > 1) return this.state; // clock jump or duplicate sample
+    // Ages on every step and is reset ONLY by a measurement — not by a ZUPT.
+    // See `measuredSpeedMps`.
+    this.state.measuredSpeedAgeMs += dtMs;
 
     // --- heading -----------------------------------------------------------
     // When the caller has already projected the gyro onto the true vertical and
@@ -399,15 +504,26 @@ export class DeadReckoningEngine {
       ? Math.max(0, Math.min(1, opts.gnssSpeedWeight ?? 1))
       : 1;
 
-    if (gnssSpeedMps !== undefined && Number.isFinite(gnssSpeedMps) && gnssWeight > 0) {
+    // Doppler is in play this sample, fresh or held. The ceiling stands down
+    // for it: a measurement does not need permission from an older one.
+    const measuredThisSample =
+      gnssSpeedMps !== undefined && Number.isFinite(gnssSpeedMps) && gnssWeight > 0;
+
+    if (measuredThisSample) {
       // 1. GNSS Doppler speed. Independent of position error and far more
       //    accurate than anything we can integrate. Re-anchors the vector.
       //
       vE = gnssSpeedMps * fE;
       vN = gnssSpeedMps * fN;
       this.lastTrustedSpeed = gnssSpeedMps;
-      if (gnssWeight >= 1) this.state.unaidedMs = 0;
-      else this.state.unaidedMs += dtMs;
+      if (gnssWeight >= 1) {
+        this.state.unaidedMs = 0;
+        // A held speed is a stale measurement and must not re-anchor the
+        // ceiling either — the same reasoning as `gnssSpeedWeight`, applied to
+        // the other quantity that has to survive the outage.
+        this.state.measuredSpeedMps = Math.max(0, gnssSpeedMps);
+        this.state.measuredSpeedAgeMs = 0;
+      } else this.state.unaidedMs += dtMs;
     } else if (opts.stepSpeedMps !== undefined && Number.isFinite(opts.stepSpeedMps)) {
       // 2a. ★ THE PEDESTRIAN STEP MODEL. ★
       //     Cadence times stride. Anchors the velocity vector exactly as a
@@ -478,6 +594,13 @@ export class DeadReckoningEngine {
       : Math.max(0, Math.min(this.config.maxSpeedMps, forwardSpeed));
     if (!Number.isFinite(speed)) speed = 0;
 
+    // ★ AND BOUND IT BY WHAT WAS LAST MEASURED ★ See `outageSpeedCeiling`.
+    // Skipped on a sample carrying a live Doppler speed: a measurement does
+    // not need permission from an older measurement.
+    if (this.config.outageSpeedCeiling && !measuredThisSample) {
+      speed = Math.min(speed, this.inferredSpeedCeiling());
+    }
+
     // Rescale the vector to match the clamped speed so the two never disagree.
     if (before !== 0 && Number.isFinite(before)) {
       const scale = speed / before;
@@ -522,6 +645,27 @@ export class DeadReckoningEngine {
     this.state.enu = { e: enu.e, n: enu.n, ...(enu.u !== undefined ? { u: enu.u } : {}) };
   }
 
+  /**
+   * The most an INFERRED speed may claim right now, m/s.
+   *
+   * Anchored on the last measured speed, with headroom that opens from nothing
+   * over `outageSpeedRampMs`. See `outageSpeedCeiling` for why this exists and
+   * why it is a bound rather than a fit.
+   */
+  inferredSpeedCeiling(): number {
+    const anchor = Number.isFinite(this.state.measuredSpeedMps)
+      ? Math.max(0, this.state.measuredSpeedMps)
+      : 0;
+    const ramp = Math.max(
+      0,
+      Math.min(1, this.state.measuredSpeedAgeMs / Math.max(1, this.config.outageSpeedRampMs)),
+    );
+    const headroom =
+      ramp * (anchor * (this.config.outageSpeedRatio - 1) + this.config.outageSpeedGainMps);
+    const ceiling = anchor + headroom;
+    return Number.isFinite(ceiling) ? ceiling : this.config.maxSpeedMps;
+  }
+
   /** Force velocity to zero — used by ZUPT when the vehicle stops. */
   applyZeroVelocity(): void {
     this.state.speedMps = 0;
@@ -555,6 +699,8 @@ export class DeadReckoningEngine {
       biases: { accel: [0, 0, 0], gyro: [0, 0, 0] },
       velocityEnu: { e: 0, n: 0 },
       unaidedMs: 0,
+      measuredSpeedMps: 0,
+      measuredSpeedAgeMs: 0,
     };
     this.recentFixes = [];
     this.lastTrustedSpeed = 0;

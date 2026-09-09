@@ -501,6 +501,16 @@ const TOGGLES: Array<{
     hint: 'The IO-VNBD-trained CNN, used for speed when GNSS is gone. Inert until the model loads — see the SENSORS tab.',
   },
   {
+    key: 'mlSpeedTrustGate', group: 'core',
+    label: 'AI speed: check against GNSS',
+    hint: 'Stops using the model once the receiver has shown it wrong on this vehicle. A scooter read 89 km/h at 30; the fix is to coast from the last measured speed instead.',
+  },
+  {
+    key: 'outageSpeedCeiling', group: 'advanced',
+    label: 'Cap DR speed at last measured (off — measured worse)',
+    hint: 'Bounds an inferred speed by the Doppler that seeded the outage. Fixes the same report and costs the ablation 6.1% -> 14.2% mean drift, because it truncates real acceleration.',
+  },
+  {
     key: 'mlVehicleOnly', group: 'advanced',
     label: 'AI model: vehicle only',
     hint: 'The model was trained on car data. On foot it saturated the ceiling and the HUD read a flat 11 km/h. Off puts that back.',

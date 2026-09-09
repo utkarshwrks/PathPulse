@@ -1806,6 +1806,7 @@ Being able to name what is off is part of being able to trust what is on.
 | **Forward-bias estimator** | ⊘ off | **Measurably worse** since the high-pass exists: 6.9 % → 10.8 %. Kept in the tree and in the table as a recorded negative result. |
 | **Turn relocaliser** | ⊘ off | Depends on the particle filter. |
 | **CNN vibration model** | ⊘ off | Experimental; not yet earning its size. |
+| **Outage speed ceiling** | ⊘ off | Bounds an inferred speed by the Doppler that seeded the outage. Fixes §24.9 and **measurably worse** on the corpus: 6.1 % → 14.2 % mean, p90 15.1 % → 44.3 %, because it truncates real acceleration. `mlSpeedTrustGate` reaches the same failure at no cost. Kept for the case the gate cannot see. |
 
 ---
 
@@ -2016,6 +2017,91 @@ everything in that directory was simulated. **Fixed by tier filtering** in
 `listLogs()`, which is where the tier system in §18 came from — the tests forced
 us to make the distinction explicit in code rather than in a convention.
 
+## 24.9 The speed model had never seen a two-wheeler
+
+**Symptom:** a scooter ridden at an indicated 25–30 km/h through a city, with
+the receiver blocked for 45 s. The badge read `[ML] 89 km/h`. Distance climbed
+to 2274 m on a ride of well under a kilometre, and the orange trail sprawled
+across three streets the rider never went down.
+
+    no fix for 12 s ....... [ML] 73 km/h
+    no fix for 25 s ....... [ML] 59 km/h
+    no fix for 35 s ....... [ML] 65 km/h
+    no fix for 45 s ....... [ML] 89 km/h,  2274 m
+
+**Cause:** IO-VNBD is a car dataset. A two-wheeler's vibration signature is
+nothing like it, and the model's single strongest learned cue is *loud
+accelerometer means fast* — so it answered roughly three times the truth. The
+chain then anchored the velocity vector to it outright, and `mlSpeedMaxAccelMps2`
+did not stop it: a rate limit bounds how fast the estimate MOVES, not where it
+moves TO, and 4 m/s² over 45 s reaches anywhere at all. The only thing above it
+was the 40 m/s plausibility clamp.
+
+**What made this findable:** the receiver had been contradicting the model, out
+loud, at 1 Hz, for the entire drive before the outage. `MlSpeedCalibrator`
+already collected exactly those pairs — and only ever used them to fit a
+multiplier, which is a **kept negative result** (§21) because a fit feeds an
+integrated quantity and its tail is worse than the model it corrects.
+
+**Fix:** spend the same pairs as a **verdict** rather than a multiplier. While
+the ratio of measured to predicted stays inside the calibrator's own
+`minTrustRatio`…`maxTrustRatio` — the bounds it already argues separate
+*miscalibrated* from *wrong* — nothing changes. Outside them the model is not
+offered to the chain, which coasts from the last Doppler speed instead.
+
+```ts
+if (this.config.mlSpeedTrustGate && !this.mlCalibrator.isTrusted(tMs)) return undefined;
+```
+
+The asymmetry is what makes this shippable where the fit was not: **suppression
+has no tail, because it asserts nothing.** The worst case is that a good model
+is withheld and the estimate is exactly as good as the measured `full`-minus-ML
+arm. A bad model asserts a speed, and an asserted speed integrates.
+
+**Result:** ablation unchanged to the last digit on every row — on that corpus
+the model is in domain and the gate never fires. Tier R 30.9 % → 30.8 %.
+
+**Rejected on the way:** bounding the inferred speed by the last measured one
+plus headroom that opens over 20 s. It caps the same 89 km/h at 49, it cannot be
+wrong in the expensive direction, and it costs `full` **6.1 % → 14.2 % mean
+drift, p90 15.1 % → 44.3 %, median untouched at 4.6 %** — the shape of a bound
+that is inert on most windows and truncates the ones where the vehicle
+accelerated hardest. Kept as `outageSpeedCeiling`, off, because it still catches
+a model that is fine while GNSS is up and goes wrong the moment it is not, which
+the gate cannot see.
+
+## 24.10 The stop detector was tuned on a car with its engine off
+
+**Symptom:** *"if i stop during dead reckoning then also it appear to be
+moving"* — the same complaint as §24.2, on a vehicle §24.2 never ran on.
+
+**Cause:** the chain is only ever arrested by ZUPT, ZUPT is only ever armed by
+`StationarityDetector`, and its gate is a measured percentile of a **car's**
+accelerometer variance: `accelVarianceThreshold: 0.015`, which sits in the gap
+between that car's stopped p50 and its moving p05. A running two-wheeler idling
+at a light shakes the handset past it continuously, so `isStationary` never went
+true and the speed model went on asserting a speed at a machine standing still.
+
+**Fix:** learn what a stop sounds like on *this* vehicle, from GNSS-labelled
+samples, and spend it when GNSS is gone — the `StrideModel` (metres per step)
+and `MagneticHeading` (grip offset) pattern, applied to a classification
+boundary rather than to a constant.
+The receiver labels a sample stopped below 0.5 m/s and moving above 3 m/s, with
+a deliberate dead zone between; the gate is then raised to the stopped p90 plus
+margin.
+
+**And it is only allowed to move into a gap the data has shown is there.** The
+learned gate must sit below the moving p10 by `learnSeparationFactor`, or the
+detector declines and the configured value stands. A false stop is far more
+expensive than a missed one — it zeroes a real velocity mid-drive and teaches
+the bias estimators from a moving vehicle — so the gate is never raised on the
+strength of the stopped samples alone. Raised only, never tightened, and capped
+at 8× the configured value however wide the measured gap is.
+
+**Result:** ablation unchanged on every row. The simulator's own idle is quiet
+enough that the learned gate never engages, which is the correct behaviour and
+also why this could not have been found without a field report.
+
 ---
 
 # 25 · Build, deploy and workflows
@@ -2160,7 +2246,9 @@ The plausible directions, none yet measured:
 - use **road-graph geometry** to bound speed — a 30 km/h residential street is
   information
 - **learned per-vehicle scale** — a given car and phone pairing has a repeatable
-  accelerometer scale error
+  accelerometer scale error. Tried as a correction and rejected (§21); the same
+  measurement now ships as a *verdict* instead (§24.9), which bounds the damage
+  without asserting a number
 - **wheel-speed via CAN** where a dongle is available, as an optional aid
 
 ## 28.3 Tightly-coupled GNSS

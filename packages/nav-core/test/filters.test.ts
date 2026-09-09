@@ -116,3 +116,108 @@ describe('StationarityDetector', () => {
     expect(r.isStationary).toBe(false);
   });
 });
+
+/**
+ * ★ THE SECOND HALF OF THE FIELD REPORT ★
+ *
+ * "if i stop during dead reckoning then also it appear to be moving".
+ *
+ * The chain is only ever arrested by ZUPT, ZUPT is only ever armed by this
+ * detector, and this detector's gate was measured on a car with its engine
+ * off. A running two-wheeler idling at a light sits above it, so on a scooter
+ * `isStationary` never went true and the speed model went on asserting a speed
+ * at a machine standing still.
+ */
+describe('StationarityDetector learns this vehicle', () => {
+  /** A window's worth of samples with a given accelerometer variance. */
+  function feed(d: StationarityDetector, amplitude: number, gyro: number, n: number) {
+    let last = d.evaluate();
+    for (let i = 0; i < n; i++) {
+      // Along gravity, so the magnitude — which is what the detector reads —
+      // actually carries the variance.
+      const v = amplitude * (i % 2 === 0 ? 1 : -1);
+      last = d.push(0, 0, 9.81 + v, gyro, 0, 0);
+    }
+    return last;
+  }
+
+  /** An idle loud enough to breach the car-derived gate, quiet next to cruise. */
+  const IDLE_AMPLITUDE = 0.18; // variance ~0.032, against a 0.015 gate
+  const CRUISE_AMPLITUDE = 1.2;
+
+  it('★ a two-wheeler idling reads as MOVING against the shipped gate', () => {
+    const d = new StationarityDetector({ adaptive: false });
+    expect(feed(d, IDLE_AMPLITUDE, 0.001, 200).isStationary).toBe(false);
+  });
+
+  it('★ and reads as stopped once GNSS has shown it what a stop looks like', () => {
+    const d = new StationarityDetector();
+    // Two minutes of ordinary riding: the receiver labels the stops and the
+    // cruises, and the gap between them is the gate.
+    for (let i = 0; i < 150; i++) {
+      d.observeLabelled(false, 0.032, 0.0012);
+      d.observeLabelled(true, 1.1, 0.06);
+    }
+    expect(d.thresholds.learned).toBe(true);
+    expect(d.thresholds.accelVariance).toBeGreaterThan(0.032);
+    expect(feed(d, IDLE_AMPLITUDE, 0.001, 200).isStationary).toBe(true);
+  });
+
+  it('still refuses to call a cruising vehicle stopped', () => {
+    const d = new StationarityDetector();
+    for (let i = 0; i < 150; i++) {
+      d.observeLabelled(false, 0.032, 0.0012);
+      d.observeLabelled(true, 1.1, 0.06);
+    }
+    expect(feed(d, CRUISE_AMPLITUDE, 0.05, 200).isStationary).toBe(false);
+  });
+
+  it('★ declines when the two distributions do not separate', () => {
+    // ★ THE SAFETY ARGUMENT, AS A TEST ★ A vehicle whose idle is as loud as
+    // its cruise offers no gap to move into, and guessing one buys a missed
+    // stop with a false one. See `learnSeparationFactor`.
+    const d = new StationarityDetector();
+    for (let i = 0; i < 150; i++) {
+      d.observeLabelled(false, 0.5, 0.05);
+      d.observeLabelled(true, 0.55, 0.055);
+    }
+    expect(d.thresholds.learned).toBe(false);
+    expect(d.thresholds.accelVariance).toBe(0.015);
+  });
+
+  it('never moves the gate on stopped samples alone', () => {
+    const d = new StationarityDetector();
+    for (let i = 0; i < 300; i++) d.observeLabelled(false, 0.032, 0.0012);
+    expect(d.thresholds.learned).toBe(false);
+  });
+
+  it('is bounded however wide the measured gap is', () => {
+    const d = new StationarityDetector();
+    for (let i = 0; i < 150; i++) {
+      d.observeLabelled(false, 5, 2);
+      d.observeLabelled(true, 500, 200);
+    }
+    expect(d.thresholds.accelVariance).toBeLessThanOrEqual(0.015 * 8);
+    expect(d.thresholds.gyroMean).toBeLessThanOrEqual(0.02 * 8);
+  });
+
+  it('only ever raises the gate, never tightens it', () => {
+    const d = new StationarityDetector();
+    for (let i = 0; i < 150; i++) {
+      d.observeLabelled(false, 0.0001, 0.0001);
+      d.observeLabelled(true, 1.1, 0.06);
+    }
+    expect(d.thresholds.accelVariance).toBe(0.015);
+    expect(d.thresholds.gyroMean).toBe(0.02);
+  });
+
+  it('is off entirely when switched off', () => {
+    const d = new StationarityDetector({ adaptive: false });
+    for (let i = 0; i < 150; i++) {
+      d.observeLabelled(false, 0.032, 0.0012);
+      d.observeLabelled(true, 1.1, 0.06);
+    }
+    expect(d.thresholds.learned).toBe(false);
+    expect(d.thresholds.accelVariance).toBe(0.015);
+  });
+});
