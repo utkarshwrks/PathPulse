@@ -183,6 +183,20 @@ export interface PropagateOptions {
   /** Matched road's speed limit, m/s, when road snapping has a match. */
   roadMaxSpeedMps?: number;
   /**
+   * Absolute ceiling implied by the class of road we are matched to, m/s,
+   * tolerance already applied.
+   *
+   * ★ WHY THIS IS NOT `roadMaxSpeedMps` ★ That one is a raw `maxspeed` tag and
+   * `clampSpeed` applies `roadSpeedTolerance` to it. This one arrives finished:
+   * it has already chosen between the tag and the `highway` class, already
+   * applied its own tolerance, and already been held steady across a
+   * flickering match by a ratchet. Handing it to the same parameter would
+   * apply the tolerance twice and silently raise the ceiling by 30 %.
+   *
+   * See `constraints/roadSpeed.ts` and `EngineConfig.roadSpeedClamp`.
+   */
+  roadSpeedCeilingMps?: number;
+  /**
    * Whether `gnssSpeedMps` still carries full authority. 1 for a speed
    * measured on this sample, 0 for one that is too old to use. Defaults to 1.
    *
@@ -593,6 +607,36 @@ export class DeadReckoningEngine {
       ? clampSpeed(forwardSpeed, this.config.speedClampConfig, opts.roadMaxSpeedMps)
       : Math.max(0, Math.min(this.config.maxSpeedMps, forwardSpeed));
     if (!Number.isFinite(speed)) speed = 0;
+
+    // ★ THE ROAD IS ALSO ENTITLED TO AN OPINION ABOUT SPEED ★
+    // See `roadSpeedCeilingMps`. A bound on the output, never an observation:
+    // the estimator's own belief is untouched and the map cannot teach it
+    // anything, which is the rule the whole map-matching design rests on.
+    if (
+      opts.roadSpeedCeilingMps !== undefined &&
+      Number.isFinite(opts.roadSpeedCeilingMps) &&
+      opts.roadSpeedCeilingMps >= 0
+    ) {
+      // ★ FLOORED AT WHAT THE RECEIVER ACTUALLY MEASURED ★
+      //
+      // A map is an assumption and a Doppler speed is a measurement, and this
+      // codebase resolves that the same way everywhere else: the measurement
+      // wins. If the vehicle was measured doing 100 km/h on the way into the
+      // outage, a way tagged `residential` is not evidence that it has slowed
+      // to 52 — it is evidence that the tag, or the match, does not describe
+      // this road.
+      //
+      // Measured, on the off-road eval: without this floor the clamp took the
+      // drawn marker's worst excursion from 40 m to 99.6 m and the fraction
+      // beyond 25 m from 0.1 % to 1.4 %, because on the simulated highway
+      // route — whose graph is 644 residential ways to 10 trunk — the ceiling
+      // held the estimate back until it ran off the end of the way it was
+      // matched to and was left in a field. With it, the clamp binds on the
+      // Jabalpur case (measured at 30 km/h, asserting 90) and stands aside on
+      // the highway one (measured at 100), which is the whole distinction.
+      const floor = Math.max(0, this.state.measuredSpeedMps);
+      speed = Math.min(speed, Math.max(opts.roadSpeedCeilingMps, floor));
+    }
 
     // ★ AND BOUND IT BY WHAT WAS LAST MEASURED ★ See `outageSpeedCeiling`.
     // Skipped on a sample carrying a live Doppler speed: a measurement does

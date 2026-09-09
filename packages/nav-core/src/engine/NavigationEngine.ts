@@ -23,12 +23,19 @@ import { ForwardBiasEstimator } from '../constraints/forwardBias.js';
 import {
   applyRoadSnap,
   canTrustSpeedLimit,
+  headingMismatchDeg,
+  isSnapTrustedForSpeed,
   DEFAULT_ROAD_SNAP_CONFIG,
   findRoadMatch,
   type RoadSnapConfig,
 } from '../constraints/roadsnap.js';
 import { RoadIndex, angleDiffDeg } from '../mapmatch/RoadIndex.js';
 import { RoadTopology } from '../mapmatch/RoadTopology.js';
+import {
+  RoadSpeedCeilingRatchet,
+  roadSpeedCeiling,
+  type RoadSpeedCeilingSource,
+} from '../constraints/roadSpeed.js';
 import { HmmMapMatcher, type HmmConfig } from '../mapmatch/hmm.js';
 import { ParticleFilter, type ParticleEstimate } from '../particle/ParticleFilter.js';
 import { TurnRelocaliser } from '../particle/TurnRelocaliser.js';
@@ -501,6 +508,37 @@ export interface EngineConfig extends ConstraintFlags {
    * 0 disables the bound and restores the numerical-only guard.
    */
   maxLeanDeg: number;
+  /**
+   * Bound a dead-reckoning speed by the class of road it is matched to.
+   *
+   * ★ THE ONLY CEILING WAS 144 km/h, AND IT STOPPED NOTHING ★
+   *
+   * Field ride, Jabalpur, a two-wheeler on residential and tertiary streets
+   * with GNSS off for 52 s: the estimate asserted a sustained 90 km/h, covered
+   * 655 m in the final 26 seconds, and finished 197 m from the truth on a
+   * street one block west. Everything after the speed follows from it — the
+   * estimate runs ahead ALONG the road, crosses a junction the vehicle has not
+   * reached, snapping commits to a branch there, and `continuityMaxMismatchDeg`
+   * makes staying on the wrong way cheaper than leaving it.
+   *
+   * See `constraints/roadSpeed.ts` for the table and why the `highway` class
+   * carries the work rather than `maxspeed`.
+   *
+   * ★ STILL A CLAMP, NEVER A MEASUREMENT ★ It truncates the output of the
+   * speed chain and is not offered to the filter as an observation. The map
+   * corrects what is SHOWN; the estimator keeps its own opinion. That rule is
+   * what makes road snapping auditable and it is not being bent here.
+   */
+  roadSpeedClamp: boolean;
+  /**
+   * Multiplier on the road-derived ceiling before it binds.
+   *
+   * Generous on purpose. The job is to catch a 2-3x over-read, not to police
+   * anybody: at 1.3 a residential street admits 52 km/h and a tertiary 65, so
+   * a rider genuinely doing 60 in a 40 zone is untouched and only a figure no
+   * vehicle on that street is producing gets cut.
+   */
+  roadSpeedClampTolerance: number;
   /** Phase 14's matcher settings. A shape, not a switch — see residualConfig. */
   hmmConfig: Partial<HmmConfig>;
   /**
@@ -724,6 +762,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   roadHeadingAidDegPerSec: 2,
   roadHeadingAidMinStableMs: 3_000,
   maxLeanDeg: 40,
+  roadSpeedClamp: true,
+  roadSpeedClampTolerance: 1.3,
   eskf: false,
   autoAlign: true,
   useMlMotion: true,
@@ -804,6 +844,10 @@ export class NavigationEngine {
   private snapAttemptCount = 0;
   /** Speed limit of the currently matched road, m/s. Feeds the clamp. */
   private roadMaxSpeedMps: number | undefined;
+  /** See `roadSpeedClamp`. Held steady across a flickering match. */
+  private readonly roadSpeedRatchet = new RoadSpeedCeilingRatchet();
+  private roadSpeedCeilingMps: number | undefined;
+  private roadSpeedCeilingSource: RoadSpeedCeilingSource = 'none';
   private readonly accelMedian = new Vec3MedianFilter(5);
   private readonly accelLowPass = new Vec3LowPassFilter(5, 50);
 
@@ -1086,6 +1130,17 @@ export class NavigationEngine {
     /** The slow mean removed from it by the high-pass, m/s^2. */
     forwardAccelDcMps2: number;
     roadSnapAppliedFraction: number;
+    /**
+     * The road-derived speed ceiling in force, m/s, and where it came from.
+     *
+     * ★ IF IT CANNOT BE SEEN FIRING, IT IS NOT DEBUGGABLE ON THE ROADSIDE ★
+     * A clamp that silently truncates a speed is indistinguishable from an
+     * estimator that happens to agree with it, and the difference is exactly
+     * what a rider standing beside a road needs to know. Rendered on the
+     * Device screen; see `roadSpeedClamp`.
+     */
+    roadSpeedCeilingMps: number | undefined;
+    roadSpeedCeilingSource: RoadSpeedCeilingSource;
     matchedRoadName: string | null;
     matchedRoadDistanceM: number | null;
     hasRoadGraph: boolean;
@@ -1186,6 +1241,8 @@ export class NavigationEngine {
       forwardAccelMps2: this.lastForwardAccel,
       forwardAccelDcMps2: this.forwardAccelDc,
       roadSnapAppliedFraction: this.roadSnapAppliedFraction,
+      roadSpeedCeilingMps: this.roadSpeedCeilingMps,
+      roadSpeedCeilingSource: this.roadSpeedCeilingSource,
       matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
       matchedRoadDistanceM: this.lastMatch?.distanceM ?? null,
       hasRoadGraph: this.roadGraph !== null,
@@ -2347,6 +2404,7 @@ export class NavigationEngine {
         mlSpeedMps: mlForPropagate,
         stepSpeedMps: stepSpeed,
         roadMaxSpeedMps: this.roadMaxSpeedMps,
+        roadSpeedCeilingMps: this.roadSpeedCeilingMps,
         gnssSpeedWeight,
       });
       // ★ PHASE 11 — THE ERROR-STATE KALMAN FILTER, IN PARALLEL ★
@@ -3169,6 +3227,12 @@ export class NavigationEngine {
           )
             ? match.maxspeedKph! / 3.6
             : undefined;
+
+          // ★ AND THE CLASS OF ROAD BOUNDS THE SPEED, TAG OR NO TAG ★ See
+          // `roadSpeedClamp`. Same trust predicate as the line above, minus
+          // its requirement that the way carry a `maxspeed` — which in India
+          // would disable this on almost every street it is needed on.
+          this.applyRoadSpeedCeiling(sample.t, match, oneway);
           // Cross-track error is what snapping bounds; along-track is not.
           // Capping the wrong one would understate the error we actually have.
           this.covarianceCrossM = Math.min(
@@ -3180,6 +3244,9 @@ export class NavigationEngine {
           this.lastMatchedWayId = null;
           this.matchStableSinceMs = null;
           this.roadMaxSpeedMps = undefined;
+          // No trusted match releases the clamp at once: a vehicle we cannot
+          // place on a road may legitimately be on an unmapped one.
+          this.applyRoadSpeedCeiling(sample.t, null, false);
           // Nothing to snap to. Bleed both the strength and the correction away
           // at the bounded rate, so that losing a match releases the marker as
           // smoothly as finding one captured it.
@@ -3556,6 +3623,117 @@ export class NavigationEngine {
     return this.magHeading.yawRateToward(tMs, this.dr.current.headingDeg, dtMs) ?? 0;
   }
 
+  /**
+   * Offer this sample's road-derived ceiling to the ratchet and hold the
+   * result. See `roadSpeedClamp` and `constraints/roadSpeed.ts`.
+   *
+   * Separated from the snap block because it has to be called from BOTH
+   * branches — a lost match must release the clamp, and a release that only
+   * happened on the path that found a match would leave a stale ceiling
+   * bounding a vehicle that has left the road it was learned from.
+   */
+  private applyRoadSpeedCeiling(
+    tMs: number,
+    match: RoadPosition | null,
+    oneway: boolean,
+  ): void {
+    if (!this.config.roadSpeedClamp) {
+      this.roadSpeedRatchet.reset();
+      this.roadSpeedCeilingMps = undefined;
+      this.roadSpeedCeilingSource = 'none';
+      return;
+    }
+    // Vehicles only. A pedestrian on a footpath beside a trunk road would
+    // otherwise be handed an 85 km/h ceiling, which bounds nothing, and one
+    // cutting across a service road a 20 km/h one, which is not a claim the
+    // map is entitled to make about somebody walking.
+    const trusted =
+      match !== null &&
+      this.motion.current === 'VEHICLE' &&
+      isSnapTrustedForSpeed(
+        match,
+        this.dr.current.headingDeg,
+        oneway,
+        this.config.roadSnapConfig,
+      );
+    // ★ CLAMP TO WHAT EVERY PLAUSIBLE ROAD AGREES ON, NOT TO THE ONE WE PICKED ★
+    //
+    // The matched way is a guess, and `speedLimitTrustDistanceM` records what
+    // happens when a speed is taken from the wrong guess: "a nearby service
+    // road's limit was applied to a vehicle on a trunk road", 107 m of
+    // along-track error becoming 135 m.
+    //
+    // A clamp does not have to pick. If the estimate is close to both a trunk
+    // road and a residential street, the honest statement is not "you are on
+    // the residential street, so 52" — it is "you are on one of these, so at
+    // most the faster of them". Taking the maximum over the candidates makes
+    // the clamp assert only what the map cannot contradict, and it costs
+    // nothing where the roads agree, which is most of the time.
+    const offered = trusted
+      ? this.roadClassCeilingNear(match)
+      : { ceilingMps: undefined, source: 'none' as const };
+    const held = this.roadSpeedRatchet.update(tMs, offered);
+    this.roadSpeedCeilingMps = held.ceilingMps;
+    this.roadSpeedCeilingSource = held.source;
+  }
+
+  /**
+   * The most permissive ceiling among the roads the vehicle could be on.
+   *
+   * Scans the same radius `isSnapTrustedForSpeed` trusts, keeps the ways whose
+   * bearing is consistent with where we are pointing, and returns the loosest
+   * ceiling any of them implies. See `applyRoadSpeedCeiling` for why the
+   * maximum rather than the match.
+   */
+  private roadClassCeilingNear(match: RoadPosition): {
+    ceilingMps: number | undefined;
+    source: RoadSpeedCeilingSource;
+  } {
+    const cfg = this.config.roadSnapConfig;
+    let best: number | undefined;
+    let bestSource: RoadSpeedCeilingSource = 'none';
+    let sawUnknown = false;
+    const consider = (maxspeedKph: number | undefined, highway: string | undefined): void => {
+      const c = roadSpeedCeiling(maxspeedKph, highway, this.config.roadSpeedClampTolerance);
+      if (c.ceilingMps === undefined) {
+        sawUnknown = true;
+        return;
+      }
+      if (best === undefined || c.ceilingMps > best) {
+        best = c.ceilingMps;
+        bestSource = c.source;
+      }
+    };
+    consider(match.maxspeedKph, match.highway);
+    if (this.roadIndex) {
+      const heading = this.dr.current.headingDeg;
+      for (const seg of this.roadIndex.nearbySegments(
+        match.enu.e,
+        match.enu.n,
+        cfg.speedLimitTrustDistanceM,
+      )) {
+        const way = this.roadIndex.getWay(seg.wayId);
+        if (!way) continue;
+        if (
+          headingMismatchDeg(heading, seg.bearingDeg, way.oneway === true) >
+          cfg.speedLimitTrustHeadingDeg
+        ) {
+          continue;
+        }
+        consider(way.maxspeed, way.highway);
+      }
+    }
+    // ★ A CLASS WE DO NOT KNOW IS A REASON NOT TO CLAMP AT ALL ★
+    //
+    // If any plausible neighbour is a way we have no opinion about — an
+    // unenumerated `highway` value, or a service road, which this table
+    // deliberately declines — then the maximum over the others bounds nothing,
+    // because the vehicle may be on that one. Returning the maximum anyway
+    // would be asserting a limit the map does not support.
+    if (sawUnknown) return { ceilingMps: undefined, source: 'none' };
+    return { ceilingMps: best, source: bestSource };
+  }
+
   private runSpeedModel(tMs: number): number | undefined {
     if (this.mlFailure !== null) return undefined;
     if (!this.config.useMlSpeed || !this.speedPredictor.isReady()) return undefined;
@@ -3883,6 +4061,9 @@ export class NavigationEngine {
     this.lastMatchedWayId = null;
     this.lastMatch = null;
     this.roadMaxSpeedMps = undefined;
+    this.roadSpeedRatchet.reset();
+    this.roadSpeedCeilingMps = undefined;
+    this.roadSpeedCeilingSource = 'none';
     this.snapAppliedCount = 0;
     this.snapAttemptCount = 0;
     this.recoveryStartCovariance = null;

@@ -56,8 +56,26 @@
  * traffic, and a vehicle is on it for a few seconds.
  */
 export const ROAD_CLASS_SPEED_KPH: Readonly<Record<string, number>> = {
-  service: 20,
-  living_street: 20,
+  // ★ `service` AND `living_street` ARE DELIBERATELY ABSENT ★
+  //
+  // They are the most numerous class in every graph we hold — 434 of 725 ways
+  // in the city extract, 2,787 of 5,794 in IO-VNBD S1, 7,940 of 15,022 in S3c
+  // — and they carry the lowest ceiling, which makes them simultaneously the
+  // likeliest wrong match and the most damaging one. A service road running
+  // parallel to a main road, within the trust radius and pointing the same
+  // way, passes every test this module can apply and then clamps a vehicle
+  // doing 100 to 26.
+  //
+  // `speedLimitTrustDistanceM` already records this exact failure for the
+  // `maxspeed` path: "a nearby service road's limit was applied to a vehicle
+  // on a trunk road", 107 m of along-track error becoming 135 m. That
+  // mechanism survived it because `maxspeed` is tagged on 6 of 725 city ways,
+  // so it almost never fired. A class table fires on every way, so the same
+  // hazard is live on every sample and has to be answered rather than
+  // survived.
+  //
+  // Nothing is lost by declining: a vehicle genuinely on a service road is
+  // doing under 30 anyway, so the clamp had almost no work to do there.
   residential: 40,
   unclassified: 40,
   tertiary: 50,
@@ -171,14 +189,21 @@ export class RoadSpeedCeilingRatchet {
       this.pendingSinceMs = null;
       return this.current;
     }
-    if (this.applied === undefined || next <= this.applied) {
-      // A fall, or the first offer. Immediate — see `raiseHoldMs`.
+    if (this.applied !== undefined && next <= this.applied) {
+      // A fall between two established ceilings. Immediate — see `raiseHoldMs`.
       this.applied = next;
       this.appliedSource = offered.source;
       this.pending = undefined;
       this.pendingSinceMs = null;
       return this.current;
     }
+    // ★ THE FIRST OFFER IS A RISE TOO ★
+    //
+    // Adopting it immediately was the bug the off-road eval caught: the very
+    // first sample that brushed a service road slammed the ceiling from
+    // nothing to 26 km/h, on a vehicle doing a hundred. Going from "the map
+    // has no opinion" to "the map says 26" is the largest change this
+    // mechanism can make, and it is exactly the one that was unguarded.
     // A rise. Hold it until it has been offered continuously for long enough.
     if (this.pending === undefined || next !== this.pending) {
       this.pending = next;

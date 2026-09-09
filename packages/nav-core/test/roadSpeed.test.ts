@@ -68,36 +68,56 @@ describe('roadSpeedCeiling', () => {
 describe('RoadSpeedCeilingRatchet', () => {
   const HOLD = DEFAULT_ROAD_SPEED_RATCHET.raiseHoldMs;
   const slow = { ceilingMps: 40 / 3.6, source: 'class' as const };
+  const mid = { ceilingMps: 60 / 3.6, source: 'class' as const };
   const fast = { ceilingMps: 70 / 3.6, source: 'class' as const };
   const none = { ceilingMps: undefined, source: 'none' as const };
 
-  it('adopts the first offer at once', () => {
+  /** Offer the same ceiling until the hold expires, and return what is in force. */
+  function settle(r: RoadSpeedCeilingRatchet, from: number, offer: typeof slow) {
+    let held = r.update(from, offer);
+    for (let t = from + 20; t <= from + HOLD + 20; t += 20) held = r.update(t, offer);
+    return held;
+  }
+
+  it('★ does not adopt even the FIRST offer immediately', () => {
+    // Going from "the map has no opinion" to "the map says 26" is the largest
+    // change this mechanism can make, and it was the one that was unguarded:
+    // the first sample brushing a service road slammed the ceiling onto a
+    // vehicle doing a hundred. The off-road eval caught it — worst excursion
+    // 40 m to 99.6 m.
     const r = new RoadSpeedCeilingRatchet();
-    expect(r.update(0, slow).ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
+    expect(r.update(0, slow).ceilingMps).toBeUndefined();
+    expect(r.update(HOLD - 20, slow).ceilingMps).toBeUndefined();
   });
 
-  it('drops to a lower ceiling immediately', () => {
+  it('adopts it once it has been offered for the hold', () => {
     const r = new RoadSpeedCeilingRatchet();
-    r.update(0, fast);
-    expect(r.update(20, slow).ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
+    expect(settle(r, 0, slow).ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
+  });
+
+  it('drops to a lower ceiling immediately once one is established', () => {
+    const r = new RoadSpeedCeilingRatchet();
+    settle(r, 0, fast);
+    expect(r.update(HOLD + 100, slow).ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
   });
 
   it('★ makes a rise wait, so a flickering match cannot lift the clamp', () => {
     const r = new RoadSpeedCeilingRatchet();
-    r.update(0, slow);
-    // The hold runs from the first sample the rise was offered on, which is 20.
-    for (let t = 20; t < 20 + HOLD; t += 20) {
+    const t0 = HOLD + 40;
+    settle(r, 0, slow);
+    for (let t = t0; t < t0 + HOLD; t += 20) {
       expect(r.update(t, fast).ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
     }
-    expect(r.update(20 + HOLD, fast).ceilingMps).toBeCloseTo(fast.ceilingMps, 6);
+    expect(r.update(t0 + HOLD, fast).ceilingMps).toBeCloseTo(fast.ceilingMps, 6);
   });
 
   it('★ a match alternating between two classes never lifts the clamp', () => {
     // The junction case: a residential street beside a primary road, offered
     // alternately. Without the hold the ceiling spends half its time at 70.
     const r = new RoadSpeedCeilingRatchet();
-    let held = r.update(0, slow);
-    for (let t = 20; t < 60_000; t += 20) {
+    settle(r, 0, slow);
+    let held = r.current;
+    for (let t = HOLD + 40; t < 60_000; t += 20) {
       held = r.update(t, (t / 20) % 2 === 0 ? slow : fast);
     }
     expect(held.ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
@@ -106,30 +126,30 @@ describe('RoadSpeedCeilingRatchet', () => {
   it('releases at once when the match is lost', () => {
     // A vehicle we cannot place on a road may be on an unmapped one.
     const r = new RoadSpeedCeilingRatchet();
-    r.update(0, slow);
-    expect(r.update(20, none).ceilingMps).toBeUndefined();
-    expect(r.update(20, none).source).toBe('none');
+    settle(r, 0, slow);
+    expect(r.update(HOLD + 100, none).ceilingMps).toBeUndefined();
+    expect(r.update(HOLD + 120, none).source).toBe('none');
   });
 
-  it('a sustained rise restarts its hold if the offer changes', () => {
+  it('a rise restarts its hold if the offer changes', () => {
     const r = new RoadSpeedCeilingRatchet();
-    r.update(0, slow);
-    r.update(20, fast);
-    const other = { ceilingMps: 60 / 3.6, source: 'class' as const };
-    r.update(HOLD - 100, other); // different rise: restarts the clock
-    expect(r.update(HOLD, other).ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
-    expect(r.update(HOLD * 2, other).ceilingMps).toBeCloseTo(other.ceilingMps, 6);
+    settle(r, 0, slow);
+    const t0 = HOLD + 40;
+    r.update(t0, fast);
+    r.update(t0 + HOLD - 100, mid); // a different rise: restarts the clock
+    expect(r.update(t0 + HOLD, mid).ceilingMps).toBeCloseTo(slow.ceilingMps, 6);
+    expect(settle(r, t0 + HOLD, mid).ceilingMps).toBeCloseTo(mid.ceilingMps, 6);
   });
 
   it('reports the source of whatever is in force', () => {
     const r = new RoadSpeedCeilingRatchet();
-    expect(r.update(0, { ceilingMps: 10, source: 'maxspeed' }).source).toBe('maxspeed');
-    expect(r.update(20, none).source).toBe('none');
+    expect(settle(r, 0, { ceilingMps: 10, source: 'maxspeed' }).source).toBe('maxspeed');
+    expect(r.update(HOLD + 100, none).source).toBe('none');
   });
 
   it('resets clean', () => {
     const r = new RoadSpeedCeilingRatchet();
-    r.update(0, slow);
+    settle(r, 0, slow);
     r.reset();
     expect(r.current.ceilingMps).toBeUndefined();
     expect(r.current.source).toBe('none');

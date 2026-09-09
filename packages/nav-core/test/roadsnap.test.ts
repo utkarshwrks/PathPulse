@@ -707,3 +707,154 @@ describe('★ W9 — a vehicle that is genuinely off the road', () => {
     expect(engine.diagnostics.offRoad).toBe(false);
   });
 });
+
+/**
+ * ★ THE JABALPUR RIDE — A DEAD-RECKONING SPEED THE ROAD SAYS IS IMPOSSIBLE ★
+ *
+ * A two-wheeler in city traffic on residential and tertiary ways, GNSS off for
+ * 52 s. The estimate asserted a sustained 90 km/h, covered 655 m in the final
+ * 26 seconds and finished 197 m from truth on a street one block west. The
+ * only ceiling in the chain was `maxSpeedMps` — 144 km/h — which stops nothing.
+ *
+ * Everything after the speed follows from it: the estimate runs ahead ALONG
+ * the road, crosses a junction the vehicle has not physically reached, and
+ * snapping commits to a branch there.
+ */
+describe('★ the road bounds a dead-reckoning speed', () => {
+  /** One long residential street, running north. No `maxspeed` tag — as in India. */
+  function residential(extra: Partial<RoadGraph['ways'][number]> = {}): RoadGraph {
+    return graphOf(
+      wayFromEnu(
+        'street',
+        [
+          [0, -3000],
+          [0, 6000],
+        ],
+        { highway: 'residential', ...extra },
+      ),
+    );
+  }
+
+  /**
+   * Drive north on the street with GNSS, then lose it. The IMU carries a
+   * vibration signature so the vehicle reads as moving rather than stopped.
+   */
+  function ride(
+    graph: RoadGraph,
+    config: Partial<ConstructorParameters<typeof NavigationEngine>[0]> = {},
+  ) {
+    const engine = new NavigationEngine({ ...config });
+    engine.setRoadGraph(graph);
+    const dtMs = 100;
+    const speeds: number[] = [];
+    let last!: ReturnType<NavigationEngine['update']>;
+    for (let tMs = 0; tMs <= 120_000; tMs += dtMs) {
+      const tS = tMs / 1000;
+      const p = tS;
+      const sample: SensorSample = {
+        t: tMs,
+        imu: {
+          ax: 0.35 * Math.sin(p * 7.1),
+          ay: 0.25 * Math.sin(p * 11.3),
+          az: 9.80665 + 0.4 * Math.sin(p * 13.7),
+          gx: 0,
+          gy: 0,
+          gz: 0,
+        },
+      };
+      if (tMs % 1000 === 0 && tS <= 60) {
+        const q = enuToLatLon(0, 11 * tS, ORIGIN.lat, ORIGIN.lon);
+        sample.gnss = { lat: q.lat, lon: q.lon, accuracyM: 4, speedMps: 11, headingDeg: 0 };
+      }
+      last = engine.update(sample);
+      if (tS > 62) speeds.push(last.velocityMps);
+    }
+    return { engine, speeds, final: last };
+  }
+
+  it('★ a residential street admits 52 km/h, not 90', () => {
+    const { engine } = ride(residential());
+    const d = engine.diagnostics;
+    expect(d.roadSpeedCeilingSource).toBe('class');
+    // 40 km/h * 1.3 tolerance.
+    expect(d.roadSpeedCeilingMps! * 3.6).toBeCloseTo(52, 5);
+  });
+
+  it('★ and the speed estimate never exceeds it through the outage', () => {
+    const { speeds } = ride(residential());
+    expect(speeds.length).toBeGreaterThan(100);
+    expect(Math.max(...speeds) * 3.6).toBeLessThanOrEqual(52.001);
+  });
+
+  it('a tagged maxspeed outranks the class table', () => {
+    const { engine } = ride(residential({ maxspeed: 30 }));
+    expect(engine.diagnostics.roadSpeedCeilingSource).toBe('maxspeed');
+    expect(engine.diagnostics.roadSpeedCeilingMps! * 3.6).toBeCloseTo(39, 5);
+  });
+
+  it('a trunk road is not clamped to a residential speed', () => {
+    const { engine } = ride(residential({ highway: 'trunk' }));
+    expect(engine.diagnostics.roadSpeedCeilingMps! * 3.6).toBeCloseTo(110.5, 5);
+  });
+
+  it('says nothing about a class it does not know', () => {
+    const { engine } = ride(residential({ highway: 'busway' }));
+    expect(engine.diagnostics.roadSpeedCeilingSource).toBe('none');
+    expect(engine.diagnostics.roadSpeedCeilingMps).toBeUndefined();
+  });
+
+  it('★ switched off, the field failure reproduces', () => {
+    const off = ride(residential(), { roadSpeedClamp: false });
+    expect(off.engine.diagnostics.roadSpeedCeilingSource).toBe('none');
+    expect(off.engine.diagnostics.roadSpeedCeilingMps).toBeUndefined();
+    // Without the clamp the estimate is free to assert whatever it likes; with
+    // it, it is not. That difference is the whole change.
+    const on = ride(residential());
+    expect(Math.max(...on.speeds)).toBeLessThanOrEqual(52 / 3.6 + 1e-6);
+  });
+
+  it('★ a measurement outranks the map — 100 km/h measured is not cut to 52', () => {
+    // The off-road eval caught this: on the simulated highway route, whose
+    // graph is 644 residential ways to 10 trunk, clamping a vehicle the
+    // receiver had measured at highway speed held the estimate back until it
+    // ran off the end of its matched way and was drawn in a field — worst
+    // excursion 40 m to 99.6 m. A `residential` tag is not evidence that a
+    // vehicle measured at 100 has slowed to 52; it is evidence that the tag,
+    // or the match, does not describe this road.
+    const engine = new NavigationEngine();
+    engine.setRoadGraph(residential());
+    const dtMs = 100;
+    const speeds: number[] = [];
+    for (let tMs = 0; tMs <= 120_000; tMs += dtMs) {
+      const tS = tMs / 1000;
+      const p = tS;
+      const sample: SensorSample = {
+        t: tMs,
+        imu: {
+          ax: 0.35 * Math.sin(p * 7.1),
+          ay: 0.25 * Math.sin(p * 11.3),
+          az: 9.80665 + 0.4 * Math.sin(p * 13.7),
+          gx: 0,
+          gy: 0,
+          gz: 0,
+        },
+      };
+      if (tMs % 1000 === 0 && tS <= 60) {
+        const q = enuToLatLon(0, 28 * tS, ORIGIN.lat, ORIGIN.lon);
+        sample.gnss = { lat: q.lat, lon: q.lon, accuracyM: 4, speedMps: 28, headingDeg: 0 };
+      }
+      const st = engine.update(sample);
+      if (tS > 62) speeds.push(st.velocityMps);
+    }
+    // 28 m/s is 100 km/h. The residential ceiling is 52, and it must not bind.
+    expect(Math.max(...speeds) * 3.6).toBeGreaterThan(60);
+  });
+
+  it('never clamps below zero or emits a non-finite speed', () => {
+    const { speeds } = ride(residential({ highway: 'service' }));
+    for (const v of speeds) {
+      expect(Number.isFinite(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(0);
+    }
+  });
+});

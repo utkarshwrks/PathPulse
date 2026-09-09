@@ -373,6 +373,7 @@ export function findRoadMatch(
         wayId: seg.wayId,
         name: way?.name,
         maxspeedKph: way?.maxspeed,
+        highway: way?.highway,
         arcLengthM: seg.arcStartM + p.t * seg.lengthM,
         enu: { e: p.e, n: p.n },
         distanceM: p.distanceM,
@@ -397,6 +398,29 @@ export function canTrustSpeedLimit(
   config: RoadSnapConfig = DEFAULT_ROAD_SNAP_CONFIG,
 ): boolean {
   if (match.maxspeedKph === undefined) return false;
+  return isSnapTrustedForSpeed(match, headingDeg, oneway, config);
+}
+
+/**
+ * Is this match confident enough to bound the speed at all?
+ *
+ * The geometric half of `canTrustSpeedLimit`, without its requirement that the
+ * way carry a `maxspeed` tag. `constraints/roadSpeed.ts` needs exactly this
+ * question, because it falls back to the `highway` class when the tag is
+ * absent — which in India is most of the time — and asking through
+ * `canTrustSpeedLimit` would refuse every untagged way and disable the clamp
+ * precisely where it is needed.
+ *
+ * Same two conditions and the same constants, deliberately: being close enough
+ * and pointing the right way is one claim about the match, and it should not
+ * mean two different things depending on which consumer is asking.
+ */
+export function isSnapTrustedForSpeed(
+  match: RoadPosition,
+  headingDeg: number,
+  oneway: boolean,
+  config: RoadSnapConfig = DEFAULT_ROAD_SNAP_CONFIG,
+): boolean {
   if (match.distanceM > config.speedLimitTrustDistanceM) return false;
   return (
     headingMismatchDeg(headingDeg, match.bearingDeg, oneway) <=

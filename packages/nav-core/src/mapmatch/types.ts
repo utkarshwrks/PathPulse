@@ -62,6 +62,18 @@ export interface RoadPosition {
   wayId: string;
   name?: string;
   maxspeedKph?: number;
+  /**
+   * OSM `highway` class of the matched way — motorway, trunk, residential...
+   *
+   * Carried on the match, not looked up from the index by the caller, for the
+   * same reason `maxspeedKph` is: a match is a complete statement about where
+   * the vehicle is, and a consumer that has to go back to the graph for half
+   * of it can be handed a match from one graph and query another.
+   *
+   * `maxspeed` tagging is sparse in India and this is not — see
+   * `constraints/roadSpeed.ts`, which uses it to bound a dead-reckoning speed.
+   */
+  highway?: string;
   /** Distance along the way from its first coordinate, metres. */
   arcLengthM: number;
   /** The snapped point, in the engine's ENU frame. */
