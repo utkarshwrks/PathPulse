@@ -362,6 +362,20 @@ export default function Home() {
     [downloadText, nav, trail],
   );
 
+  /**
+   * Save the raw sensor log the ride recorded.
+   *
+   * ★ THE FILE THE BENCHMARKS HAVE NEVER HAD ★ Everything else exportable
+   * here is what the estimator CONCLUDED. This is what it was GIVEN, in the
+   * replay format, so a real ride can be scored by the same harness that
+   * scores the simulator — which is the whole of Tier F.
+   */
+  const handleDownloadRecording = useCallback(() => {
+    const { text, fileName } = nav.recordedJsonl();
+    if (!text) return;
+    downloadText(text, fileName, 'application/x-ndjson');
+  }, [downloadText, nav]);
+
   // Golden Rule #8: if the run can be exported it can be checked afterwards,
   // which is worth more to a judge than any claim made during the demo.
   const handleExportEvents = useCallback(() => {
@@ -477,6 +491,10 @@ export default function Home() {
         controls={nav.controls}
         onControlsChange={nav.setControls}
         onExportEvents={handleExportEvents}
+        recorder={nav.recorder}
+        onStartRecording={nav.startRecording}
+        onStopRecording={nav.stopRecording}
+        onDownloadRecording={handleDownloadRecording}
         onExportTrip={handleExportTrip}
         tripPointCount={trail.length}
         simulated={kind === 'simulation'}

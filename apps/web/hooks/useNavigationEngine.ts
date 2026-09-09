@@ -17,6 +17,11 @@ import {
   type SpeedSource,
   haversineDistance,
 } from '@pathpulse/nav-core';
+import {
+  EMPTY_RECORDER_STATE,
+  SensorRecorder,
+  type RecorderState,
+} from '@/lib/sensorRecorder';
 import { loadRoadGraphFor, type RoadGraphEntry } from '@/lib/roadGraph';
 import { getSharedCellStore } from '@/lib/graphCellStore';
 import { EMPTY_MODEL_INFO, WebSpeedPredictor, type ModelInfo } from '@/lib/ml/speedModel';
@@ -376,6 +381,18 @@ export interface NavEngineOutput {
   controls: EngineControls;
   setControls: (patch: Partial<EngineControls>) => void;
   feed: (sample: SensorSample) => void;
+  /**
+   * Raw-sensor recording, for the Tier F corpus.
+   *
+   * `pnpm eval:record` runs on a laptop and nobody takes one on a scooter, so
+   * without this every field failure could only be diagnosed from a video.
+   * See lib/sensorRecorder.ts.
+   */
+  recorder: RecorderState;
+  startRecording: () => void;
+  stopRecording: () => void;
+  /** The recorded ride as replay JSONL, and the filename it should be saved as. */
+  recordedJsonl: () => { text: string; fileName: string };
   reset: () => void;
   /** Phase 12 — throw the mount alignment away and learn it again. */
   recalibrateAlignment: () => void;
@@ -394,6 +411,9 @@ export interface NavEngineOutput {
 
 export function useNavigationEngine(): NavEngineOutput {
   const engineRef = useRef<NavigationEngine | null>(null);
+  /** See lib/sensorRecorder.ts. Inert until the rider starts it. */
+  const recorderRef = useRef<SensorRecorder>(new SensorRecorder());
+  const [recorderState, setRecorderState] = useState<RecorderState>(EMPTY_RECORDER_STATE);
   if (!engineRef.current) engineRef.current = new NavigationEngine();
   const statsRef = useRef<SessionStats | null>(null);
   if (!statsRef.current) statsRef.current = new SessionStats();
@@ -562,6 +582,11 @@ export function useNavigationEngine(): NavEngineOutput {
   }, []);
 
   const feed = useCallback((sample: SensorSample) => {
+    // ★ THE TIER F TAP ★ Every raw sample the estimator sees passes through
+    // here, so this is the one place a ride can be recorded without a laptop.
+    // Inert until the rider starts it; see lib/sensorRecorder.ts for why the
+    // project could not measure its own field failures without this.
+    recorderRef.current.push(sample);
     const engine = engineRef.current!;
     const next = engine.update(sample);
     statsRef.current!.push(next);
@@ -698,6 +723,37 @@ export function useNavigationEngine(): NavEngineOutput {
 
   // Returns a copy: handing out the live ref would let a caller mutate the
   // buffer the feed loop is appending to.
+  /**
+   * Start, stop and read back a raw-sensor recording.
+   *
+   * ★ POLLED, NOT PUSHED ★ The recorder is fed at 127 Hz on the estimator's
+   * own path. Publishing its state from there would re-render React on every
+   * IMU sample, which would cost far more than the recording does. Once a
+   * second is more than enough to watch a counter climb.
+   */
+  const startRecording = useCallback(() => {
+    recorderRef.current.start();
+    setRecorderState(recorderRef.current.state);
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    recorderRef.current.stop();
+    setRecorderState(recorderRef.current.state);
+  }, []);
+
+  const recordedJsonl = useCallback(
+    () => ({
+      text: recorderRef.current.toJsonl(),
+      fileName: recorderRef.current.fileName(),
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    const id = setInterval(() => setRecorderState(recorderRef.current.state), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const gnssTrail = useCallback(() => [...gnssTrailRef.current], []);
 
   useEffect(() => () => engineRef.current?.reset(), []);
@@ -723,6 +779,10 @@ export function useNavigationEngine(): NavEngineOutput {
       recalibrateAlignment,
       reloadRoadGraph,
       gnssTrail,
+      recorder: recorderState,
+      startRecording,
+      stopRecording,
+      recordedJsonl,
     }),
     [
       state,
@@ -744,6 +804,10 @@ export function useNavigationEngine(): NavEngineOutput {
       recalibrateAlignment,
       reloadRoadGraph,
       gnssTrail,
+      recorderState,
+      startRecording,
+      stopRecording,
+      recordedJsonl,
     ],
   );
 }

@@ -26,9 +26,19 @@ describe('resolveMapStyle — no API key', () => {
   it('falls back to a keyless raster basemap instead of failing', async () => {
     const { resolveMapStyle } = await loadWithKey(undefined);
     const r = resolveMapStyle();
-    expect(r.source).toBe('carto-dark');
+    expect(r.source).toBe('osm-dark');
     // The demo must work on a machine that has never seen a MapTiler key.
     expect(typeof r.style).toBe('object');
+  });
+
+  it('labels the basemap by what it is, not by the key it does not need', async () => {
+    // The label is printed in the HUD footer and the Offline panel's "map
+    // source" row. "(no API key)" was read there as "an API key is required
+    // and missing", so the wording names the data and the renderer instead.
+    const { resolveMapStyle } = await loadWithKey(undefined);
+    const { label } = resolveMapStyle();
+    expect(label).toMatch(/OpenStreetMap/i);
+    expect(label).not.toMatch(/api key/i);
   });
 
   it('exposes no dark-filter flag, because nothing may filter the canvas', async () => {
@@ -47,11 +57,11 @@ describe('resolveMapStyle — no API key', () => {
       layers: Array<{ id: string; type: string }>;
     };
     expect(style.version).toBe(8);
-    expect(style.sources.carto?.type).toBe('raster');
-    expect(style.sources.carto?.tiles.length).toBeGreaterThan(0);
+    expect(style.sources.basemap?.type).toBe('raster');
+    expect(style.sources.basemap?.tiles.length).toBeGreaterThan(0);
     // Background first, raster on top — otherwise gaps flash white.
     expect(style.layers[0]?.type).toBe('background');
-    expect(style.layers.some((l) => l.id === 'carto')).toBe(true);
+    expect(style.layers.some((l) => l.id === 'basemap')).toBe(true);
   });
 
   it('paints the background dark, so a missing tile is a dark hole', async () => {
@@ -71,53 +81,87 @@ describe('resolveMapStyle — no API key', () => {
     const style = resolveMapStyle().style as {
       sources: Record<string, { attribution?: string }>;
     };
-    expect(style.sources.carto?.attribution).toMatch(/OpenStreetMap/i);
+    expect(style.sources.basemap?.attribution).toMatch(/OpenStreetMap/i);
   });
 
-  it('credits CARTO, whose basemap this is', async () => {
+  it('never asks a provider that fails inside the image', async () => {
+    // Neither of these returned an error when they broke. CARTO drew "API KEY
+    // REQUIRED" across a valid 200 PNG; Esri served a 2,521-byte "Map data not
+    // yet available" tile for every z17+ request over India, which is the zoom
+    // the app follows at. No status check catches either, so the hosts
+    // themselves are what is asserted against.
+    const { resolveMapStyle, RASTER_TILE_TEMPLATE, TILE_HOSTS } = await loadWithKey(undefined);
+    const style = resolveMapStyle().style as {
+      sources: Record<string, { tiles: string[] }>;
+    };
+    for (const t of [...style.sources.basemap!.tiles, RASTER_TILE_TEMPLATE]) {
+      expect(t).not.toContain('basemaps.cartocdn.com');
+      expect(t).not.toContain('arcgisonline.com');
+    }
+    // The glyph host is a different service on the CARTO domain and is still
+    // keyless and unwatermarked, so it stays — this asserts tile hosts only.
+    expect(TILE_HOSTS.filter((h) => h.endsWith('basemaps.cartocdn.com'))).toEqual([
+      'tiles.basemaps.cartocdn.com',
+    ]);
+  });
+
+  it('asks one host, because the a/b/c subdomains are deprecated', async () => {
+    // HTTP/2 multiplexes over a single connection, so sharding buys nothing
+    // and only triples the DNS and TLS work against volunteer-run servers.
     const { resolveMapStyle } = await loadWithKey(undefined);
     const style = resolveMapStyle().style as {
-      sources: Record<string, { attribution?: string }>;
+      sources: Record<string, { tiles: string[] }>;
     };
-    expect(style.sources.carto?.attribution).toMatch(/CARTO/i);
+    expect(style.sources.basemap!.tiles).toEqual(['https://tile.openstreetmap.org/{z}/{x}/{y}.png']);
   });
 
-  it('uses several subdomains to avoid serialising tile requests', async () => {
+  it('stops at zoom 19, which is as far as OSM standard renders', async () => {
+    // Asking for 20 does not return a sharper tile, it returns a 404 per tile
+    // and a hole in the map at exactly the zoom the demo follows through.
     const { resolveMapStyle } = await loadWithKey(undefined);
     const style = resolveMapStyle().style as {
-      sources: Record<string, { tiles: string[] }>;
+      sources: Record<string, { maxzoom?: number }>;
     };
-    expect(style.sources.carto!.tiles.length).toBeGreaterThanOrEqual(2);
-    for (const t of style.sources.carto!.tiles) {
-      expect(t).toContain('{z}/{x}/{y}');
-    }
+    expect(style.sources.basemap?.maxzoom).toBe(19);
   });
 
-  it('pre-caches the same tiles the map renders', async () => {
-    // These were two independent literals, and the Offline panel's copy still
-    // named OpenStreetMap after the map had moved on — which stores one
-    // basemap and draws another, and offline is indistinguishable from a
-    // cache that silently did not work.
-    const { resolveMapStyle, RASTER_TILE_TEMPLATE } = await loadWithKey(undefined);
+  it('inverts the raster on its own layer, never on the shared canvas', async () => {
+    // The whole argument in config/map.ts: a CSS filter on the canvas also
+    // inverted the trail, the road graph and the ellipse, because MapLibre
+    // draws all of them into it. Paint properties reach one layer.
+    const { resolveMapStyle, BASEMAP_PAINT } = await loadWithKey(undefined);
     const style = resolveMapStyle().style as {
-      sources: Record<string, { tiles: string[] }>;
+      layers: Array<{ id: string; paint?: Record<string, unknown> }>;
     };
-    const host = new URL(RASTER_TILE_TEMPLATE.replace(/\{[zxy]\}/g, '0')).hostname;
-    const hosts = style.sources.carto!.tiles.map(
-      (t) => new URL(t.replace(/\{[zxy]\}/g, '0')).hostname,
-    );
-    expect(hosts).toContain(host);
+    const raster = style.layers.find((l) => l.id === 'basemap')!;
+    expect(raster.paint).toEqual({ ...BASEMAP_PAINT });
   });
 
-  it('lets the service worker cache every subdomain the style requests', async () => {
-    const { resolveMapStyle, TILE_HOSTS } = await loadWithKey(undefined);
-    const style = resolveMapStyle().style as {
-      sources: Record<string, { tiles: string[] }>;
-    };
-    for (const t of style.sources.carto!.tiles) {
-      expect(TILE_HOSTS).toContain(new URL(t.replace(/\{[zxy]\}/g, '0')).hostname);
-    }
+  it('★ inverts by setting brightness-min ABOVE brightness-max', async () => {
+    // This is the non-obvious part, and the part a well-meaning cleanup would
+    // "fix" by swapping them back. MapLibre rescales each channel into
+    // [min, max] and does not require min < max, so min 1 / max 0 evaluates
+    // 1 - c. Swap them and the map is light again, with no error anywhere.
+    const { BASEMAP_PAINT } = await loadWithKey(undefined);
+    expect(BASEMAP_PAINT['raster-brightness-min']).toBe(1);
+    expect(BASEMAP_PAINT['raster-brightness-max']).toBe(0);
+    // Inversion alone leaves every hue opposite: parks come out magenta.
+    expect(BASEMAP_PAINT['raster-hue-rotate']).toBe(180);
   });
+
+  it('inverts to something darker than the roads drawn on top of it', async () => {
+    // Measured, not assumed: the Connaught Place tile at z15 is mean luma 217,
+    // so inverted it is 38 — under OfflineBasemapLayer's #3a4250 road tone at
+    // 65, which keeps the light-on-dark relationship that layer asserts.
+    const { BASEMAP_PAINT } = await loadWithKey(undefined);
+    const OSM_MEAN_LUMA = 217;
+    const OFFLINE_ROAD_LUMA = 0.299 * 0x3a + 0.587 * 0x42 + 0.114 * 0x50;
+    const min = BASEMAP_PAINT['raster-brightness-min'];
+    const max = BASEMAP_PAINT['raster-brightness-max'];
+    const inverted = 255 * (min + (OSM_MEAN_LUMA / 255) * (max - min));
+    expect(inverted).toBeLessThan(OFFLINE_ROAD_LUMA);
+  });
+
 });
 
 describe('resolveMapStyle — with API key', () => {
@@ -132,7 +176,7 @@ describe('resolveMapStyle — with API key', () => {
 
   it('treats an empty key as absent rather than building a broken URL', async () => {
     const { resolveMapStyle } = await loadWithKey('');
-    expect(resolveMapStyle().source).toBe('carto-dark');
+    expect(resolveMapStyle().source).toBe('osm-dark');
   });
 });
 

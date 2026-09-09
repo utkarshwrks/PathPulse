@@ -135,6 +135,10 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof TrustPanel>>
       controls={DEFAULT_CONTROLS}
       onControlsChange={onControlsChange}
       onExportEvents={onExportEvents}
+        recorder={{ recording: false, samples: 0, bytes: 0, truncated: false, startedAtMs: null }}
+        onStartRecording={() => {}}
+        onStopRecording={() => {}}
+        onDownloadRecording={() => {}}
       onExportTrip={onExportTrip}
       tripPointCount={42}
       imuHz={37}

@@ -6,6 +6,7 @@ import type { NavEvent, SensorSample, SessionSummary } from '@pathpulse/nav-core
 import type { EngineControls, EngineDiagnostics, LastGnss } from '@/hooks/useNavigationEngine';
 import type { RoadGraphEntry } from '@/lib/roadGraph';
 import type { ModelInfo } from '@/lib/ml/speedModel';
+import type { RecorderState } from '@/lib/sensorRecorder';
 
 interface TrustPanelProps {
   sample: SensorSample | null;
@@ -17,6 +18,18 @@ interface TrustPanelProps {
   controls: EngineControls;
   onControlsChange: (patch: Partial<EngineControls>) => void;
   onExportEvents: () => void;
+  /**
+   * Raw-sensor recording, for the Tier F corpus.
+   *
+   * ★ THE ONLY WAY A REAL RIDE EVER REACHES THE BENCHMARKS ★ `pnpm
+   * eval:record` runs on a laptop, and nobody takes a laptop on a scooter.
+   * Every field failure this project has fixed was diagnosed from a video,
+   * which cannot be replayed, scored, or used to tell whether a change helped.
+   */
+  recorder: RecorderState;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
+  onDownloadRecording: () => void;
   /** Phase 12 — the "Re-calibrate" button on the CONSTRAINTS tab. */
   onRecalibrateAlignment: () => void;
   /** Phase 9F — the whole trip, as a file a judge can open later. */
@@ -76,6 +89,10 @@ export default function TrustPanel({
   controls,
   onControlsChange,
   onExportEvents,
+  recorder,
+  onStartRecording,
+  onStopRecording,
+  onDownloadRecording,
   onRecalibrateAlignment,
   onExportTrip,
   tripPointCount,
@@ -168,6 +185,10 @@ export default function TrustPanel({
                 onExport={onExportEvents}
                 onExportTrip={onExportTrip}
                 tripPointCount={tripPointCount}
+                recorder={recorder}
+                onStartRecording={onStartRecording}
+                onStopRecording={onStopRecording}
+                onDownloadRecording={onDownloadRecording}
               />
             ) : null}
             {tab === 'stats' ? <StatsTab stats={stats} diagnostics={diagnostics} /> : null}
@@ -872,18 +893,79 @@ function EventsTab({
   onExport,
   onExportTrip,
   tripPointCount,
+  recorder,
+  onStartRecording,
+  onStopRecording,
+  onDownloadRecording,
 }: {
   events: NavEvent[];
   onExport: () => void;
   onExportTrip: (format: 'gpx' | 'geojson') => void;
   tripPointCount: number;
+  recorder: RecorderState;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
+  onDownloadRecording: () => void;
 }) {
   // Newest first: during a demo the interesting line is the one that just
   // happened, and scrolling to find it wastes the moment.
   const recent = [...events].reverse().slice(0, 120);
+  const mb = (recorder.bytes / 1_048_576).toFixed(1);
+  const mins = recorder.startedAtMs
+    ? Math.floor((Date.now() - recorder.startedAtMs) / 60_000)
+    : 0;
 
   return (
     <div>
+      {/*
+        ★ RECORD THE RIDE ITSELF ★
+        Everything else on this tab exports what the estimator CONCLUDED. This
+        exports what it was GIVEN — the raw sensor stream, in the replay format
+        the eval harness already reads. Drop the file into data/replay/ and
+        every benchmark in the project runs against a real ride instead of a
+        simulator that contains none of the geometry that breaks it.
+      */}
+      <div className="mb-2 rounded border border-white/15 bg-white/[0.03] p-2">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-neutral-300">
+            Raw sensor log
+          </span>
+          <span className="font-mono text-[9.5px] text-neutral-500">
+            {recorder.recording ? `REC ${mins}m` : recorder.samples > 0 ? 'stopped' : 'idle'}
+          </span>
+        </div>
+        <div className="mb-1.5 font-mono text-[9.5px] text-neutral-400">
+          {recorder.samples.toLocaleString()} samples · {mb} MB
+          {recorder.truncated ? ' · FULL, later samples dropped' : ''}
+        </div>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={recorder.recording ? onStopRecording : onStartRecording}
+            className={
+              recorder.recording
+                ? 'rounded border border-red-400/40 bg-red-500/20 px-2 py-1 text-[10px] text-red-200 transition hover:bg-red-500/30'
+                : 'rounded border border-white/15 px-2 py-1 text-[10px] text-neutral-300 transition hover:bg-white/10'
+            }
+          >
+            {recorder.recording ? 'Stop' : 'Record ride'}
+          </button>
+          <button
+            type="button"
+            onClick={onDownloadRecording}
+            disabled={recorder.recording || recorder.samples === 0}
+            className="rounded border border-white/15 px-2 py-1 text-[10px] text-neutral-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Saves drive_*.jsonl — the replay format, straight into data/replay/"
+          >
+            Save .jsonl
+          </button>
+        </div>
+        <p className="mt-1.5 text-[9px] leading-snug text-neutral-500">
+          Start before the ride, stop after. Saves as{' '}
+          <span className="font-mono">drive_*.jsonl</span> — the Tier F corpus.
+        </p>
+      </div>
+
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[9.5px] text-neutral-500">{events.length} events</span>
         <div className="flex gap-1.5">
