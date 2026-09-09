@@ -27,6 +27,7 @@
     "eval:drift-dataset": "pnpm --filter @pathpulse/eval drift-dataset",
     "eval:gnss-dataset": "pnpm --filter @pathpulse/eval gnss-dataset",
     "eval:tier-r": "pnpm --filter @pathpulse/eval tier-r",
+    "eval:tier-f": "pnpm --filter @pathpulse/eval tier-f",
     "eval:heading": "pnpm --filter @pathpulse/eval heading",
     "data:iovnbd": "node scripts/iovnbd-to-replay.mjs",
     "edge": "pnpm --filter @pathpulse/edge-engine edge",

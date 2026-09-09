@@ -32,12 +32,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RoadGraph } from '@pathpulse/nav-core';
 import { parseJsonl, runEval } from './harness.js';
-import { loadConfig, ROOT } from './paths.js';
+import { loadConfig, loadGraphFor, ROOT } from './paths.js';
 
-const RUNS = [
-  { log: 'iovnbd_S1.jsonl', graph: 'road_graph_iovnbd_s1.json' },
-  { log: 'iovnbd_S3c.jsonl', graph: 'road_graph_iovnbd_s3c.json' },
-];
+// `--log <name>` scores one file instead, which is how a Tier F ride is
+// decomposed: its graph is chosen from its own first fix rather than named.
+const ONE = process.argv.includes('--log')
+  ? String(process.argv[process.argv.indexOf('--log') + 1])
+  : null;
+const RUNS = ONE
+  ? [{ log: ONE, graph: '' }]
+  : [
+      { log: 'iovnbd_S1.jsonl', graph: 'road_graph_iovnbd_s1.json' },
+      { log: 'iovnbd_S3c.jsonl', graph: 'road_graph_iovnbd_s3c.json' },
+    ];
 const FAST = process.argv.includes('--fast');
 const WINDOWS = (FAST ? [900, 1800, 2400, 3000] : [300, 600, 900, 1200, 1500, 1800, 2100, 2400, 2700, 3000]).map(
   (s) => s * 1000,
@@ -72,12 +79,25 @@ for (const r of RUNS) {
   const file = join(ROOT, 'data/replay', r.log);
   if (!existsSync(file)) continue;
   const samples = parseJsonl(readFileSync(file, 'utf8'));
-  const gp = join(ROOT, 'data/maps', r.graph);
-  const graph = existsSync(gp) ? (JSON.parse(readFileSync(gp, 'utf8')) as RoadGraph) : null;
+  let graph: RoadGraph | null = null;
+  if (r.graph) {
+    const gp = join(ROOT, 'data/maps', r.graph);
+    graph = existsSync(gp) ? (JSON.parse(readFileSync(gp, 'utf8')) as RoadGraph) : null;
+  } else {
+    // A Tier F log names no graph: it is chosen from the ride's own first fix,
+    // the same way the handset chooses one.
+    const f = samples.find((x) => x.gnss);
+    graph = f?.gnss ? loadGraphFor(f.gnss.lat, f.gnss.lon)?.graph ?? null : null;
+  }
   const span = samples[samples.length - 1]!.t;
 
-  for (const w of WINDOWS) {
-    if (w + DURATION_MS > span - 30_000) continue;
+  // ★ A HANDSET LOG DOES NOT START AT ZERO ★ Android timestamps are ms since
+  // boot, so windows are placed relative to the log's own beginning.
+  const base = ONE ? samples[0]!.t : 0;
+  const relWindows = ONE ? [20, 50, 80, 110, 140, 170, 200].map((x) => x * 1000) : WINDOWS;
+  for (const rw of relWindows) {
+    const w = base + rw;
+    if (w + DURATION_MS > span - 15_000) continue;
     const res = runEval(samples, {
       configName,
       logName: r.log,

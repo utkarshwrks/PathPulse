@@ -27,7 +27,7 @@ import {
 let speedModel: { predictor: CnnSpeedPredictor; scaler: { mean: number[]; std: number[] } } | null =
   null;
 
-function loadSpeedModel(): [CnnSpeedPredictor, { mean: number[]; std: number[] }] {
+export function loadSpeedModel(): [CnnSpeedPredictor, { mean: number[]; std: number[] }] {
   if (!speedModel) {
     const raw = JSON.parse(
       readFileSync(join(ROOT, 'apps/web/public/models/speed_model.json'), 'utf8'),

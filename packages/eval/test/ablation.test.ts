@@ -136,13 +136,25 @@ describe('ablation over the committed logs', () => {
     //
     // Asserted rather than deleted: the filter is still the more principled
     // estimator and the day it wins again, this is what will notice.
+    // ★ AND THE COMPARISON FLIPPED WHEN TIER F ARRIVED ★
+    //
+    // `full` now carries two guards Tier F asked for — `outageSpeedCeiling`
+    // and a trust gate that withholds the speed model until GNSS has scored
+    // it — and both cost simulated drift while cutting the real-ride figure
+    // from 52.6 % to 39.9 %. On this corpus the ESKF arm is therefore now the
+    // BETTER of the two, which is a statement about the corpus rather than
+    // about the filter: Tier S contains none of the geometry those guards
+    // exist for. §24.13 still has the filter off, on its own measured grounds.
+    //
+    // Asserted in whichever direction it lands, because the point is that the
+    // relationship stays recorded rather than that it stays fixed.
     const eskf = get('eskf');
     const full = get('full');
-    expect(eskf.mean).toBeGreaterThan(full.mean);
-    expect(eskf.p90).toBeGreaterThan(full.p90);
-    // And it must stay in the same league — a filter that diverges is not a
-    // trade-off, it is a bug, and it was one twice while this was written.
-    expect(eskf.mean).toBeLessThan(full.mean * 1.5);
+    expect(Math.abs(eskf.mean - full.mean)).toBeLessThan(full.mean * 0.5);
+    // Neither may diverge — that is not a trade-off, it is a bug, and it was
+    // one twice while this was written.
+    expect(eskf.mean).toBeLessThan(25);
+    expect(full.mean).toBeLessThan(25);
   });
 
   it('records the HMM result as measured, including that it did not help here', () => {
@@ -176,7 +188,7 @@ describe('ablation over the committed logs', () => {
     const greedy = get('greedy');
     expect(greedy.mean).toBeLessThan(get('full').mean);
     // But both must stay in the same league. A matcher that diverges is a bug.
-    expect(get('full').mean).toBeLessThan(15);
+    expect(get('full').mean).toBeLessThan(22);
   });
 
   it('★ records where the particle filter helps and where it does not', () => {
@@ -202,7 +214,7 @@ describe('ablation over the committed logs', () => {
     // 6.9 % and did not move the filter, which reads its own hypotheses rather
     // than the greedy match. Bounded absolutely for the same reason.
     const particle = get('particle');
-    expect(particle.mean).toBeLessThan(15);
+    expect(particle.mean).toBeLessThan(22);
     // And it must not be the catastrophe it was before the divergence guard:
     // an unguarded cloud that had collectively taken a wrong slip road
     // reported itself unimodal, with a two-metre spread, a kilometre from the
@@ -211,10 +223,19 @@ describe('ablation over the committed logs', () => {
   });
 
   it('does not regress past the figure published in docs/benchmarks.md', () => {
-    // A guard, not a target. Published: 6.9% mean, 22.6% p90.
-    expect(get('full').mean).toBeLessThan(13);
+    // A guard, not a target.
+    //
+    // ★ THE NUMBER MOVED, AND ON PURPOSE ★ 6.1 % when Tier S was the arbiter;
+    // 15.3 % now that Tier F is. Two guards were added on the strength of a
+    // real ride — see §24.15 — and both cost simulated drift while taking the
+    // real-ride figure from 52.6 % to 39.9 %. The standing rule is that when
+    // the tiers disagree the real one wins, and this is the bill for it.
+    //
+    // The guard stays, at the level the simulator now measures, because its
+    // job is to catch a DIVERGENCE rather than to defend a headline.
+    expect(get('full').mean).toBeLessThan(22);
     // The tail matters more than the mean — it is what someone finds by
     // picking the one drive that went wrong.
-    expect(get('full').p90).toBeLessThan(30);
+    expect(get('full').p90).toBeLessThan(60);
   });
 });
