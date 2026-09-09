@@ -3,7 +3,7 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.26** · APK 7.43 MB · 1,681 tests · 60,224 lines
+**Build v0.27** · APK 7.43 MB · 1,681 tests · 60,224 lines
 **7.4 % mean drift on simulated logs · 28.9 % on real vehicle sensors**
 
 ---

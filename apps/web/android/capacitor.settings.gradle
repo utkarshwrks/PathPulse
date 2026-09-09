@@ -8,5 +8,11 @@ project(':capacitor-app').projectDir = new File('../../../node_modules/.pnpm/@ca
 include ':capacitor-device'
 project(':capacitor-device').projectDir = new File('../../../node_modules/.pnpm/@capacitor+device@6.0.3_@capacitor+core@6.2.1/node_modules/@capacitor/device/android')
 
+include ':capacitor-filesystem'
+project(':capacitor-filesystem').projectDir = new File('../../../node_modules/.pnpm/@capacitor+filesystem@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/filesystem/android')
+
 include ':capacitor-geolocation'
 project(':capacitor-geolocation').projectDir = new File('../../../node_modules/.pnpm/@capacitor+geolocation@6.1.1_@capacitor+core@6.2.1/node_modules/@capacitor/geolocation/android')
+
+include ':capacitor-share'
+project(':capacitor-share').projectDir = new File('../../../node_modules/.pnpm/@capacitor+share@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/share/android')

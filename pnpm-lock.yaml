@@ -26,12 +26,18 @@ importers:
       '@capacitor/device':
         specifier: ^6.0.3
         version: 6.0.3(@capacitor/core@6.2.1)
+      '@capacitor/filesystem':
+        specifier: ^6.0.4
+        version: 6.0.4(@capacitor/core@6.2.1)
       '@capacitor/geolocation':
         specifier: ^6.1.1
         version: 6.1.1(@capacitor/core@6.2.1)
       '@capacitor/motion':
         specifier: ^6.0.2
         version: 6.0.2(@capacitor/core@6.2.1)
+      '@capacitor/share':
+        specifier: ^6.0.4
+        version: 6.0.4(@capacitor/core@6.2.1)
       '@pathpulse/nav-core':
         specifier: workspace:*
         version: link:../../packages/nav-core
@@ -304,6 +310,11 @@ packages:
     peerDependencies:
       '@capacitor/core': ^6.0.0
 
+  '@capacitor/filesystem@6.0.4':
+    resolution: {integrity: sha512-eFlg/ZrwYA4Y6ClLRRikudVu2XvuZxfX/XC0ky9MgfbC9dyqTnVkkEoWM6vr1xR89YNY4mB0EeVTet1m1Jcumw==}
+    peerDependencies:
+      '@capacitor/core': ^6.0.0
+
   '@capacitor/geolocation@6.1.1':
     resolution: {integrity: sha512-zR24reZqkb9farg+qVqR0+DdDYs05SqkiqxCENoPofk/QWD6AobcHKDZutwifqO66jK2rM0ECo8MvbQv4MUTyA==}
     peerDependencies:
@@ -311,6 +322,11 @@ packages:
 
   '@capacitor/motion@6.0.2':
     resolution: {integrity: sha512-fjgprN+Nt3MBHyD/3nYxAbIl0x2JGRlfKASJlve+qVahOFZ49/zrJxsN0wqkXBjZ4SI7lWFlrZPfmH/bIxUNQw==}
+    peerDependencies:
+      '@capacitor/core': ^6.0.0
+
+  '@capacitor/share@6.0.4':
+    resolution: {integrity: sha512-Ij8C3as4n6L+SUj3M1ko+DGIsrDw2VTkn5Y/pQnFRI9dRk6YoSpGKLN54yOyN7ew3N9bVa8Rko+dFwdcNg7ESA==}
     peerDependencies:
       '@capacitor/core': ^6.0.0
 
@@ -2432,11 +2448,19 @@ snapshots:
     dependencies:
       '@capacitor/core': 6.2.1
 
+  '@capacitor/filesystem@6.0.4(@capacitor/core@6.2.1)':
+    dependencies:
+      '@capacitor/core': 6.2.1
+
   '@capacitor/geolocation@6.1.1(@capacitor/core@6.2.1)':
     dependencies:
       '@capacitor/core': 6.2.1
 
   '@capacitor/motion@6.0.2(@capacitor/core@6.2.1)':
+    dependencies:
+      '@capacitor/core': 6.2.1
+
+  '@capacitor/share@6.0.4(@capacitor/core@6.2.1)':
     dependencies:
       '@capacitor/core': 6.2.1
 

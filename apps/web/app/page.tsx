@@ -24,6 +24,7 @@ import DeviceInfo from '@/components/DeviceInfo';
 import Benchmarks from '@/components/Benchmarks';
 import VehicleMarker from '@/components/VehicleMarker';
 import { positionDisplay } from '@/lib/positionDisplay';
+import { describeSave, saveTextFile } from '@/lib/saveFile';
 import { contextWarning } from '@/lib/contextWarning';
 import TrailLayer from '@/components/TrailLayer';
 import MatchedRoadLayer from '@/components/MatchedRoadLayer';
@@ -324,15 +325,21 @@ export default function Home() {
     [readBounds],
   );
 
-  const downloadText = useCallback((text: string, filename: string, mime: string) => {
-    const blob = new Blob([text], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, []);
+  /**
+   * What happened to the last file we tried to save, in words.
+   *
+   * ★ A SILENT SUCCESS AND A SILENT FAILURE LOOK IDENTICAL ★ The blob download
+   * this replaces did nothing at all inside the Capacitor WebView, and said
+   * nothing about it — a ride was recorded, Save was pressed, and there was
+   * no file and no error. Whatever happens now, it says so.
+   */
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!saveNotice) return;
+    const id = setTimeout(() => setSaveNotice(null), 6000);
+    return () => clearTimeout(id);
+  }, [saveNotice]);
+
 
   /**
    * Golden Rule #8 again, in its strongest form: a file the judge opens later,
@@ -341,25 +348,32 @@ export default function Home() {
    * scale by software we did not write.
    */
   const handleExportTrip = useCallback(
-    (format: 'gpx' | 'geojson') => {
+    async (format: 'gpx' | 'geojson') => {
       const startedAtEpochMs = sessionStartRef.current;
       const reference = nav.gnssTrail();
       const stem = tripFileName(startedAtEpochMs);
-      if (format === 'gpx') {
-        downloadText(
-          buildGpx({ estimated: trail, reference, startedAtEpochMs }),
-          `${stem}.gpx`,
-          'application/gpx+xml',
-        );
-      } else {
-        downloadText(
-          JSON.stringify(buildTripGeoJson({ estimated: trail, reference, startedAtEpochMs }), null, 2),
-          `${stem}.geojson`,
-          'application/geo+json',
-        );
-      }
+      // Same path as the sensor log, for the same reason: this was a blob
+      // download too, and blob downloads do nothing inside the WebView.
+      const [text, name, mime] =
+        format === 'gpx'
+          ? [
+              buildGpx({ estimated: trail, reference, startedAtEpochMs }),
+              `${stem}.gpx`,
+              'application/gpx+xml',
+            ]
+          : [
+              JSON.stringify(
+                buildTripGeoJson({ estimated: trail, reference, startedAtEpochMs }),
+                null,
+                2,
+              ),
+              `${stem}.geojson`,
+              'application/geo+json',
+            ];
+      setSaveNotice('saving…');
+      setSaveNotice(describeSave(await saveTextFile(text, name, mime), name));
     },
-    [downloadText, nav, trail],
+    [nav, trail],
   );
 
   /**
@@ -370,22 +384,51 @@ export default function Home() {
    * replay format, so a real ride can be scored by the same harness that
    * scores the simulator — which is the whole of Tier F.
    */
-  const handleDownloadRecording = useCallback(() => {
+  /**
+   * ★ STOP WRITES THE FILE. THERE IS NO SEPARATE STEP TO FORGET OR TO FAIL ★
+   *
+   * The first version had Stop and Save as two actions, and a ride was lost
+   * between them: Save did nothing (a blob download inside a WebView), the
+   * rider saw no file and no error, and the samples were still sitting in
+   * memory when the app was replaced. Twenty minutes of riding, gone to a UI
+   * affordance.
+   *
+   * A recording that has been stopped is finished by definition, and the only
+   * thing anybody ever wants to do with a finished recording is keep it. So
+   * Stop keeps it. The Save button remains for a second copy — sharing it
+   * again, to somewhere else — rather than as the thing standing between a
+   * ride and a file.
+   */
+  const handleStopRecording = useCallback(async () => {
+    nav.stopRecording();
     const { text, fileName } = nav.recordedJsonl();
-    if (!text) return;
-    downloadText(text, fileName, 'application/x-ndjson');
-  }, [downloadText, nav]);
+    if (!text) {
+      setSaveNotice('nothing recorded');
+      return;
+    }
+    setSaveNotice('saving…');
+    setSaveNotice(describeSave(await saveTextFile(text, fileName, 'application/x-ndjson'), fileName));
+  }, [nav]);
+
+  const handleDownloadRecording = useCallback(async () => {
+    const { text, fileName } = nav.recordedJsonl();
+    if (!text) {
+      setSaveNotice('nothing recorded yet');
+      return;
+    }
+    setSaveNotice('saving…');
+    const outcome = await saveTextFile(text, fileName, 'application/x-ndjson');
+    setSaveNotice(describeSave(outcome, fileName));
+  }, [nav]);
 
   // Golden Rule #8: if the run can be exported it can be checked afterwards,
   // which is worth more to a judge than any claim made during the demo.
-  const handleExportEvents = useCallback(() => {
-    const blob = new Blob([nav.exportEventsJson()], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `pathpulse_events_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleExportEvents = useCallback(async () => {
+    const name = `pathpulse_events_${Date.now()}.json`;
+    setSaveNotice('saving…');
+    setSaveNotice(
+      describeSave(await saveTextFile(nav.exportEventsJson(), name, 'application/json'), name),
+    );
   }, [nav]);
 
 
@@ -448,6 +491,20 @@ export default function Home() {
         ) : null}
       </MapView>
 
+      {/*
+        ★ SAY WHAT HAPPENED TO THE FILE ★
+        The blob download this replaces did nothing inside the WebView and said
+        nothing about it — a ride recorded, Save pressed, no file and no error.
+        Whatever happens now, it is on screen.
+      */}
+      {saveNotice ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-4">
+          <div className="rounded-full border border-white/15 bg-black/80 px-3 py-1.5 font-mono text-[11px] text-neutral-200 shadow-lg backdrop-blur">
+            {saveNotice}
+          </div>
+        </div>
+      ) : null}
+
       <ErrorBoundary area="HUD">
       <Hud
         speedSource={nav.diagnostics.speedSource}
@@ -493,7 +550,7 @@ export default function Home() {
         onExportEvents={handleExportEvents}
         recorder={nav.recorder}
         onStartRecording={nav.startRecording}
-        onStopRecording={nav.stopRecording}
+        onStopRecording={handleStopRecording}
         onDownloadRecording={handleDownloadRecording}
         onExportTrip={handleExportTrip}
         tripPointCount={trail.length}
