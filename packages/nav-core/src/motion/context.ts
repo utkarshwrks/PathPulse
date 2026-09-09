@@ -76,6 +76,72 @@ export interface MotionContextConfig {
    * source — which would be visible on the map as a stutter.
    */
   holdSamples: number;
+  /**
+   * How long cadence-backed walking evidence must hold CONTINUOUSLY before a
+   * vehicle is allowed to become a pedestrian, ms.
+   *
+   * ★ THE LATCH THAT FROZE AN ENTIRE OUTAGE ★
+   *
+   * Field video, a rigidly-mounted phone on a vehicle in city traffic. While
+   * GNSS was still healthy the badge read `ON FOOT` at 5 km/h. Then the fixes
+   * stopped, and for the next forty seconds the HUD read:
+   *
+   *     DEAD RECKONING  [ON FOOT]   0 km/h  [STEPS]
+   *     distance 704 m -> 707 m -> 708 m
+   *
+   * The estimate advanced 23 m while the vehicle covered 174 m. Recovery error
+   * went from 4.58 % to 20.74 %.
+   *
+   * Every one of the three PEDESTRIAN conditions was satisfied, and none of
+   * them was wrong on its own. A scooter over broken surface shakes the
+   * handset past `pedestrianVarianceThreshold`. Potholes, speed bumps and
+   * engine harmonics land inside `StepDetector`'s 0.6-3.5 Hz band, so a
+   * cadence is reported. And crawling in traffic at 1.4 m/s is inside
+   * `pedestrianMaxSpeedMps`. Three plausible signals, one absurd conclusion.
+   *
+   * ★ WHAT SEPARATES THEM IS NOT THE INSTANT, IT IS THE DURATION ★
+   *
+   * A vehicle satisfies all three for a few seconds, at a red light on a bad
+   * road. A person walking satisfies them continuously, because walking is
+   * what they are doing. So leaving VEHICLE now costs five seconds of
+   * uninterrupted evidence — about nine steps at a normal cadence, which is
+   * what the brief asked for and what the signal can actually support.
+   *
+   * Deliberately one-directional. Entering PEDESTRIAN from UNKNOWN or
+   * STATIONARY is unchanged: somebody opening the app and walking should be
+   * recognised at once, and there is no vehicle verdict to protect.
+   */
+  vehicleToPedestrianConfirmMs: number;
+  /**
+   * How long after a measured vehicle speed the carrier still counts as one, ms.
+   *
+   * ★ DURATION WAS NOT ENOUGH, BECAUSE THE VIBRATION NEVER STOPS ★
+   *
+   * The first attempt at this asked for five seconds of uninterrupted
+   * cadence-backed evidence before a vehicle could become a pedestrian. It did
+   * not work, and the reason is the whole problem: a mounted handset on a bad
+   * road produces that signal CONTINUOUSLY. Twenty seconds of crawling in
+   * traffic satisfies a five-second timer, and a sixty-second one, and any
+   * timer at all — there is no duration that a jammed-up scooter cannot
+   * outlast.
+   *
+   * Variance and cadence cannot separate these two cases. They are, from the
+   * IMU alone, the same signal.
+   *
+   * ★ WHAT CAN SEPARATE THEM IS A MEASUREMENT ★
+   *
+   * A person walking at 1.4 m/s was not doing 12 m/s a moment ago. A vehicle
+   * crawling at 1.4 m/s was. So the discriminator is not how the handset is
+   * shaking, it is whether the receiver has recently measured a speed no
+   * pedestrian reaches — which is exactly the evidence `vehicleSpeedMps`
+   * already treats as decisive, remembered instead of discarded.
+   *
+   * Sixty seconds. A rider who genuinely parks and walks away is called a
+   * pedestrian a minute later, which costs a minute of a vehicle-tuned
+   * heading rule on somebody strolling. A vehicle in traffic is never called a
+   * pedestrian at all, which is the failure that froze an outage.
+   */
+  vehicleMemoryMs: number;
 }
 
 export const DEFAULT_MOTION_CONTEXT_CONFIG: MotionContextConfig = {
@@ -86,6 +152,8 @@ export const DEFAULT_MOTION_CONTEXT_CONFIG: MotionContextConfig = {
   stationarySpeedMps: 0.6,
   gnssEvidenceMs: 12_000,
   holdSamples: 30,
+  vehicleToPedestrianConfirmMs: 5000,
+  vehicleMemoryMs: 60_000,
 };
 
 export interface MotionContextInput {
@@ -134,6 +202,29 @@ export class MotionContextDetector {
   private readonly variances: number[] = [];
   /** The last verdict a GNSS speed actually backed, or null if there has been none. */
   private gnssBacked: MotionContext | null = null;
+  /**
+   * When the current run of cadence-backed walking evidence began, or null.
+   * See `vehicleToPedestrianConfirmMs`.
+   */
+  private walkingSinceMs: number | null = null;
+  /** When GNSS last measured a speed no pedestrian reaches. See `vehicleMemoryMs`. */
+  private lastVehicleSpeedT: number | null = null;
+  /**
+   * The context in force when GNSS was last lost, held for the outage.
+   *
+   * ★ NOBODY GETS OUT OF THE CAR IN A TUNNEL, AND THE HOLD HAS TO BE EXPLICIT ★
+   *
+   * `gnssBacked` was already doing this implicitly, and implicitly was not good
+   * enough: it is written whenever GNSS backs a verdict, so one wrong reading
+   * in slow traffic — see `vehicleToPedestrianConfirmMs` — became the held
+   * value for an entire outage with nothing on screen to say so.
+   *
+   * A latch that is named, timestamped and rendered can be seen to be wrong.
+   * One that lives inside a private field cannot.
+   */
+  private latchedContext: MotionContext | null = null;
+  private latchedAtMs: number | null = null;
+  private gnssHealthy = true;
 
   constructor(config: Partial<MotionContextConfig> = {}) {
     this.config = { ...DEFAULT_MOTION_CONTEXT_CONFIG, ...config };
@@ -145,6 +236,46 @@ export class MotionContextDetector {
 
   get reason(): string {
     return this.lastReason;
+  }
+
+  /** True while an outage is holding the context it entered with. */
+  get latched(): boolean {
+    return this.latchedContext !== null;
+  }
+
+  get latchedAt(): number | null {
+    return this.latchedAtMs;
+  }
+
+  /**
+   * True when GNSS established VEHICLE and nothing has since PROVEN otherwise.
+   *
+   * ★ THE GUARD ON THE STEP MODEL ★ A rigidly mounted handset has no step
+   * cadence to measure, so the pedestrian speed path resolves to zero and the
+   * estimate stops advancing — which is the field failure exactly. The step
+   * model must not be offered to a carrier the receiver last saw driving.
+   */
+  get vehicleEstablished(): boolean {
+    return this.latchedContext === 'VEHICLE' || (!this.latched && this.gnssBacked === 'VEHICLE');
+  }
+
+  /**
+   * Tell the classifier whether the receiver is currently fixing.
+   *
+   * Called by the engine on every sample. The transition is what matters: on
+   * the edge into an outage the context is latched, and on the edge out of one
+   * it is released and GNSS resumes deciding.
+   */
+  setGnssHealthy(healthy: boolean, tMs: number): void {
+    if (healthy === this.gnssHealthy) return;
+    this.gnssHealthy = healthy;
+    if (!healthy) {
+      this.latchedContext = this.accepted === 'UNKNOWN' ? null : this.accepted;
+      this.latchedAtMs = this.latchedContext === null ? null : tMs;
+    } else {
+      this.latchedContext = null;
+      this.latchedAtMs = null;
+    }
   }
 
   push(input: MotionContextInput): MotionContextResult {
@@ -188,6 +319,11 @@ export class MotionContextDetector {
     this.lastReason = 'no samples yet';
     this.variances.length = 0;
     this.gnssBacked = null;
+    this.walkingSinceMs = null;
+    this.lastVehicleSpeedT = null;
+    this.latchedContext = null;
+    this.latchedAtMs = null;
+    this.gnssHealthy = true;
   }
 
   /**
@@ -219,12 +355,34 @@ export class MotionContextDetector {
     const cadence = input.cadenceHz ?? 0;
     const walking = Number.isFinite(cadence) && cadence > 0;
 
+    // How long cadence-backed walking evidence has held without a break. See
+    // `vehicleToPedestrianConfirmMs`: a vehicle produces this for a few
+    // seconds on a bad road, a person produces it continuously.
+    if (onFoot && walking) {
+      if (this.walkingSinceMs === null) this.walkingSinceMs = input.t;
+    } else {
+      this.walkingSinceMs = null;
+    }
+    const walkingHeldMs =
+      this.walkingSinceMs === null ? 0 : Math.max(0, input.t - this.walkingSinceMs);
+    // Leaving an established VEHICLE costs sustained evidence. Arriving at
+    // PEDESTRIAN from anything else does not — there is no verdict to protect.
+    const vehicleMemoryMs =
+      this.lastVehicleSpeedT === null
+        ? Number.POSITIVE_INFINITY
+        : input.t - this.lastVehicleSpeedT;
+    const mayLeaveVehicle =
+      this.gnssBacked !== 'VEHICLE' ||
+      (walkingHeldMs >= this.config.vehicleToPedestrianConfirmMs &&
+        vehicleMemoryMs >= this.config.vehicleMemoryMs);
+
     if (this.isRecentGnss(input)) {
       const s = input.gnssSpeedMps!;
 
       // 1. A measured speed no pedestrian reaches. Nothing outranks it.
       if (s >= this.config.vehicleSpeedMps) {
         this.gnssBacked = 'VEHICLE';
+        this.lastVehicleSpeedT = input.t;
         return { context: 'VEHICLE', reason: `gnss ${s.toFixed(1)} m/s` };
       }
 
@@ -242,10 +400,24 @@ export class MotionContextDetector {
       //    is one a person can produce with their legs. Variance alone put
       //    ON FOOT on the screen at 25 km/h.
       if (onFoot && walking && s <= this.config.pedestrianMaxSpeedMps) {
+        if (!mayLeaveVehicle) {
+          // ★ A VEHICLE CRAWLING ON A BAD ROAD LOOKS EXACTLY LIKE THIS ★
+          // Held rather than flipped, and the reason says how much longer the
+          // evidence has to last — which is the line a rider reads on the
+          // Device screen when the badge does not say what they expect.
+          const leftMs = Math.max(
+            this.config.vehicleToPedestrianConfirmMs - walkingHeldMs,
+            this.config.vehicleMemoryMs - vehicleMemoryMs,
+          );
+          return {
+            context: 'VEHICLE',
+            reason: `looks like walking, but gnss measured a vehicle ${(vehicleMemoryMs / 1000).toFixed(0)}s ago — ${(leftMs / 1000).toFixed(0)}s more`,
+          };
+        }
         this.gnssBacked = 'PEDESTRIAN';
         return {
           context: 'PEDESTRIAN',
-          reason: `${cadence.toFixed(1)} steps/s at ${s.toFixed(1)} m/s`,
+          reason: `${cadence.toFixed(1)} steps/s at ${s.toFixed(1)} m/s for ${(walkingHeldMs / 1000).toFixed(1)}s`,
         };
       }
       // ★ STOPPING IS NOT GETTING INTO A CAR ★
@@ -339,6 +511,35 @@ export class MotionContextDetector {
     // So once GNSS has told us what this is, hold that until GNSS speaks
     // again. Variance only gets to decide before the first fix has ever
     // arrived, when holding nothing is the alternative.
+    // ★ THE LATCH, AND THE ONE THING THAT MAY RELEASE IT ★
+    //
+    // Absence of evidence releases nothing. A mounted handset has no cadence
+    // to measure, and reading that silence as "not a vehicle any more" is what
+    // put [STEPS] and 0 km/h on the screen for forty seconds while the vehicle
+    // covered 174 m.
+    //
+    // A stop is different: `isStationary` is a raw-sensor decision the IMU can
+    // make on its own, it is already trusted everywhere else in this engine to
+    // arm ZUPT, and a vehicle that has stopped really is stationary. That one
+    // transition is allowed. Every other release waits for GNSS.
+    if (this.latchedContext !== null) {
+      if (input.isStationary) {
+        return { context: 'STATIONARY', reason: 'imu still — the one release the latch allows' };
+      }
+      // ★ AND NO AMOUNT OF CADENCE RELEASES A VEHICLE MID-OUTAGE ★
+      //
+      // The brief asked for release on sustained detected cadence. It cannot
+      // work, and the reason is the same one that killed the timer above: a
+      // mounted handset on a bad road produces sustained cadence indefinitely.
+      // Without GNSS there is no signal that tells a crawling vehicle from a
+      // walker, so there is no honest basis for the transition, and asserting
+      // one costs a frozen estimate. The latch waits for the receiver.
+      return {
+        context: this.latchedContext,
+        reason: `latched ${this.latchedContext.toLowerCase()} at outage entry`,
+      };
+    }
+
     if (this.gnssBacked !== null) {
       return { context: this.gnssBacked, reason: 'held — no gnss speed to re-check' };
     }

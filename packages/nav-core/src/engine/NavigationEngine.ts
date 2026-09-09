@@ -1164,6 +1164,17 @@ export class NavigationEngine {
     forcedTurns: number;
     /** See `eskfResets`. Rare is healthy; frequent means the gate is mis-tuned. */
     eskfResets: number;
+    /**
+     * Whether the motion context is being held at the value it had when GNSS
+     * was lost, and when that happened.
+     *
+     * ★ A LATCH THAT CANNOT BE SEEN IS A LATCH THAT CANNOT BE DEBUGGED ★ The
+     * held value was already implicit in `gnssBacked`; one wrong reading in
+     * slow traffic became the verdict for a whole outage with nothing on
+     * screen to say so. See MotionContextDetector.latched.
+     */
+    contextLatched: boolean;
+    contextLatchedAt: number | null;
     matchedRoadName: string | null;
     matchedRoadDistanceM: number | null;
     hasRoadGraph: boolean;
@@ -1268,6 +1279,8 @@ export class NavigationEngine {
       roadSpeedCeilingSource: this.roadSpeedCeilingSource,
       forcedTurns: this.turns.forcedCount,
       eskfResets: this.eskfResets,
+      contextLatched: this.motion.latched,
+      contextLatchedAt: this.motion.latchedAt,
       matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
       matchedRoadDistanceM: this.lastMatch?.distanceM ?? null,
       hasRoadGraph: this.roadGraph !== null,
@@ -2179,6 +2192,14 @@ export class NavigationEngine {
         : this.config.gnssSpeedHoldMs,
     );
     const contextBefore = this.motion.current;
+    // ★ THE CLASSIFIER HAS TO KNOW WHEN THE EVIDENCE STOPPED ★ On the edge
+    // into an outage it latches the context it entered with; on the edge out
+    // it releases and GNSS decides again. See MotionContextDetector.latched.
+    const modeNow = this.stateMachine.current;
+    this.motion.setGnssHealthy(
+      modeNow === 'GNSS' || modeNow === 'GNSS_DEGRADED' || modeNow === 'INITIALIZING',
+      sample.t,
+    );
     this.motion.push({
       t: sample.t,
       accelVariance: this.lastStationarity.accelVariance,
@@ -2290,8 +2311,21 @@ export class NavigationEngine {
     // Note this cannot silence a real walk: GNSS speed still outranks it in
     // propagate(), and a resumed cadence restores the stride estimate on the
     // next step.
+    // ★ AND A CARRIER THE RECEIVER LAST SAW DRIVING NEVER GETS THE STEP MODEL ★
+    //
+    // Belt and braces over the latch. Even with the classifier correct, the
+    // consequence of getting this one wrong is not a slightly worse estimate —
+    // it is a frozen one. A rigidly mounted handset has no step cadence to
+    // measure, so `speedMps(0)` is 0, so the estimate stops advancing
+    // entirely. Field video: `[STEPS] 0 km/h` for forty seconds while the
+    // vehicle covered 174 m, and 704 m of distance became 708 m.
+    //
+    // Zero is the right answer for a walker who has stopped (§24.1) and a
+    // catastrophic one for a vehicle that has not, and the two are told apart
+    // by whether GNSS ever established a vehicle. See
+    // MotionContextDetector.vehicleEstablished.
     const stepSpeed =
-      this.motion.current === 'PEDESTRIAN'
+      this.motion.current === 'PEDESTRIAN' && !this.motion.vehicleEstablished
         ? this.lastCadenceHz > 0
           ? this.stride.speedMps(this.lastCadenceHz)
           : 0
