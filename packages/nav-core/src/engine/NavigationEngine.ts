@@ -972,9 +972,10 @@ export class NavigationEngine {
   /** Phase 17. Built lazily beside the topology, and only when switched on. */
   private particles: ParticleFilter | null = null;
   private relocaliser: TurnRelocaliser | null = null;
+  /** Odometer the relocaliser's between-turn distances are differenced from. */
+  private lastRelocaliserDistanceM = 0;
   private lastParticleEstimate: ParticleEstimate | null = null;
   private relocalisations = 0;
-  private lastParticleDistanceM = 0;
   /** Times the cloud lost the vehicle and had to be re-seeded. Never silent. */
   private particleDivergences = 0;
   /** The correction the cloud is currently applying, rate-limited. */
@@ -2886,13 +2887,51 @@ export class NavigationEngine {
     //
     // It is seeded at the moment GNSS is lost, from the last good position, so
     // its hypotheses start where the truth was rather than having to find it.
+    // ★ THE RELOCALISER'S OWN BOOKKEEPING, OUTSIDE THE FILTER'S BLOCK ★
+    // Distance between turns is what identifies a sequence, and it has to be
+    // accumulated whether or not 500 hypotheses are being carried.
+    if (this.config.turnRelocalisation && this.relocaliser) {
+      const moved = Math.max(0, this.dr.current.distanceTravelledM - this.lastRelocaliserDistanceM);
+      this.lastRelocaliserDistanceM = this.dr.current.distanceTravelledM;
+      this.relocaliser.advance(moved);
+      if (mode !== 'DEAD_RECKONING') this.relocaliser.reset();
+    }
+
+    // ★ RECOGNITION WITHOUT THE CLOUD ★
+    //
+    // With the particle filter running, a match collapses the cloud onto the
+    // recognised place. Without it there is no cloud, and the same recognition
+    // is applied to the estimate directly — which is what the mechanism was
+    // always doing, one level of indirection removed.
+    //
+    // Same high bar either way: three turns, a unique match, and distances
+    // that agree. A wrong relocalisation is a confident teleport that nothing
+    // would ever pull back, so it declines far more often than it answers.
+    if (
+      this.config.turnRelocalisation &&
+      this.relocaliser &&
+      !this.config.particleFilter &&
+      mode === 'DEAD_RECKONING'
+    ) {
+      const found = this.relocaliser.match();
+      if (found) {
+        this.dr.overridePosition({ e: found.e, n: found.n });
+        this.dr.nudgeHeading(angleDiffDeg(found.headingDeg, this.dr.current.headingDeg));
+        shownEnu = { e: found.e, n: found.n };
+        this.relocaliser.reset();
+        this.relocalisations++;
+        this.log.push({
+          t: sample.t,
+          type: 'RELOCALISED',
+          message:
+            `recognised ${found.turnsUsed} turns at ${found.description} ` +
+            `(fit ${(found.score * 100).toFixed(0)}%, ${found.margin.toFixed(1)}x the runner-up)`,
+          data: { score: Number(found.score.toFixed(3)), turns: found.turnsUsed },
+        });
+      }
+    }
+
     if (this.config.particleFilter && this.particles) {
-      const travelled = Math.max(
-        0,
-        this.dr.current.distanceTravelledM - this.lastParticleDistanceM,
-      );
-      this.lastParticleDistanceM = this.dr.current.distanceTravelledM;
-      if (this.config.turnRelocalisation) this.relocaliser?.advance(travelled);
 
       if (mode === 'DEAD_RECKONING') {
         if (!this.particles.isSeeded) {
@@ -3064,6 +3103,22 @@ export class NavigationEngine {
           this.topology = new RoadTopology(this.roadGraph, this.origin.lat, this.origin.lon);
         }
         this.particles = new ParticleFilter(this.roadIndex, this.topology);
+      }
+      // ★ DECOUPLED FROM THE PARTICLE FILTER ★
+      //
+      // The relocaliser used to be constructed inside the branch above, so it
+      // existed only when 500 hypotheses were being carried — and Phase 17's
+      // own note says the filter is "the most expensive component in the
+      // engine". Recognising a turn sequence on the road graph is a 1-D search
+      // over arc length, not a 15-D state estimation problem, and it does not
+      // need to be paid for with the filter's battery.
+      //
+      // It shares the topology with Phase 14 and Phase 17 when either has
+      // built one, and builds its own when neither has.
+      if (this.config.turnRelocalisation && this.roadIndex && !this.relocaliser && this.roadGraph) {
+        if (!this.topology) {
+          this.topology = new RoadTopology(this.roadGraph, this.origin.lat, this.origin.lon);
+        }
         this.relocaliser = new TurnRelocaliser(this.roadIndex, this.topology);
       }
       if (this.roadIndex) {
@@ -4131,7 +4186,7 @@ export class NavigationEngine {
     this.relocaliser?.reset();
     this.lastParticleEstimate = null;
     this.relocalisations = 0;
-    this.lastParticleDistanceM = 0;
+    this.lastRelocaliserDistanceM = 0;
     this.particleDivergences = 0;
     this.particleOffset = { e: 0, n: 0 };
     this.altimeter.reset();

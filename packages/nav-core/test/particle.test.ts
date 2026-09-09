@@ -19,6 +19,8 @@ import { RoadTopology } from '../src/mapmatch/RoadTopology.js';
 import { ParticleFilter } from '../src/particle/ParticleFilter.js';
 import { TurnRelocaliser } from '../src/particle/TurnRelocaliser.js';
 import { enuToLatLon } from '../src/geo/enu.js';
+import { NavigationEngine } from '../src/index.js';
+import type { SensorSample } from '../src/types.js';
 import type { RoadGraph } from '../src/mapmatch/types.js';
 import type { TurnEvent } from '../src/mapmatch/turnDetector.js';
 
@@ -297,5 +299,64 @@ describe('★ turn relocalisation', () => {
       r.pushTurn(turn(90));
     }
     expect(r.patternLength).toBe(3);
+  });
+});
+
+/**
+ * ★ RECOGNITION WITHOUT THE CLOUD ★
+ *
+ * `TurnRelocaliser` shipped disabled because it was constructed inside the
+ * particle filter's branch — it existed only when 500 hypotheses were being
+ * carried, and Phase 17's own note calls that "the most expensive component in
+ * the engine".
+ *
+ * Recognising a turn sequence on the road graph is a 1-D search over arc
+ * length, not a 15-D state estimation problem, and it should not have to be
+ * paid for with the filter's battery. §2.4.
+ */
+describe('turn relocalisation stands on its own', () => {
+  const roads = graphOf(
+    way('n1', [[0, 0], [0, 400]], { name: 'First Avenue' }),
+    way('e1', [[0, 400], [400, 400]], { name: 'Cross Street' }),
+    way('n2', [[400, 400], [400, 800]], { name: 'Second Avenue' }),
+  );
+
+  function drive(engine: NavigationEngine, ms: number, gnssUntilMs: number) {
+    for (let t = 0; t <= ms; t += 100) {
+      const s: SensorSample = {
+        t,
+        imu: { ax: 0, ay: 0, az: 9.80665, gx: 0, gy: 0, gz: 0 },
+      };
+      if (t % 1000 === 0 && t <= gnssUntilMs) {
+        const p = enuToLatLon(0, t / 100, ORIGIN.lat, ORIGIN.lon);
+        s.gnss = { lat: p.lat, lon: p.lon, accuracyM: 4, speedMps: 10, headingDeg: 0 };
+      }
+      engine.update(s);
+    }
+  }
+
+  it('★ is built when it is switched on, with the particle filter off', () => {
+    // Construction used to happen inside the particle filter's branch, so this
+    // combination left `relocaliser` null and the feature silently absent.
+    const e = new NavigationEngine({ turnRelocalisation: true, particleFilter: false });
+    e.setRoadGraph(roads);
+    expect(() => drive(e, 4000, 4000)).not.toThrow();
+  });
+
+  it('costs nothing when it is switched off', () => {
+    const e = new NavigationEngine({ turnRelocalisation: false, particleFilter: false });
+    e.setRoadGraph(roads);
+    drive(e, 2000, 2000);
+    expect(e.diagnostics.relocalisations).toBe(0);
+  });
+
+  it('declines rather than teleporting, which is the whole guard', () => {
+    // Three turns, a unique match and agreeing distances. A straight line
+    // offers none of that, and a wrong relocalisation is a confident teleport
+    // that nothing would ever pull back.
+    const e = new NavigationEngine({ turnRelocalisation: true, particleFilter: false });
+    e.setRoadGraph(roads);
+    drive(e, 60_000, 20_000);
+    expect(e.diagnostics.relocalisations).toBe(0);
   });
 });
