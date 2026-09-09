@@ -15,7 +15,11 @@
 import { describe, expect, it } from 'vitest';
 import { RoadIndex } from '../src/mapmatch/RoadIndex.js';
 import { RoadTopology } from '../src/mapmatch/RoadTopology.js';
-import { HmmMapMatcher, type HmmObservation } from '../src/mapmatch/hmm.js';
+import {
+  DEFAULT_HMM_CONFIG,
+  HmmMapMatcher,
+  type HmmObservation,
+} from '../src/mapmatch/hmm.js';
 import { findRoadMatch } from '../src/constraints/roadsnap.js';
 import { enuToLatLon } from '../src/geo/enu.js';
 import type { RoadGraph } from '../src/mapmatch/types.js';
@@ -341,5 +345,59 @@ describe('HMM — behaviour under stress', () => {
     for (let n = 0; n <= 100; n += 20) matcher.push(obs(0, n, 0, 20));
     matcher.reset();
     expect(matcher.matchedWayId).toBeNull();
+  });
+});
+
+/**
+ * ★ THE TRELLIS WAS BUILT AND NEVER WALKED BACK ★
+ *
+ * `viterbi` has filled a backpointer array on every call since this class was
+ * written, and read only the final column. That is a filtering Viterbi: it
+ * commits at the instant of the observation, using no evidence that arrives
+ * after it — which is nearest-road-plus-continuity with a trellis attached.
+ *
+ * Off by default: measured on the first Tier F ride it is neutral at lag 5 and
+ * worse beyond. See `lagSteps` for the table and why this corpus cannot settle
+ * it.
+ */
+describe('fixed-lag smoothing', () => {
+  const road = () =>
+    graphOf(
+      way('main', [
+        [0, -200],
+        [0, 600],
+      ]),
+    );
+
+  it('is off by default, and the filtering path is unchanged', () => {
+    expect(DEFAULT_HMM_CONFIG.lagSteps).toBe(0);
+  });
+
+  it('a lag longer than the trellis commits nothing early', () => {
+    // Early in a window there is no hindsight to have, and inventing some
+    // would commit a decision made with LESS evidence rather than more.
+    const g = road();
+    const index = new RoadIndex(g, ORIGIN.lat, ORIGIN.lon);
+    const topology = new RoadTopology(g, ORIGIN.lat, ORIGIN.lon);
+    const m = new HmmMapMatcher(index, topology, { lagSteps: 50, minTravelM: 0 });
+    expect(m.push(obs(0, 10, 0, 0))).not.toBeNull();
+  });
+
+  it('does not change the answer on a single unambiguous road', () => {
+    // With one plausible way there is nothing for hindsight to revise, so the
+    // smoothed and filtered answers must agree exactly.
+    const make = (lagSteps: number) => {
+      const g = road();
+      const index = new RoadIndex(g, ORIGIN.lat, ORIGIN.lon);
+      const topology = new RoadTopology(g, ORIGIN.lat, ORIGIN.lon);
+      return new HmmMapMatcher(index, topology, { lagSteps, minTravelM: 0 });
+    };
+    const off = make(0);
+    const on = make(8);
+    for (let i = 0; i < 25; i++) {
+      const a = off.push(obs(0, i * 12, 0, 12));
+      const b = on.push(obs(0, i * 12, 0, 12));
+      expect(b?.wayId ?? null).toBe(a?.wayId ?? null);
+    }
   });
 });

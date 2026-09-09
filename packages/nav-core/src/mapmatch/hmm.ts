@@ -66,6 +66,51 @@ export interface HmmConfig {
   /** Observations kept in the Viterbi window. */
   windowSize: number;
   /**
+   * How many observations back the WAY IDENTITY is committed, steps.
+   *
+   * ★ THE TRELLIS WAS BUILT AND NEVER WALKED BACK ★
+   *
+   * `viterbi` fills a backpointer array on every call and then reads only the
+   * final column's best node. That is a filtering Viterbi: it commits to a way
+   * at the instant of the observation, using no evidence that arrived after
+   * it. Newson-Krumm's whole claim is that the SEQUENCE decides, and a
+   * sequence of one is nearest-road-plus-continuity with a trellis attached.
+   *
+   * A junction is exactly where that matters. Approaching one, two candidate
+   * ways are equally plausible and the matcher must guess; the turn that
+   * follows says which was right, and by then the guess has been made and the
+   * continuity preference is defending it. Committing `lagSteps` observations
+   * late lets the following turn arrive before the decision does.
+   *
+   * ★ IDENTITY LAGS. POSITION DOES NOT. ★
+   *
+   * The smoothed node belongs to an OLDER observation, and snapping the marker
+   * to where the vehicle was eight observations ago would drag it backwards —
+   * a teleport, and against Golden Rule #6. So only the way IDENTITY comes
+   * from the smoothed path; the position on it is the CURRENT observation
+   * projected onto that way. If the current observation has no candidate on
+   * the smoothed way, the vehicle has genuinely left it and the unsmoothed
+   * winner stands.
+   *
+   * ★ 0 — IMPLEMENTED, MEASURED, AND IT DOES NOT PAY HERE ★
+   *
+   * On the first Tier F ride, mean drift over seven synthetic windows:
+   *
+   *   lag  0 ..... 39.9 %      lag  5 ..... 39.9 %
+   *   lag  3 ..... 40.0 %      lag  8 ..... 42.9 %
+   *   lag 12 ..... 43.1 %
+   *
+   * Neutral at best and worse beyond, so it ships off. The mechanism is
+   * correct and the reasoning behind it is unchanged — a junction decision
+   * made before the following turn arrives is a guess the continuity
+   * preference then defends. What this corpus cannot show is the benefit: 5.5
+   * minutes, seven windows, and few junctions taken during an outage.
+   *
+   * Kept and toggleable, because the measurement that would settle it is a
+   * longer Tier F ride rather than another run on this one.
+   */
+  lagSteps: number;
+  /**
    * Minimum travel between accepted observations, metres.
    *
    * ★ THE TRANSITION TERM NEEDS DISTANCE TO SAY ANYTHING ★
@@ -124,6 +169,7 @@ export const DEFAULT_HMM_CONFIG: HmmConfig = {
   maxCandidates: 6,
   searchRadiusM: 60,
   windowSize: 30,
+  lagSteps: 0,
   minTravelM: 10,
   headingPenalty: 4,
   layerSeparationM: 4,
@@ -413,8 +459,42 @@ export class HmmMapMatcher {
     const winner = previous[bestIndex];
     if (!winner) return null;
 
-    const { emission: _e, ...position } = winner.candidate;
-    return { ...position, score: winner.score, windowUsed: usable.length };
+    // ★ WALK THE TRELLIS BACK ★ See `lagSteps`. The backpointers have been
+    // built on every call since this class was written and never once read.
+    const smoothedWayId = this.backtrackWayId(backpointers, bestIndex);
+    let chosen = winner;
+    if (smoothedWayId !== null && smoothedWayId !== winner.candidate.wayId) {
+      // Identity from the smoothed path, position from the current
+      // observation. A candidate on that way in the latest column IS the
+      // current position projected onto it — the trellis already computed it.
+      const onSmoothed = previous.find((n) => n.candidate.wayId === smoothedWayId);
+      if (onSmoothed) chosen = onSmoothed;
+      // No candidate on it means the vehicle has genuinely left that way, and
+      // the unsmoothed winner is the honest answer.
+    }
+
+    const { emission: _e, ...position } = chosen.candidate;
+    return { ...position, score: chosen.score, windowUsed: usable.length };
+  }
+
+  /**
+   * The way the smoothed path was on `lagSteps` observations ago.
+   *
+   * Returns null when the trellis is shorter than the lag — early in a window
+   * there is no hindsight to have, and pretending otherwise would commit to a
+   * decision made with less evidence rather than more.
+   */
+  private backtrackWayId(backpointers: TrellisNode[][], finalIndex: number): string | null {
+    const lag = this.config.lagSteps;
+    if (lag <= 0) return null;
+    if (backpointers.length <= lag) return null;
+    let idx = finalIndex;
+    for (let step = backpointers.length - 1; step > backpointers.length - 1 - lag; step--) {
+      const node = backpointers[step]?.[idx];
+      if (!node || node.from < 0) return null;
+      idx = node.from;
+    }
+    return backpointers[backpointers.length - 1 - lag]?.[idx]?.candidate.wayId ?? null;
   }
 
   /**
