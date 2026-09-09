@@ -44,8 +44,16 @@
  */
 
 export interface SpeedCalibratorConfig {
-  /** Pairs kept. At one fix a second this is the last two minutes of driving. */
-  window: number;
+  /**
+   * Pairs kept. At one fix a second this is the last two minutes of driving.
+   *
+   * ★ NOT `window` ★ `pnpm lint:core-purity` greps nav-core for browser
+   * globals by identifier, so a field with that name fails Golden Rule #1 —
+   * which it did, silently, for as long as this file has existed. The guard is
+   * deliberately blunt and `TurnDetector.sweep` already carries the same note;
+   * working around it with an exception would blunt it further.
+   */
+  windowSize: number;
   /** Below this the ratio is noise over noise and is not observed, m/s. */
   minSpeedMps: number;
   /** Pairs required before the scale is applied at all. */
@@ -86,7 +94,7 @@ export interface SpeedCalibratorConfig {
 }
 
 export const DEFAULT_SPEED_CALIBRATOR_CONFIG: SpeedCalibratorConfig = {
-  window: 120,
+  windowSize: 120,
   minSpeedMps: 2,
   minObservations: 10,
   minScale: 0.6,
@@ -127,7 +135,7 @@ export class MlSpeedCalibrator {
     if (predictedMps <= 0) return;
     this.measured.push(measuredMps);
     this.predicted.push(predictedMps);
-    if (this.measured.length > this.config.window) {
+    if (this.measured.length > this.config.windowSize) {
       this.measured.shift();
       this.predicted.shift();
     }
