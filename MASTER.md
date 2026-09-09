@@ -3,7 +3,7 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.23** · APK 7.42 MB · 1,681 tests · 60,224 lines
+**Build v0.24** · APK 7.43 MB · 1,681 tests · 60,224 lines
 **7.4 % mean drift on simulated logs · 29.1 % on real vehicle sensors**
 
 ---
@@ -683,7 +683,7 @@ are marked ⊘ and explained in §21.
 │  apps/web     │      │ edge-engine  │      │ packages/eval  │
 │  map · HUD    │      │ 200 Hz CLI   │      │ tiers S/R/F    │
 │  Capacitor    │      │ FOG/tactical │      │ ablation       │
-│  APK 7.42 MB  │      │ headless     │      │ 0 ms handover  │
+│  APK 7.43 MB  │      │ headless     │      │ 0 ms handover  │
 └───────────────┘      └──────────────┘      └────────────────┘
 ```
 
@@ -1826,7 +1826,7 @@ Every claim this project makes, and exactly what backs it.
 | 200 Hz on edge | Sim | `pnpm edge:bench` | ~83,000 Hz sustained; IMU rows are datasheet noise models, not hardware |
 | 8.03× compression | Measured | `graphCodec` tests | Real OSM extracts |
 | 3.5 MB per 100 km | Measured | Cell planning | Real Overpass responses |
-| APK 7.42 MB | Measured | Clean Gradle build | |
+| APK 7.43 MB | Measured | Clean Gradle build | |
 | 1,681 tests | Measured | `pnpm test` | |
 | Zero deps in `nav-core` | Enforced | `pnpm lint:core-purity` | |
 
