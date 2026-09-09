@@ -195,7 +195,23 @@ export class MlSpeedCalibrator {
    */
   isTrusted(tMs: number): boolean {
     const raw = this.rawRatioAt(tMs);
-    if (!Number.isFinite(raw)) return true;
+    // ★ NO EVIDENCE IS NOT A PASS ★
+    //
+    // This used to return true when there were not enough pairs yet, on the
+    // reasoning that a silent gate leaves a short session behaving exactly as
+    // it did. The first Tier F ride showed what that costs: the outage began
+    // twenty seconds in, with the vehicle having been stopped until then, so
+    // no pair had ever cleared `minSpeedMps` and the gate had nothing to say.
+    // The model asserted 92 km/h on a scooter and drew 945 m over a 216 m
+    // stretch, unchecked, because the check had not been earned yet.
+    //
+    // The asymmetry is the argument. A model withheld costs the chain its best
+    // inference and falls back to integrating from the last Doppler speed —
+    // measured, bounded, and the arm every published figure is compared
+    // against. A model admitted without evidence costs an outage. So the
+    // default is to wait for the receiver to say something, which on a moving
+    // vehicle takes about ten seconds.
+    if (!Number.isFinite(raw)) return false;
     return raw >= this.config.minTrustRatio && raw <= this.config.maxTrustRatio;
   }
 

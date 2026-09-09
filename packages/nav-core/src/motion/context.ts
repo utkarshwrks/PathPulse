@@ -526,6 +526,28 @@ export class MotionContextDetector {
       if (input.isStationary) {
         return { context: 'STATIONARY', reason: 'imu still — the one release the latch allows' };
       }
+      // ★ AND THE SAME DOOR HAS TO OPEN OUTWARDS ★
+      //
+      // Measured on the first Tier F ride, and it is a bug this latch
+      // introduced. A window that began at a red light latched STATIONARY,
+      // and then held it for sixty seconds while the vehicle drove 216 m —
+      // the estimate advanced 15. A stopped vehicle that pulls away had no way
+      // out, because the only release named was the one that got it in.
+      //
+      // `isStationary` going FALSE is the same class of evidence as it going
+      // true: a raw-sensor decision the IMU makes on its own, already trusted
+      // to arm and disarm ZUPT. Refusing to act on it in one direction while
+      // acting on it in the other is not caution, it is an asymmetry with no
+      // argument behind it.
+      //
+      // It returns to whatever GNSS last established rather than guessing:
+      // this vehicle was a VEHICLE before it stopped, and stopping is not
+      // evidence that it became something else.
+      if (this.latchedContext === 'STATIONARY' && !input.isStationary) {
+        const resumed = this.gnssBacked ?? 'VEHICLE';
+        this.latchedContext = resumed;
+        return { context: resumed, reason: 'imu moving again — stationary latch released' };
+      }
       // ★ AND NO AMOUNT OF CADENCE RELEASES A VEHICLE MID-OUTAGE ★
       //
       // The brief asked for release on sustained detected cadence. It cannot

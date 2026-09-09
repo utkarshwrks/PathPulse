@@ -211,7 +211,10 @@ describe('NavigationEngine + ML speed', () => {
   });
 
   it('reports ML once a ready predictor is supplied', () => {
-    const e = new NavigationEngine();
+    // Gate off: it now withholds the model until GNSS has scored it, which
+    // takes about ten seconds of driving, and this test is about the predictor
+    // being wired up rather than about the gate. See `mlSpeedTrustGate`.
+    const e = new NavigationEngine({ mlSpeedTrustGate: false });
     e.setSpeedPredictor(new MockSpeedPredictor(11), { mean: ZERO_MEAN, std: UNIT_STD });
     run(e, { gnssMs: 5000, outageMs: 8000 });
     expect(e.diagnostics.mlReady).toBe(true);
@@ -257,7 +260,7 @@ describe('NavigationEngine + ML speed', () => {
 
   it('falls back cleanly when the predictor stops being ready', () => {
     const p = new MockSpeedPredictor(11);
-    const e = new NavigationEngine();
+    const e = new NavigationEngine({ mlSpeedTrustGate: false });
     e.setSpeedPredictor(p, { mean: ZERO_MEAN, std: UNIT_STD });
     run(e, { gnssMs: 5000, outageMs: 4000 });
     expect(e.currentSpeedSource).toBe('ML');
@@ -306,7 +309,11 @@ describe('NavigationEngine + ML speed', () => {
     // `minObservations` pairs, and six seconds of 1 Hz fixes is six. So this
     // still exercises the rate limit, which is what it is for. The gate's own
     // behaviour is measured below.
-    const e = new NavigationEngine();
+    // ★ WITH THE CEILING OFF, WHICH IS WHAT THIS ASSERTION IS ABOUT ★
+    // `outageSpeedCeiling` now ships on — Tier F asked for it, see §24.15 —
+    // and it deliberately bounds exactly what this test measures. The rate
+    // limit is a separate mechanism and still has to work on its own.
+    const e = new NavigationEngine({ outageSpeedCeiling: false, mlSpeedTrustGate: false });
     e.setSpeedPredictor(new MockSpeedPredictor(25), { mean: ZERO_MEAN, std: UNIT_STD });
     const out = run(e, { gnssMs: 6000, outageMs: 20_000 });
     expect(out.diagnostics.speedSource).toBe('ML');
@@ -375,7 +382,9 @@ describe('an inferred speed is bounded by the last measured one', () => {
   // OFF by default — see `outageSpeedCeiling` for the measurement that put it
   // there. These lock in the mechanism for the toggle and for the failure the
   // trust gate cannot see: a model that goes wrong only once GNSS is gone.
-  const CEILING = { outageSpeedCeiling: true } as const;
+  // The gate is a separate guard and would withhold the model before these
+  // ever reach the ceiling they are about.
+  const CEILING = { outageSpeedCeiling: true, mlSpeedTrustGate: false } as const;
   const ZERO12 = new Array(12).fill(0);
   const ONE12 = new Array(12).fill(1);
 
@@ -434,7 +443,7 @@ describe('an inferred speed is bounded by the last measured one', () => {
     // ★ WHERE THE MODEL BEHAVES, THE BOUND NEVER BINDS ★ This is what makes
     // the change safe to ship against the published drift figures.
     const bounded = new NavigationEngine(CEILING);
-    const free = new NavigationEngine({ outageSpeedCeiling: false });
+    const free = new NavigationEngine({ outageSpeedCeiling: false, mlSpeedTrustGate: false });
     for (const e of [bounded, free]) {
       e.setSpeedPredictor(new MockSpeedPredictor(RIDE_MPS), { mean: ZERO12, std: ONE12 });
     }
@@ -543,13 +552,31 @@ describe('the speed model is checked against the receiver that can check it', ()
     for (let i = 0; i < a.length; i++) expect(a[i]!).toBeCloseTo(b[i]!, 6);
   });
 
-  it('says nothing at all before it has evidence', () => {
-    // ★ SILENT UNTIL IT HAS SOMETHING TO SAY ★ A handset that has only just
-    // acquired, or one that never gets a Doppler speed, must behave exactly as
-    // it did — the gate is an observation, and with no pairs there is none.
+  it('★ withholds the model until GNSS has actually scored it', () => {
+    // ★ THE CONTRACT TIER F INVERTED ★
+    //
+    // This used to assert the opposite: silent until it has something to say,
+    // so a handset that had only just acquired behaved exactly as it did. The
+    // first Tier F ride showed what that costs. Its outage began twenty
+    // seconds in, with the vehicle stopped until then, so no pair had ever
+    // cleared `minSpeedMps` — and the model asserted 92 km/h on a scooter and
+    // drew 945 m over a 216 m stretch, unchecked, because the check had not
+    // been earned yet.
+    //
+    // The asymmetry is the argument. A model withheld costs the chain its best
+    // inference and falls back to integrating from the last Doppler speed,
+    // which is measured, bounded, and the arm every published figure is
+    // compared against. A model admitted without evidence costs an outage.
     const e = new NavigationEngine();
     e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
     ride(e, 5000, 4000, RIDE_MPS);
+    expect(e.currentSpeedSource).not.toBe('ML');
+  });
+
+  it('and consults it once the receiver has, which takes about ten seconds', () => {
+    const e = new NavigationEngine({ outageSpeedCeiling: false });
+    e.setSpeedPredictor(new MockSpeedPredictor(RIDE_MPS * 1.1), { mean: ZERO12, std: ONE12 });
+    ride(e, 30_000, 4000, RIDE_MPS);
     expect(e.currentSpeedSource).toBe('ML');
   });
 
@@ -564,7 +591,9 @@ describe('the speed model is checked against the receiver that can check it', ()
   });
 
   it('can be switched off, and then the field report reproduces', () => {
-    const e = new NavigationEngine({ mlSpeedTrustGate: false });
+    // Both guards off: the gate is what this test is about, and the ceiling
+    // would otherwise bound the runaway it is trying to reproduce.
+    const e = new NavigationEngine({ mlSpeedTrustGate: false, outageSpeedCeiling: false });
     e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
     const speeds = ride(e, 30_000, 45_000, RIDE_MPS);
     expect(e.currentSpeedSource).toBe('ML');

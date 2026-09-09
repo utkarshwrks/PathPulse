@@ -757,7 +757,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   pedestrianHeadingFromMagnetometer: true,
   calibrateMlSpeed: false,
   mlSpeedTrustGate: true,
-  outageSpeedCeiling: false,
+  outageSpeedCeiling: true,
   maxHeadingGateDeg: 90,
   roadHeadingAidDegPerSec: 2,
   roadHeadingAidMinStableMs: 3_000,
@@ -2269,7 +2269,13 @@ export class NavigationEngine {
     // never consulted is indistinguishable, from outside, from a broken one.
     const mlAllowed = !this.config.mlVehicleOnly || context === 'VEHICLE';
     const mlSpeed = mlAllowed ? mlRaw : undefined;
-    if (!mlAllowed && mlRaw !== undefined && !this.mlSuppressed) {
+    // ★ TWO GUARDS, TWO REASONS, AND THEY MUST NOT MASK EACH OTHER ★
+    // `mlSpeedTrustGate` can also return undefined here, and keying this on
+    // `mlRaw` meant that once it did, the vehicle-only suppression stopped
+    // being reported at all — the model was held back for one reason and the
+    // log said nothing about the other. `lastMlSpeedMps` is what the network
+    // actually produced, regardless of which guard declined to spend it.
+    if (!mlAllowed && Number.isFinite(this.lastMlSpeedMps) && !this.mlSuppressed) {
       this.mlSuppressed = true;
       this.log.push({
         t: sample.t,
@@ -3775,11 +3781,15 @@ export class NavigationEngine {
     const cfg = this.config.roadSnapConfig;
     let best: number | undefined;
     let bestSource: RoadSpeedCeilingSource = 'none';
-    let sawUnknown = false;
-    const consider = (maxspeedKph: number | undefined, highway: string | undefined): void => {
+    let matchedUnknown = false;
+    const consider = (
+      maxspeedKph: number | undefined,
+      highway: string | undefined,
+      isMatched = false,
+    ): void => {
       const c = roadSpeedCeiling(maxspeedKph, highway, this.config.roadSpeedClampTolerance);
       if (c.ceilingMps === undefined) {
-        sawUnknown = true;
+        if (isMatched) matchedUnknown = true;
         return;
       }
       if (best === undefined || c.ceilingMps > best) {
@@ -3787,7 +3797,7 @@ export class NavigationEngine {
         bestSource = c.source;
       }
     };
-    consider(match.maxspeedKph, match.highway);
+    consider(match.maxspeedKph, match.highway, true);
     if (this.roadIndex) {
       const heading = this.dr.current.headingDeg;
       for (const seg of this.roadIndex.nearbySegments(
@@ -3806,14 +3816,26 @@ export class NavigationEngine {
         consider(way.maxspeed, way.highway);
       }
     }
-    // ★ A CLASS WE DO NOT KNOW IS A REASON NOT TO CLAMP AT ALL ★
+    // ★ ONLY THE MATCHED WAY MAY VETO. A NEIGHBOUR MAY NOT ★
     //
-    // If any plausible neighbour is a way we have no opinion about — an
-    // unenumerated `highway` value, or a service road, which this table
-    // deliberately declines — then the maximum over the others bounds nothing,
-    // because the vehicle may be on that one. Returning the maximum anyway
-    // would be asserting a limit the map does not support.
-    if (sawUnknown) return { ceilingMps: undefined, source: 'none' };
+    // This used to decline whenever ANY plausible neighbour was a class the
+    // table has no opinion about — the reasoning being that the vehicle might
+    // be on that one, so a maximum over the rest bounds nothing.
+    //
+    // Correct in principle, useless in practice, and the first Tier F ride
+    // showed it: the Jabalpur extract carries 987 service ways among 9,462,
+    // service is deliberately absent from the table, and in a city there is
+    // almost always one within the trust radius. So the veto fired
+    // continuously and the clamp never engaged ONCE across the whole ride —
+    // `ceil` read `—` while the estimate ran from 18 km/h to 68 and drew 946 m
+    // over a 304 m stretch. A safeguard that never fires is not a safeguard.
+    //
+    // The matched way keeps its veto, because that is the road we actually
+    // believe we are on and having no opinion about it is a real reason to
+    // stay quiet. A neighbour is a possibility, not a belief, and the maximum
+    // already answers it: the ceiling asserted is the loosest any candidate
+    // supports, which is the weakest claim available rather than no claim.
+    if (matchedUnknown) return { ceilingMps: undefined, source: 'none' };
     return { ceilingMps: best, source: bestSource };
   }
 
