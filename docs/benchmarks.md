@@ -24,11 +24,11 @@ the outage window. Road graphs used: city, highway.
 | nhc | **33.5** | 34.7 | 52.7 | 57.5 | 170.4 | 146.5 | 71.4 | 317.6 |
 | speedclamp | **30.2** | 34.7 | 52.7 | 57.5 | 152.6 | 128.4 | 70.0 | 265.3 |
 | highpass | **14.6** | 16.6 | 25.9 | 27.5 | 92.0 | 71.7 | 49.7 | 150.1 |
-| full | **6.1** | 4.6 | 15.1 | 17.8 | 61.7 | 57.7 | 18.2 | 106.0 |
-| full_forwardbias | **12.8** | 11.3 | 19.1 | 24.1 | 77.8 | 68.3 | 31.1 | 144.5 |
-| eskf | **8.4** | 8.1 | 15.7 | 19.3 | 77.4 | 63.2 | 37.7 | 131.7 |
-| hmm | **7.4** | 6.2 | 18.3 | 18.8 | 65.5 | 59.5 | 22.5 | 118.4 |
-| particle | **12.1** | 10.3 | 23.0 | 25.2 | 91.9 | 87.2 | 21.8 | 181.7 |
+| full | **7.4** | 6.2 | 18.3 | 18.8 | 65.5 | 59.5 | 22.5 | 118.4 |
+| full_forwardbias | **7.6** | 5.4 | 16.2 | 20.0 | 60.8 | 58.1 | 14.5 | 104.5 |
+| eskf | **9.7** | 8.1 | 20.7 | 25.1 | 74.8 | 59.5 | 41.5 | 129.4 |
+| greedy | **6.1** | 4.6 | 15.1 | 17.8 | 61.7 | 57.7 | 18.2 | 106.0 |
+| particle | **11.0** | 9.0 | 22.6 | 24.7 | 88.3 | 84.0 | 20.7 | 173.5 |
 
 ![drift by configuration](./ablation.svg)
 
@@ -43,11 +43,11 @@ the outage window. Road graphs used: city, highway.
 | nhc | 14.75 | 50.0 | 18 | 0.0 | 0 |
 | speedclamp | 14.50 | 50.0 | 18 | 0.0 | 0 |
 | highpass | 8.68 | 50.0 | 18 | 0.0 | 0 |
-| full | 4.68 | 50.0 | 18 | 99.9 | 0 |
-| full_forwardbias | 7.97 | 50.0 | 18 | 100.0 | 0 |
-| eskf | 6.85 | 50.0 | 18 | 99.0 | 0 |
-| hmm | 4.96 | 50.0 | 18 | 99.9 | 0 |
-| particle | 5.35 | 50.0 | 18 | 99.9 | 0 |
+| full | 4.96 | 50.0 | 18 | 99.9 | 0 |
+| full_forwardbias | 5.01 | 50.0 | 18 | 100.0 | 0 |
+| eskf | 6.55 | 50.0 | 18 | 99.3 | 0 |
+| greedy | 4.68 | 50.0 | 18 | 99.9 | 0 |
+| particle | 4.41 | 50.0 | 18 | 100.0 | 0 |
 
 ## What each row is
 
@@ -61,7 +61,7 @@ the outage window. Road graphs used: city, highway.
 - **full** — Everything that earns its place, including road snapping. This is what ships.
 - **full_forwardbias** — NEGATIVE RESULT, kept deliberately. Full plus the GNSS-Doppler forward-bias estimator, which measurably WORSENS drift now that the high-pass exists. Reported rather than deleted.
 - **eskf** — Phase 11. The shipped configuration, with position taken from the 15-state error-state Kalman filter while dead reckoning instead of from open-loop integration. Everything else identical to `full`.
-- **hmm** — Phase 14. The shipped configuration, with the matched road chosen by a Newson-Krumm HMM over a sliding window instead of nearest-road-plus-continuity. Everything else identical to `full`.
+- **greedy** — The shipped configuration with map matching back to nearest-road-plus-continuity instead of the Newson-Krumm HMM. Kept as the comparison now that `hmmMatch` ships on — `full` and `hmm` would otherwise be the same run, and a row that compares a configuration with itself measures nothing.
 - **particle** — Phase 17. The shipped configuration plus the map-aided particle filter and turn relocalisation. Five hundred hypotheses over the road graph instead of one, so a junction taken during an outage does not have to be guessed at the moment it is reached.
 
 ## Reading this table
