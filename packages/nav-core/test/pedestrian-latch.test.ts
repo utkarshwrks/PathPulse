@@ -254,3 +254,96 @@ describe('leaving VEHICLE costs sustained evidence', () => {
     expect(d.vehicleEstablished).toBe(true);
   });
 });
+
+/**
+ * ★ THE ONE SIGNAL A ROUGH ROAD CANNOT FAKE ★
+ *
+ * Second Tier F ride, outage 2. With GNSS healthy and the vehicle crawling at
+ * 4.5 km/h the classifier called PEDESTRIAN — and every rule that fired was
+ * behaving correctly. Variance was high, because the road was broken. A
+ * cadence was reported, because potholes land inside the step detector's
+ * 0.6-3.5 Hz band. The speed was inside the walking band, because traffic.
+ *
+ * `vehicleMemoryMs` was supposed to catch it and could not: the rider had been
+ * in traffic long enough that no vehicle-speed reading was recent. Time cannot
+ * separate these cases — a scooter can crawl for as long as it likes.
+ *
+ * The mount can. A handset clamped to handlebars holds its orientation
+ * relative to gravity to a degree or two over the worst surface; a handset
+ * being carried swings through tens, because walking rocks the body and turns
+ * the wrist. That is not a statistical gap, it is an order of magnitude.
+ */
+describe('a handset that has not moved in its mount is not on legs', () => {
+  const DT = 100;
+
+  function feed(
+    d: MotionContextDetector,
+    from: number,
+    ms: number,
+    input: {
+      accelVariance: number;
+      cadenceHz: number;
+      gnssSpeedMps?: number;
+      mountMotionDeg?: number;
+    },
+  ) {
+    let t = from;
+    for (; t < from + ms; t += DT) {
+      d.push({
+        t,
+        accelVariance: input.accelVariance,
+        isStationary: false,
+        cadenceHz: input.cadenceHz,
+        ...(input.mountMotionDeg !== undefined ? { mountMotionDeg: input.mountMotionDeg } : {}),
+        ...(input.gnssSpeedMps !== undefined
+          ? { gnssSpeedMps: input.gnssSpeedMps, gnssSpeedT: t }
+          : {}),
+      });
+    }
+    return t;
+  }
+
+  /** The field signal exactly: loud, rhythmic, slow — and clamped to the bars. */
+  const CRAWLING = { accelVariance: 2.0, cadenceHz: 1.9, gnssSpeedMps: 1.25 };
+
+  it('★ a crawling scooter is not a pedestrian, however long it crawls', () => {
+    // Five minutes — far past vehicleMemoryMs, which is what could not save it.
+    const d = new MotionContextDetector();
+    feed(d, 0, 300_000, { ...CRAWLING, mountMotionDeg: 1.5 });
+    expect(d.current).not.toBe('PEDESTRIAN');
+  });
+
+  it('and the same signal from a carried handset still reads as walking', () => {
+    // The veto must not simply disable pedestrian detection. A phone in a hand
+    // swings, and that is what tells the two apart.
+    const d = new MotionContextDetector();
+    feed(d, 0, 300_000, { ...CRAWLING, mountMotionDeg: 25 });
+    expect(d.current).toBe('PEDESTRIAN');
+  });
+
+  it('says nothing when the attitude has not settled', () => {
+    // Before the estimator knows which way is down there is no mount signal,
+    // and the other rules stand alone rather than being overruled by silence.
+    const d = new MotionContextDetector();
+    feed(d, 0, 300_000, CRAWLING);
+    expect(d.current).toBe('PEDESTRIAN');
+  });
+
+  it('the threshold is an order of magnitude from either case', () => {
+    // A clamped phone measures 1-2 degrees, a carried one tens. Anything in
+    // between is not a case that occurs, which is why this can be a constant.
+    const mounted = new MotionContextDetector();
+    feed(mounted, 0, 300_000, { ...CRAWLING, mountMotionDeg: 5.9 });
+    expect(mounted.current).not.toBe('PEDESTRIAN');
+
+    const carried = new MotionContextDetector();
+    feed(carried, 0, 300_000, { ...CRAWLING, mountMotionDeg: 6.1 });
+    expect(carried.current).toBe('PEDESTRIAN');
+  });
+
+  it('can be switched off, and then the field failure reproduces', () => {
+    const d = new MotionContextDetector({ mountStillDeg: 0 });
+    feed(d, 0, 300_000, { ...CRAWLING, mountMotionDeg: 1.5 });
+    expect(d.current).toBe('PEDESTRIAN');
+  });
+});

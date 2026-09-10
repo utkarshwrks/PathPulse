@@ -684,3 +684,106 @@ describe('the speed model is fed a band-limited signal', () => {
     if (w) for (const v of w) expect(Number.isFinite(v)).toBe(true);
   });
 });
+
+/**
+ * ★ THE FLOOR IS THE HALF THAT WAS MISSING, AND IT COST MORE ★
+ *
+ * `outageSpeedCeiling` stops an inferred speed running away. Nothing stopped
+ * it COLLAPSING, and unaided integration collapses as readily as it runs.
+ *
+ * Second Tier F ride, a 171 s outage entered at 39.5 km/h on a main road:
+ *
+ *   0.0 → 22.7 → 56.2 → 40.3 → 0.0 → 24.3 → 52.3 → 0.0 → 21.4 → 46.1
+ *
+ * ZUPT fired once in the whole ride and not once inside that outage, so none
+ * of those zeroes is a detected stop. They are a high-passed accelerometer
+ * being integrated with nothing to hold it — and the path they draw is roughly
+ * the right LENGTH, pointed wrongly, which is both of the field's complaints
+ * at once: "it just held in one place" on the short outages, and "it just go
+ * to any of the street side" on the long one.
+ */
+describe('an inferred speed is bounded below as well as above', () => {
+  const ZERO12 = new Array(12).fill(0);
+  const ONE12 = new Array(12).fill(1);
+  const CRUISE = 11; // 39.5 km/h, the speed that outage was entered at
+
+  /** Drive on Doppler, then lose GNSS with an IMU carrying no real motion. */
+  function coast(config: Partial<ConstructorParameters<typeof NavigationEngine>[0]> = {}) {
+    const e = new NavigationEngine({ mlSpeedTrustGate: false, ...config });
+    e.setSpeedPredictor(new MockSpeedPredictor(Number.NaN), { mean: ZERO12, std: ONE12 });
+    let t = 0;
+    for (; t < 30_000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 4, speedMps: CRUISE };
+      }
+      e.update(s);
+    }
+    const speeds: number[] = [];
+    for (; t < 70_000; t += 20) speeds.push(e.update(sample(t)).velocityMps);
+    return speeds;
+  }
+
+  it('★ does not collapse to a standstill nothing measured', () => {
+    const speeds = coast();
+    // 11 * (1 - 0.35) - 2.5 = 4.65 m/s once the ramp is open.
+    const late = speeds.slice(Math.floor(speeds.length / 2));
+    expect(Math.min(...late)).toBeGreaterThan(3);
+  });
+
+  it('and still does not run away', () => {
+    const speeds = coast();
+    expect(Math.max(...speeds)).toBeLessThanOrEqual(11 * 1.35 + 2.5 + 1e-6);
+  });
+
+  it('switched off, the collapse is free', () => {
+    const speeds = coast({ outageSpeedCeiling: false });
+    const late = speeds.slice(Math.floor(speeds.length / 2));
+    // Without the floor there is nothing holding the estimate up at all.
+    expect(Math.min(...late)).toBeLessThan(Math.min(...coast().slice(-1)) + 1e-6 || 4.65);
+  });
+
+  it('★ a detected stop still stops it dead', () => {
+    // ZUPT returns long before the floor, and the floor must never resurrect a
+    // vehicle the IMU has seen stop. This is the §24.2 guarantee.
+    const e = new NavigationEngine({ mlSpeedTrustGate: false });
+    let t = 0;
+    for (; t < 30_000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 4, speedMps: CRUISE };
+      }
+      e.update(s);
+    }
+    let v = 0;
+    for (; t < 90_000; t += 20) {
+      v = e.update({ t, imu: { ax: 0, ay: 0, az: 9.80665, gx: 0, gy: 0, gz: 0 } }).velocityMps;
+    }
+    expect(v).toBeLessThan(0.5);
+  });
+
+  it('★ and it fades, because an unaided estimate expires', () => {
+    // "An unaided estimate must not be asserted forever" is the oldest rule in
+    // DeadReckoningEngine and it is measured: holding 25.8 km/h for 197 s
+    // manufactured 4 km of travel. A floor that never faded would bring that
+    // back, so it decays on the same time constant the coasting decay uses.
+    const e = new NavigationEngine({ mlSpeedTrustGate: false });
+    let t = 0;
+    for (; t < 30_000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 4, speedMps: CRUISE };
+      }
+      e.update(s);
+    }
+    let v = 0;
+    for (; t < 30_000 + 240_000; t += 20) v = e.update(sample(t)).velocityMps;
+    expect(v).toBeLessThan(2);
+  });
+
+  // The floor may never raise a speed past what is plausible now — the anchor
+  // is a stale measurement and `maxSpeedMps` is a statement about the present.
+  // Covered end-to-end by apps/web's "walking mode clamps speed to a walking
+  // pace", which exercises the real path: a vehicle drive, then the mode
+  // switched under it.
+});

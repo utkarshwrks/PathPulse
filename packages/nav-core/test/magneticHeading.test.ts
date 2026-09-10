@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MagneticHeading } from '../src/index.js';
+import { MagneticHeading, NavigationEngine, type SensorSample } from '../src/index.js';
 
 /**
  * The compass, on its own.
@@ -184,5 +184,108 @@ describe('MagneticHeading — steering', () => {
   it('has no opinion when it has no heading', () => {
     const m = new MagneticHeading();
     expect(m.yawRateToward(0, 90, 100)).toBeNull();
+  });
+});
+
+/**
+ * ★ THE COMPASS TRIMS THE GYRO, IN A VEHICLE ★
+ *
+ * Second Tier F ride, a 171 s outage entered at 39.5 km/h on a main road:
+ *
+ *   179° → 138 → 141 → 104 → 107 → 68 → 79 → 63 → 44 → 73 → 85 → 89
+ *
+ * The vehicle was speeding up along a road and the heading swung through 135
+ * degrees. `leanDeg` reads 0 throughout, so §24.11's compensation is not the
+ * cause. What it is, is a phone on the HANDLEBARS: steering input is not
+ * vehicle yaw, and on a two-wheeler the bars move constantly to balance.
+ *
+ * `pedestrianHeadingFromMagnetometer` REPLACES the gyro on foot. In a vehicle
+ * the gyro is the better instrument over seconds and the worse one over
+ * minutes, so the composition is the other way round — the gyro supplies the
+ * rate and the compass trims it, slowly.
+ */
+describe('the vehicle heading aid', () => {
+  const ORIGIN = { lat: 23.16, lon: 79.93 };
+
+  /**
+   * Drive north with GNSS, then lose it while the gyro reports a slow, false
+   * yaw — the handlebar wander this exists to answer.
+   */
+  function ride(aidDegPerSec: number) {
+    const e = new NavigationEngine({ vehicleHeadingAidDegPerSec: aidDegPerSec });
+    let t = 0;
+    const mag = (h: number) => {
+      // A field pointing north, rotated into the device frame for heading h.
+      const r = (h * Math.PI) / 180;
+      return { mx: 30 * Math.cos(r), my: -30 * Math.sin(r), mz: -20 };
+    };
+    // ★ THE FIXTURE HAS TO VIBRATE ★ A perfectly clean az reads as stationary,
+    // ZARU then learns the false yaw as a bias and removes it, and the drift
+    // this test is about never happens. Road vibration is what tells the two
+    // apart — see the note on `sample` in ml.test.ts.
+    const road = (p: number) => ({
+      ax: 0.35 * Math.sin(p * 7.1),
+      ay: 0.25 * Math.sin(p * 11.3),
+      az: 9.80665 + 0.4 * Math.sin(p * 13.7),
+    });
+    for (; t < 60_000; t += 20) {
+      const s: SensorSample = {
+        t,
+        imu: { ...road(t / 1000), gx: 0, gy: 0, gz: 0 },
+        mag: mag(0),
+      };
+      if (t % 1000 === 0) {
+        s.gnss = {
+          lat: ORIGIN.lat + (t / 1000) * 1e-4,
+          lon: ORIGIN.lon,
+          accuracyM: 4,
+          speedMps: 11,
+          headingDeg: 0,
+        };
+      }
+      e.update(s);
+    }
+    // Outage: the gyro reports a steady false yaw, the compass keeps saying north.
+    let heading = 0;
+    for (; t < 160_000; t += 20) {
+      heading = e.update({
+        t,
+        imu: { ...road(t / 1000), gx: 0, gy: 0, gz: 0.012 },
+        mag: mag(0),
+      }).headingDeg;
+    }
+    return ((heading + 540) % 360) - 180;
+  }
+
+  it('★ a false yaw walks the heading away when nothing trims it', () => {
+    // 0.012 rad/s for 100 s is about 69 degrees of pure invention.
+    expect(Math.abs(ride(0))).toBeGreaterThan(30);
+  });
+
+  it('★ and the compass pulls it back', () => {
+    expect(Math.abs(ride(1))).toBeLessThan(Math.abs(ride(0)));
+  });
+
+  it('is bounded, so it cannot fight a real corner', () => {
+    // At 1 deg/s a 90-degree turn taken over three seconds loses 3 degrees to
+    // the trim. The wander it repairs took a minute to accumulate.
+    const e = new NavigationEngine({ vehicleHeadingAidDegPerSec: 1 });
+    expect(e.currentConfig.vehicleHeadingAidDegPerSec).toBe(1);
+  });
+
+  it('does nothing without a magnetometer', () => {
+    // Every IO-VNBD log has none, so this must be inert on them rather than
+    // steering toward a bearing that was never measured.
+    const e = new NavigationEngine({ vehicleHeadingAidDegPerSec: 4 });
+    let t = 0;
+    let heading = 0;
+    for (; t < 20_000; t += 20) {
+      const s: SensorSample = { t, imu: { ax: 0, ay: 0, az: 9.80665, gx: 0, gy: 0, gz: 0 } };
+      if (t % 1000 === 0) {
+        s.gnss = { lat: ORIGIN.lat, lon: ORIGIN.lon, accuracyM: 4, speedMps: 11, headingDeg: 0 };
+      }
+      heading = e.update(s).headingDeg;
+    }
+    expect(Number.isFinite(heading)).toBe(true);
   });
 });

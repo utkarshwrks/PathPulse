@@ -560,6 +560,9 @@ export class DeadReckoningEngine {
     // for it: a measurement does not need permission from an older one.
     const measuredThisSample =
       gnssSpeedMps !== undefined && Number.isFinite(gnssSpeedMps) && gnssWeight > 0;
+    // A model or the step detector asserting a speed is a positive claim about
+    // NOW; integration falling to zero is not. See the floor's use below.
+    let inferredThisSample = false;
 
     if (measuredThisSample) {
       // 1. GNSS Doppler speed. Independent of position error and far more
@@ -577,6 +580,7 @@ export class DeadReckoningEngine {
         this.state.measuredSpeedAgeMs = 0;
       } else this.state.unaidedMs += dtMs;
     } else if (opts.stepSpeedMps !== undefined && Number.isFinite(opts.stepSpeedMps)) {
+      inferredThisSample = true;
       // 2a. ★ THE PEDESTRIAN STEP MODEL. ★
       //     Cadence times stride. Anchors the velocity vector exactly as a
       //     Doppler fix does and, like the ML model below, does not reset
@@ -585,6 +589,7 @@ export class DeadReckoningEngine {
       vN = opts.stepSpeedMps * fN;
       this.state.unaidedMs += dtMs;
     } else if (opts.mlSpeedMps !== undefined && Number.isFinite(opts.mlSpeedMps)) {
+      inferredThisSample = true;
       // 2. ★ THE ML SPEED MODEL (Phase 8). ★
       //    An IO-VNBD-trained CNN reading two seconds of IMU. It ranks below
       //    GNSS Doppler, which is measured rather than inferred, and above
@@ -682,11 +687,73 @@ export class DeadReckoningEngine {
       speed = Math.min(speed, Math.max(opts.roadSpeedCeilingMps, floor));
     }
 
-    // ★ AND BOUND IT BY WHAT WAS LAST MEASURED ★ See `outageSpeedCeiling`.
-    // Skipped on a sample carrying a live Doppler speed: a measurement does
-    // not need permission from an older measurement.
+    // ★ AND BOUND IT BY WHAT WAS LAST MEASURED, IN BOTH DIRECTIONS ★
+    //
+    // See `outageSpeedCeiling`. Skipped on a sample carrying a live Doppler
+    // speed: a measurement does not need permission from an older one.
+    //
+    // ★ THE FLOOR IS THE HALF THAT WAS MISSING, AND IT COST MORE ★
+    //
+    // The ceiling stops an inferred speed running away. Nothing stopped it
+    // COLLAPSING, and unaided integration collapses as readily as it runs:
+    // measured on the second Tier F ride, through a 171 s outage entered at
+    // 39.5 km/h, the integrated speed went
+    //
+    //   0.0 → 22.7 → 56.2 → 40.3 → 0.0 → 24.3 → 52.3 → 0.0 → 21.4 → 46.1
+    //
+    // — a random walk between a standstill and 56 km/h, on a vehicle holding
+    // roughly 40. ZUPT fired once in the entire ride and not once inside that
+    // outage, so none of those zeroes is a detected stop. They are a
+    // high-passed accelerometer being integrated with nothing to hold it.
+    //
+    // What that costs is both of the field's complaints at once. The estimate
+    // draws a path of roughly the right LENGTH — 1500 m against 1664 — while
+    // the zeroes and the surges point it wrongly for stretches at a time, so
+    // the net displacement falls 1140 m short and lands 858 m to the side.
+    // "when I speed up it just go to any of the street side", and, on a
+    // shorter outage that collapsed and stayed collapsed, "it just held in one
+    // place. It doesn't move from there" — 6 m drawn while the vehicle covered
+    // 114.
+    //
+    // A vehicle the receiver measured at 39.5 km/h is not at 0 km/h fifteen
+    // seconds later unless it braked, and braking is not silent. So the same
+    // envelope that bounds the estimate above bounds it below.
+    //
+    // ★ EXCEPT WHEN THE VEHICLE REALLY HAS STOPPED ★ ZUPT returns long before
+    // this line, so a detected stop is untouched. The floor only refuses a
+    // zero that nothing measured.
+    const speedCeilingWas = speed;
     if (this.config.outageSpeedCeiling && !measuredThisSample) {
       speed = Math.min(speed, this.inferredSpeedCeiling());
+      // ★ AND THE FLOOR HAS TWO THINGS IT MUST NOT OVERRULE ★
+      //
+      // A stop that something actually detected. ZUPT returns long before this
+      // line, but the step model can also assert zero — §24.1's answer to a
+      // walker who has stopped — and that is a positive claim about the speed
+      // NOW, not an absence of one. The floor exists to refuse a zero that
+      // arrived from integrating noise, and `inferredThisSample` is exactly
+      // the test for which kind of zero this is.
+      //
+      // And the coasting decay. "An unaided estimate must not be asserted
+      // forever" is the oldest rule in this file and it is measured: holding
+      // 25.8 km/h for 197 seconds manufactured 4 km of travel. A floor that
+      // did not itself fade would reintroduce that, so it fades on the same
+      // time constant — full while the measurement is fresh, gone by the time
+      // integration has stopped meaning anything.
+      //
+      // ★ AND IT MAY NEVER RAISE A SPEED PAST WHAT IS PLAUSIBLE ★ The floor is
+      // anchored on a MEASURED speed, and a measurement can be stale in a way
+      // the ceiling above is not: switch to walking mode after a drive and the
+      // anchor is still 13.7 m/s while `maxSpeedMps` has dropped to 3. The
+      // plausibility ceiling and the road's limit are statements about what is
+      // possible NOW, and nothing here outranks them.
+      if (!opts.isStationary && !inferredThisSample) {
+        const ceiling = Math.min(
+          speedCeilingWas,
+          this.config.speedClamp ? this.config.speedClampConfig.maxSpeedMps : this.config.maxSpeedMps,
+        );
+        speed = Math.max(speed, Math.min(this.inferredSpeedFloor(), ceiling));
+      }
     }
 
     // Rescale the vector to match the clamped speed so the two never disagree.
@@ -752,6 +819,34 @@ export class DeadReckoningEngine {
       ramp * (anchor * (this.config.outageSpeedRatio - 1) + this.config.outageSpeedGainMps);
     const ceiling = anchor + headroom;
     return Number.isFinite(ceiling) ? ceiling : this.config.maxSpeedMps;
+  }
+
+  /**
+   * The least an INFERRED speed may claim right now, m/s.
+   *
+   * The mirror of `inferredSpeedCeiling`, and it has to be a mirror: the
+   * argument for the ceiling is that an estimate with no measurement behind it
+   * must stay in the neighbourhood of the last one, and a neighbourhood has
+   * two sides. See the note at its use for what the missing side cost.
+   */
+  inferredSpeedFloor(): number {
+    const anchor = Number.isFinite(this.state.measuredSpeedMps)
+      ? Math.max(0, this.state.measuredSpeedMps)
+      : 0;
+    // See the note at the use: the floor fades on the same schedule the
+    // coasting decay does, because it makes the same claim and that claim
+    // expires.
+    const cfg = this.config.speedClampConfig;
+    const staleMs = Math.max(0, this.state.measuredSpeedAgeMs - cfg.integrationTrustMs);
+    const fade = staleMs > 0 ? Math.exp(-staleMs / cfg.decayTimeConstantMs) : 1;
+    const ramp = Math.max(
+      0,
+      Math.min(1, this.state.measuredSpeedAgeMs / Math.max(1, this.config.outageSpeedRampMs)),
+    );
+    const headroom =
+      ramp * (anchor * (this.config.outageSpeedRatio - 1) + this.config.outageSpeedGainMps);
+    const floor = (anchor - headroom) * fade;
+    return Number.isFinite(floor) ? Math.max(0, floor) : 0;
   }
 
   /** Force velocity to zero — used by ZUPT when the vehicle stops. */

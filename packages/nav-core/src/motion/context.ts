@@ -142,6 +142,18 @@ export interface MotionContextConfig {
    * pedestrian at all, which is the failure that froze an outage.
    */
   vehicleMemoryMs: number;
+  /**
+   * Below this much recent movement of the device's own vertical, the handset
+   * is in a mount and cannot be on somebody's legs, degrees.
+   *
+   * ★ THE ONE SIGNAL A ROUGH ROAD CANNOT FAKE ★ See `mountMotionDeg`.
+   *
+   * 6 degrees is generous: a rigid mount on a scooter over broken surface
+   * measures one to two, and walking measures tens. The gap is an order of
+   * magnitude, which is why this can be a threshold rather than a learned
+   * distribution.
+   */
+  mountStillDeg: number;
 }
 
 export const DEFAULT_MOTION_CONTEXT_CONFIG: MotionContextConfig = {
@@ -154,6 +166,7 @@ export const DEFAULT_MOTION_CONTEXT_CONFIG: MotionContextConfig = {
   holdSamples: 30,
   vehicleToPedestrianConfirmMs: 5000,
   vehicleMemoryMs: 60_000,
+  mountStillDeg: 6,
 };
 
 export interface MotionContextInput {
@@ -173,6 +186,35 @@ export interface MotionContextInput {
    * indistinguishable variance and completely different footfall.
    */
   cadenceHz?: number;
+  /**
+   * How much the device's own "down" has moved recently, degrees.
+   *
+   * ★ A MOUNTED PHONE IS NOT BEING CARRIED, AND THAT IS MEASURABLE ★
+   *
+   * Every other signal here — variance, cadence, speed — is something a
+   * scooter on a bad road can fake. This one it cannot. A handset clamped to
+   * handlebars or a dashboard holds a fixed orientation relative to gravity:
+   * its measured `up` sits still, to a degree or two, for the whole ride. A
+   * handset being carried does not, because walking swings the arm, rocks the
+   * body and turns the wrist, and every one of those moves `up` by tens of
+   * degrees.
+   *
+   * Second Tier F ride, outage 2: with GNSS healthy and the vehicle crawling
+   * at 4.5 km/h, the classifier called PEDESTRIAN — variance high on a rough
+   * road, a cadence reported from potholes, and a speed inside the walking
+   * band. Every rule fired correctly and the answer was still absurd, and the
+   * latch then held it for 180 s while the vehicle covered 609 m. The estimate
+   * drew 346. "it just held in one place. It doesn't move from there."
+   *
+   * `vehicleMemoryMs` was supposed to stop that, and could not: the rider had
+   * been in traffic long enough that no vehicle-speed reading was recent. Time
+   * cannot separate these cases either — a scooter can crawl for as long as it
+   * likes. The mount can.
+   *
+   * Undefined when the attitude estimate has not settled, in which case this
+   * says nothing and the other rules stand alone.
+   */
+  mountMotionDeg?: number;
   /** Most recent trusted GNSS speed, m/s, or undefined if there is none. */
   gnssSpeedMps?: number;
   /** When that speed was measured, ms. */
@@ -351,7 +393,14 @@ export class MotionContextDetector {
   private classify(input: MotionContextInput): { context: MotionContext; reason: string } {
     const v = this.medianVariance();
     const hasV = Number.isFinite(v);
-    const onFoot = hasV && v > this.config.pedestrianVarianceThreshold;
+    // ★ A HANDSET THAT HAS NOT MOVED IN ITS MOUNT IS NOT ON LEGS ★
+    // See `mountMotionDeg`. Applied as a veto on the walking evidence rather
+    // than as a verdict of its own: it can say what the carrier is NOT.
+    const mounted =
+      input.mountMotionDeg !== undefined &&
+      Number.isFinite(input.mountMotionDeg) &&
+      input.mountMotionDeg < this.config.mountStillDeg;
+    const onFoot = hasV && v > this.config.pedestrianVarianceThreshold && !mounted;
     const cadence = input.cadenceHz ?? 0;
     const walking = Number.isFinite(cadence) && cadence > 0;
 

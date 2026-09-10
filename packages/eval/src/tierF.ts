@@ -125,6 +125,19 @@ const configName = process.argv.includes('--config')
   ? String(process.argv[process.argv.indexOf('--config') + 1])
   : 'full';
 const cfg = loadConfig(configName);
+// ★ `--set key=value` — THE ARBITER HAS TO BE CHEAP TO QUESTION ★
+// Every Phase 2 decision was made by running this against one config and then
+// another. Editing a default between runs is how two of them got measured
+// against code that had moved underneath them.
+const overrides: Record<string, unknown> = {};
+for (let i = 0; i < process.argv.length; i++) {
+  if (process.argv[i] !== '--set') continue;
+  const [k, v] = String(process.argv[i + 1] ?? '').split('=');
+  if (!k) continue;
+  overrides[k] = v === 'true' ? true : v === 'false' ? false : Number(v);
+}
+const engineConfig = { ...(cfg.engine as Record<string, unknown>), ...overrides };
+if (Object.keys(overrides).length) console.log('  overrides:', overrides);
 
 const logs = listLogs('F');
 if (logs.length === 0) {
@@ -142,7 +155,15 @@ const allDrift: number[] = [];
 const perLog: Array<{
   name: string;
   s: ReturnType<typeof stats>;
-  gaps: Array<{ seconds: number; truthSpanM: number; recoveryM: number; percent: number }>;
+  gaps: Array<{
+    seconds: number;
+    truthSpanM: number;
+    recoveryM: number;
+    alongM: number;
+    crossM: number;
+    estPathM: number;
+    percent: number;
+  }>;
   minutes: number;
   fixes: number;
 }> = [];
@@ -173,7 +194,7 @@ for (const logName of logs) {
     const res = runEval(samples, {
       configName,
       logName,
-      engineConfig: cfg.engine as never,
+      engineConfig: engineConfig as never,
       outageStartMs: w,
       outageDurationMs: DURATION_MS,
       roadGraph: graph,
@@ -205,7 +226,7 @@ for (const logName of logs) {
     const res = runEval(samples, {
       configName,
       logName,
-      engineConfig: cfg.engine as never,
+      engineConfig: engineConfig as never,
       // Nothing withheld: the log already has the hole in it.
       outageStartMs: g.endMs + 1,
       outageDurationMs: 1,
@@ -219,10 +240,47 @@ for (const logName of logs) {
     );
     const truth = samples.find((s) => s.t >= g.endMs && s.gnss)?.gnss;
     const recoveryM = truth ? metresBetween(at.position, truth) : Number.NaN;
+
+    // ★ ALONG-TRACK OR CROSS-TRACK? THE TWO HAVE DIFFERENT CAUSES ★
+    //
+    // A recovery error is not one number. Decomposed against the direction the
+    // vehicle actually travelled across the outage, the along component is a
+    // SPEED error — the estimate went too far or not far enough — and the
+    // cross component is a HEADING error, which means it went somewhere else
+    // entirely. They are fixed by different things, and a single metre figure
+    // hides which one is being paid.
+    const startFix = samples.find((s) => s.t >= g.startMs && s.gnss)?.gnss;
+    let alongM = Number.NaN;
+    let crossM = Number.NaN;
+    let estPathM = Number.NaN;
+    if (truth && startFix) {
+      const mPerLon = 111_320 * Math.cos((startFix.lat * Math.PI) / 180);
+      const tE = (truth.lon - startFix.lon) * mPerLon;
+      const tN = (truth.lat - startFix.lat) * METRES_PER_DEG_LAT;
+      const len = Math.hypot(tE, tN);
+      if (len > 1) {
+        const uE = tE / len;
+        const uN = tN / len;
+        const eE = (at.position.lon - startFix.lon) * mPerLon - tE;
+        const eN = (at.position.lat - startFix.lat) * METRES_PER_DEG_LAT - tN;
+        alongM = eE * uE + eN * uN;
+        crossM = eE * uN - eN * uE;
+      }
+      // How far the estimate actually drew, so a freeze is visible as a small
+      // path rather than only as a large error.
+      const path = res.states.filter((x) => x.t >= g.startMs && x.t <= g.endMs);
+      estPathM = 0;
+      for (let i = 1; i < path.length; i++) {
+        estPathM += metresBetween(path[i - 1]!.position, path[i]!.position);
+      }
+    }
     return {
       seconds: (g.endMs - g.startMs) / 1000,
       truthSpanM: g.truthSpanM,
       recoveryM,
+      alongM,
+      crossM,
+      estPathM,
       percent: g.truthSpanM > 1 ? (recoveryM / g.truthSpanM) * 100 : Number.NaN,
     };
   });
@@ -261,7 +319,9 @@ if (anyGaps) {
         `    ${r.name.padEnd(28)} ${g.seconds.toFixed(0).padStart(4)}s  ` +
           `moved ${g.truthSpanM.toFixed(0).padStart(5)} m  ` +
           `recovery ${g.recoveryM.toFixed(1).padStart(7)} m  ` +
-          `${Number.isFinite(g.percent) ? `${g.percent.toFixed(1)}%` : '—'}`,
+          `${(Number.isFinite(g.percent) ? `${g.percent.toFixed(0)}%` : '—').padStart(5)}  ` +
+          `drew ${g.estPathM.toFixed(0).padStart(5)} m  ` +
+          `along ${g.alongM.toFixed(0).padStart(6)}  cross ${g.crossM.toFixed(0).padStart(6)}`,
       );
     }
   }

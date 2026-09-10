@@ -253,6 +253,18 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // above takes it from a GNSS course and an outage has none. Toggleable, so a
   // judge can watch the corners stop being turned.
   pedestrianHeadingFromMagnetometer: true,
+  // ★ THE COMPASS TRIMS THE GYRO IN A VEHICLE ★ A gyro is the better
+  // instrument over seconds and the worse one over minutes. Second Tier F
+  // ride, a 171 s outage: the heading swung through 135 degrees and the
+  // estimate finished 858 m to the side of a road it had drawn the right
+  // LENGTH of. Slow enough not to fight a real corner, fast enough to pull
+  // back a minute of wander. See vehicleHeadingAidDegPerSec.
+  vehicleHeadingAidDegPerSec: 1,
+  // ★ A MOUNTED PHONE IS NOT BEING CARRIED, AND THAT IS MEASURABLE ★ Variance,
+  // cadence and speed can all be faked by a scooter on a bad road — all three
+  // were, and the classifier called PEDESTRIAN at 4.5 km/h. The orientation of
+  // a clamped handset relative to gravity cannot be. See mountStillDeg.
+  mountStillDeg: 6,
   // OFF — a kept negative result. Learning the speed model's scale against
   // GNSS Doppler and spending it in the outage is the same trick StrideModel
   // and MagneticHeading both use, and here it does not pay: over 16 outage
@@ -672,6 +684,8 @@ export function useNavigationEngine(): NavEngineOutput {
         mlVehicleOnly: next.mlVehicleOnly,
         pedestrianHeadingFromGnss: next.pedestrianHeadingFromGnss,
         pedestrianHeadingFromMagnetometer: next.pedestrianHeadingFromMagnetometer,
+        vehicleHeadingAidDegPerSec: next.vehicleHeadingAidDegPerSec,
+        mountStillDeg: next.mountStillDeg,
         calibrateMlSpeed: next.calibrateMlSpeed,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });

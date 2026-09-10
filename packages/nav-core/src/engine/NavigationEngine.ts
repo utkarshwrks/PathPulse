@@ -246,6 +246,55 @@ export interface ConstraintFlags {
    */
   pedestrianHeadingFromMagnetometer: boolean;
   /**
+   * How fast the magnetometer may correct a VEHICLE's heading, degrees/second.
+   *
+   * ★ THE HEADING WANDERED 135 DEGREES IN ONE OUTAGE ★
+   *
+   * Second Tier F ride, a 171 s outage entered at 39.5 km/h on a main road:
+   *
+   *   179° → 138 → 141 → 104 → 107 → 68 → 79 → 63 → 44 → 73 → 85 → 89
+   *
+   * The vehicle was speeding up along a road; the heading swung back and forth
+   * through 135 degrees. `leanDeg` reads 0 throughout, so §24.11's
+   * compensation is not the cause. What it is, is a phone on the HANDLEBARS:
+   * steering input is not vehicle yaw, and on a two-wheeler the bars move
+   * constantly to balance. The estimate drew 1500 m of path against 1664 m of
+   * truth — the right LENGTH, pointed wrongly — and finished 858 m to the side.
+   * "when I speed up it just go to any of the street side of Main Road".
+   *
+   * ★ A GYRO IS GOOD SHORT, A COMPASS IS GOOD LONG ★
+   *
+   * `pedestrianHeadingFromMagnetometer` REPLACES the gyro on foot, because a
+   * hand's yaw is uncorrelated with travel. In a vehicle the gyro is the
+   * better instrument over seconds and the worse one over minutes, so the
+   * composition is the other way round: the gyro supplies the rate and the
+   * magnetometer trims it, slowly. That is a complementary filter, and it is
+   * the standard answer to exactly this pair of error characteristics.
+   *
+   * Deliberately slow. At 2 deg/s a genuine 90-degree corner is barely fought
+   * — it is over in three seconds and the trim can move 6 degrees in that time
+   * — while 135 degrees of accumulated wander is pulled back over a minute.
+   *
+   * ★ AND THE DISTORTION IS LEARNED, NOT ASSUMED ★ A vehicle is a lump of
+   * steel with a magnet in it, so the raw bearing is wrong by some offset.
+   * `MagneticHeading` measures that offset against the GNSS course while GNSS
+   * is up, exactly as it does for a walker's grip, and spends it in the
+   * outage. An offset it has not learned is one it declines to correct with.
+   *
+   * 0 disables it.
+   */
+  vehicleHeadingAidDegPerSec: number;
+  /**
+   * Below this much recent swing of the device's own vertical, the handset is
+   * in a mount and its carrier cannot be on foot, degrees.
+   *
+   * Forwarded to `MotionContextDetector`; exposed here so it can be measured
+   * with `--set` rather than by editing a default between runs, which is how
+   * two Phase 2 decisions got made against code that had moved underneath
+   * them. 0 disables the veto. See `MotionContextInput.mountMotionDeg`.
+   */
+  mountStillDeg: number;
+  /**
    * Learn the speed model's scale against GNSS Doppler, and spend it in outages.
    *
    * ★ OFF — A KEPT NEGATIVE RESULT ★
@@ -755,6 +804,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
   pedestrianHeadingFromMagnetometer: true,
+  vehicleHeadingAidDegPerSec: 1,
+  mountStillDeg: 6,
   calibrateMlSpeed: false,
   mlSpeedTrustGate: true,
   outageSpeedCeiling: true,
@@ -820,6 +871,11 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
  *   7. reset DR onto GNSS, or blend back toward it during recovery
  *   8. emit NavigationState
  */
+/** Time constant of the mount's slowly-tracked mean orientation, ms. */
+const MOUNT_MEAN_TAU_MS = 4000;
+/** How fast the recent-swing peak fades, ms. See `mountMotionDeg`. */
+const MOUNT_PEAK_TAU_MS = 6000;
+
 export class NavigationEngine {
   private config: EngineConfig;
   private readonly log = new EventLog();
@@ -884,7 +940,7 @@ export class NavigationEngine {
    * first five seconds that way, while the badge still read ACQUIRING.
    */
   private hasGnssSpeedEvidence = false;
-  private readonly motion = new MotionContextDetector();
+  private readonly motion: MotionContextDetector;
   private readonly steps = new StepDetector();
   private readonly stride = new StrideModel();
   private lastCadenceHz = 0;
@@ -974,6 +1030,22 @@ export class NavigationEngine {
   private relocaliser: TurnRelocaliser | null = null;
   /** Odometer the relocaliser's between-turn distances are differenced from. */
   private lastRelocaliserDistanceM = 0;
+  /**
+   * How far the device's own "down" has swung over the last few seconds,
+   * degrees, or null before the attitude estimate has settled.
+   *
+   * ★ A MOUNTED PHONE IS NOT BEING CARRIED, AND THAT IS MEASURABLE ★
+   *
+   * Kept as a decaying PEAK against a slow mean rather than a variance: what
+   * matters is the largest recent departure from where the handset usually
+   * sits, and a variance would let one fast wobble average away against a long
+   * quiet stretch.
+   *
+   * See `MotionContextInput.mountMotionDeg` for the failure it exists to stop.
+   */
+  private mountMotionDeg: number | null = null;
+  /** Slowly-tracked mean of the device's up vector, for the above. */
+  private mountUpMean: [number, number, number] | null = null;
   private lastParticleEstimate: ParticleEstimate | null = null;
   private relocalisations = 0;
   /** Times the cloud lost the vehicle and had to be re-seeded. Never silent. */
@@ -1059,6 +1131,7 @@ export class NavigationEngine {
 
   constructor(config: Partial<EngineConfig> = {}) {
     this.config = { ...DEFAULT_ENGINE_CONFIG, ...config };
+    this.motion = new MotionContextDetector({ mountStillDeg: this.config.mountStillDeg });
     this.stateMachine = new NavigationStateMachine(
       { adaptiveTimeout: this.config.adaptiveTimeout },
       this.log,
@@ -1129,6 +1202,17 @@ export class NavigationEngine {
   /** Live constraint counters and attitude health, for the debug panel. */
   get diagnostics(): {
     zuptTriggers: number;
+    /**
+     * The accelerometer-variance gate ZUPT is actually being armed by, and
+     * whether it was learned from this vehicle rather than configured.
+     *
+     * ★ A LEARNED THRESHOLD THAT CANNOT BE SEEN IS A LEARNED THRESHOLD THAT
+     * CANNOT BE AUDITED ★ It moves by a factor of sixty between a car and a
+     * two-wheeler, it decides whether a stop is detected at all, and getting
+     * it wrong in the other direction zeroes a real velocity mid-drive.
+     */
+    stationarityGate: number;
+    stationarityGateLearned: boolean;
     zaruTriggers: number;
     accelBias: readonly number[];
     gyroBias: readonly number[];
@@ -1252,6 +1336,8 @@ export class NavigationEngine {
       baroRelativeM: this.lastAltitude?.relativeM ?? null,
       baroChangeM: this.lastAltitude?.changeM ?? null,
       zuptTriggers: this.zupt.triggerCount,
+      stationarityGate: this.stationarity.thresholds.accelVariance,
+      stationarityGateLearned: this.stationarity.thresholds.learned,
       zaruTriggers: this.zaru.triggerCount,
       accelBias: this.zupt.accelBias,
       gyroBias: this.zaru.gyroBias,
@@ -1552,6 +1638,40 @@ export class NavigationEngine {
       if (this.config.lowPass) a = this.accelLowPass.push(a[0], a[1], a[2]);
 
       this.lastStationarity = this.stationarity.push(ax, ay, az, gx, gy, gz);
+
+      // ★ HOW FAR THE HANDSET HAS MOVED IN ITS MOUNT ★
+      //
+      // The angle between the current `up` and a slowly-tracked mean of it. A
+      // clamped phone holds one to two degrees over broken surface; a carried
+      // one swings through tens, because walking rocks the body and turns the
+      // wrist. See `MotionContextInput.mountMotionDeg`.
+      //
+      // The mean is deliberately slow, so a phone taken OUT of a mount reads
+      // as moving for long enough to be believed, and one put into a mount
+      // settles rather than flickering.
+      if (this.attitude.isSettled) {
+        const up = this.attitude.upVector as unknown as [number, number, number];
+        if (!this.mountUpMean) {
+          this.mountUpMean = [up[0], up[1], up[2]];
+        } else {
+          const a = Math.min(0.2, dtMs / MOUNT_MEAN_TAU_MS);
+          const mean = this.mountUpMean;
+          mean[0] += a * (up[0]! - mean[0]);
+          mean[1] += a * (up[1]! - mean[1]);
+          mean[2] += a * (up[2]! - mean[2]);
+        }
+        const m = this.mountUpMean;
+        const mn = Math.hypot(m[0], m[1], m[2]);
+        const un = Math.hypot(up[0], up[1], up[2]);
+        if (mn > 1e-6 && un > 1e-6) {
+          const dot = (up[0]! * m[0]! + up[1]! * m[1]! + up[2]! * m[2]!) / (mn * un);
+          const deg = (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
+          // A decaying peak: it has to fade, or a single bump would say
+          // "carried" for the rest of the session.
+          const decay = Math.exp(-dtMs / MOUNT_PEAK_TAU_MS);
+          this.mountMotionDeg = Math.max(deg, (this.mountMotionDeg ?? 0) * decay);
+        }
+      }
 
       // ★ TEACH THE STOP DETECTOR WHAT THIS VEHICLE SOUNDS LIKE ★
       //
@@ -2144,6 +2264,30 @@ export class NavigationEngine {
         // worth anything once GNSS is gone — the same trick ZUPT plays with
         // accelerometer bias, applied to the carrier instead of the sensor.
         if (this.lastCadenceHz > 0) this.stride.observe(speedForFix, this.lastCadenceHz);
+        // ★ THE MOUNT'S MAGNETIC OFFSET IS NOT A PEDESTRIAN PROPERTY ★
+        //
+        // `observeCourse` used to be reached only through `pedestrianYawRate`,
+        // so the offset between what the magnetometer reads and where the
+        // carrier is actually going was learned on foot and never in a
+        // vehicle. `vehicleHeadingAidDegPerSec` then had nothing to steer
+        // toward and did nothing at all — which is exactly how it measured.
+        //
+        // A vehicle is a lump of steel with a magnet in it and the handset
+        // sits at some angle in its mount; both are constants of the ride, and
+        // both are observable for free every time a fix carries a course.
+        // Learned here, spent in the outage — the same shape as StrideModel
+        // and MlSpeedCalibrator.
+        //
+        // Only above a speed where the course means something: a GNSS course
+        // at walking pace is noise, and teaching the offset from noise is
+        // worse than not teaching it.
+        if (
+          headingForFix !== undefined &&
+          Number.isFinite(headingForFix) &&
+          speedForFix >= 2
+        ) {
+          this.magHeading.observeCourse(sample.t, headingForFix);
+        }
         // ★ AND EVERY SECOND OF GOOD GNSS IS A FREE CHECK ON THE SPEED MODEL ★
         // Exactly the trick one line above, pointed at the other quantity that
         // has to survive an outage. Paired against the model's most recent
@@ -2206,6 +2350,9 @@ export class NavigationEngine {
       accelVariance: this.lastStationarity.accelVariance,
       isStationary: this.lastStationarity.isStationary,
       cadenceHz: this.lastCadenceHz,
+      // ★ THE ONE SIGNAL A ROUGH ROAD CANNOT FAKE ★ See
+      // `MotionContextInput.mountMotionDeg`.
+      ...(this.mountMotionDeg !== null ? { mountMotionDeg: this.mountMotionDeg } : {}),
       ...(this.lastGnssSpeed
         ? { gnssSpeedMps: this.lastGnssSpeed.mps, gnssSpeedT: this.lastGnssSpeed.t }
         : {}),
@@ -2425,7 +2572,7 @@ export class NavigationEngine {
       // the estimate went out and came back on every interval: the star-shaped
       // trail from a walk down a straight footpath. Freeze it and let the
       // course between fixes supply the bearing instead.
-      const drYawRate =
+      let drYawRate =
         this.config.pedestrianHeadingFromGnss && context === 'PEDESTRIAN'
           ? this.pedestrianYawRate(
               sample.t,
@@ -2433,6 +2580,18 @@ export class NavigationEngine {
               trusted ? headingForFix : undefined,
             )
           : yawRate;
+
+      // ★ THE COMPASS TRIMS THE GYRO, IN A VEHICLE, DURING AN OUTAGE ★
+      // See `vehicleHeadingAidDegPerSec`. Under GNSS the course is measured
+      // every fix and there is nothing to add; on foot the magnetometer
+      // REPLACES the gyro and this must not double-apply.
+      if (
+        this.config.vehicleHeadingAidDegPerSec > 0 &&
+        context === 'VEHICLE' &&
+        modeBefore === 'DEAD_RECKONING'
+      ) {
+        drYawRate += this.magneticTrimRate(sample.t, dtMs);
+      }
 
       // 9B: turns come off the same corrected yaw rate the estimate does, so a
       // detected turn is by construction the turn the engine believes it made.
@@ -3892,6 +4051,20 @@ export class NavigationEngine {
     // supports, which is the weakest claim available rather than no claim.
     if (matchedUnknown) return { ceilingMps: undefined, source: 'none' };
     return { ceilingMps: best, source: bestSource };
+  }
+
+  /**
+   * A bounded rate pulling the heading toward the magnetometer's bearing.
+   *
+   * Zero when the compass has nothing to say — no samples, or no learned
+   * offset — because an uncorrected magnetic bearing on a vehicle is wrong by
+   * an unknown constant, and steering toward it would be worse than drifting.
+   */
+  private magneticTrimRate(tMs: number, dtMs: number): number {
+    const rate = this.magHeading.yawRateToward(tMs, this.dr.current.headingDeg, dtMs);
+    if (rate === null || !Number.isFinite(rate)) return 0;
+    const limit = (this.config.vehicleHeadingAidDegPerSec * Math.PI) / 180;
+    return Math.max(-limit, Math.min(limit, rate));
   }
 
   private runSpeedModel(tMs: number): number | undefined {
