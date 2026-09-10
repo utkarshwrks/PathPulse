@@ -140,6 +140,31 @@ export interface DeadReckoningConfig {
   /** Time over which the headroom opens from nothing to full, ms. */
   outageSpeedRampMs: number;
   /**
+   * Fraction of the anchor speed the floor may fall to.
+   *
+   * ★ THE CEILING'S HEADROOM IS THE WRONG SHAPE FOR A FLOOR ★
+   *
+   * The ceiling is `anchor * 1.35 + 2.5`, and the absolute term is there
+   * deliberately: 35 % of a crawl is nothing, so a constant carries the low
+   * end and lets a vehicle pulling away from a light actually accelerate.
+   *
+   * Subtracting the same headroom is a different statement, and at low speed
+   * it is a vacuous one. Measured on the second Tier F ride, outage 3, entered
+   * at 14.5 km/h — 4 m/s:
+   *
+   *   floor = 4 - (4 * 0.35 + 2.5) = 0.3 m/s
+   *
+   * A floor of 0.3 m/s bounds nothing, and the estimate duly drew 6 m while
+   * the vehicle covered 114. The constant that rescues the ceiling destroys
+   * the floor.
+   *
+   * So the floor is purely proportional. Half the anchor: a vehicle measured
+   * at 40 km/h is not below 20 fifteen seconds later without braking, and one
+   * measured at 14 is not below 7. Braking is not silent, and a stop that
+   * something actually detected still overrules this — see its use.
+   */
+  outageSpeedFloorRatio: number;
+  /**
    * How fast the road-clamp's measured-speed floor is allowed to decay, m/s^2.
    *
    * ★ THE FLOOR IS PHYSICS, AND PHYSICS INCLUDES BRAKING ★
@@ -195,6 +220,7 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   outageSpeedRatio: 1.35,
   outageSpeedGainMps: 2.5,
   outageSpeedRampMs: 20_000,
+  outageSpeedFloorRatio: 0.5,
   roadClampFloorDecayMps2: 0,
 };
 
@@ -839,14 +865,14 @@ export class DeadReckoningEngine {
     const cfg = this.config.speedClampConfig;
     const staleMs = Math.max(0, this.state.measuredSpeedAgeMs - cfg.integrationTrustMs);
     const fade = staleMs > 0 ? Math.exp(-staleMs / cfg.decayTimeConstantMs) : 1;
-    const ramp = Math.max(
+    // Proportional, not the ceiling's headroom. See `outageSpeedFloorRatio`.
+    const ramp0 = Math.max(
       0,
       Math.min(1, this.state.measuredSpeedAgeMs / Math.max(1, this.config.outageSpeedRampMs)),
     );
-    const headroom =
-      ramp * (anchor * (this.config.outageSpeedRatio - 1) + this.config.outageSpeedGainMps);
-    const floor = (anchor - headroom) * fade;
-    return Number.isFinite(floor) ? Math.max(0, floor) : 0;
+    const target = anchor * (1 - ramp0 * (1 - this.config.outageSpeedFloorRatio));
+    const proportional = target * fade;
+    return Number.isFinite(proportional) ? Math.max(0, proportional) : 0;
   }
 
   /** Force velocity to zero — used by ZUPT when the vehicle stops. */

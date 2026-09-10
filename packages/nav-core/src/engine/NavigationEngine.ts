@@ -83,7 +83,7 @@ import {
   type MotionVerdict,
 } from '../ml/motionModel.js';
 import { ErrorStateKalmanFilter } from '../eskf/ErrorStateKalmanFilter.js';
-import { DEFAULT_ESKF_CONFIG } from '../eskf/noise.js';
+import { DEFAULT_ESKF_CONFIG, IMU_NOISE } from '../eskf/noise.js';
 import type { RoadGraph, RoadPosition } from '../mapmatch/types.js';
 
 /**
@@ -294,6 +294,25 @@ export interface ConstraintFlags {
    * them. 0 disables the veto. See `MotionContextInput.mountMotionDeg`.
    */
   mountStillDeg: number;
+  /**
+   * Accelerometer noise density handed to the error-state filter,
+   * m/s^2 per sqrt(Hz), or 0 to use `IMU_NOISE.PHONE_MEMS` as published.
+   *
+   * ★ A DATASHEET NUMBER DESCRIBES A SENSOR, NOT AN ESTIMATOR ★
+   *
+   * §24.13 measured the filter re-seeding every 45 seconds because its own
+   * covariance said 1.3 m where the real error after nine unaided seconds was
+   * 23 — an understatement of roughly eighteen times in sigma. The published
+   * 0.08 is the accelerometer's white noise and nothing else, while the error
+   * the filter actually accumulates is dominated by attitude error leaking
+   * gravity into the horizontal plane, by mount misalignment, and by bias that
+   * moves with temperature. None of those are on a datasheet.
+   *
+   * Exposed so the value can be MEASURED against a Tier F ride rather than
+   * argued about — the filter is only as good as this number and it has never
+   * been checked against a real handset.
+   */
+  eskfAccelNoiseDensity: number;
   /**
    * Learn the speed model's scale against GNSS Doppler, and spend it in outages.
    *
@@ -806,6 +825,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   pedestrianHeadingFromMagnetometer: true,
   vehicleHeadingAidDegPerSec: 1,
   mountStillDeg: 6,
+  eskfAccelNoiseDensity: 0,
   calibrateMlSpeed: false,
   mlSpeedTrustGate: true,
   outageSpeedCeiling: true,
@@ -1006,7 +1026,7 @@ export class NavigationEngine {
   /** When the current dead-reckoning stretch began. Drives confidence decay. */
   private drStartedAtMs: number | null = null;
   /** Phase 11. Runs on every sample; read only when `config.eskf` is on. */
-  private readonly eskf = new ErrorStateKalmanFilter();
+  private readonly eskf: ErrorStateKalmanFilter;
   /**
    * Barometric altitude, relative and slowly re-referenced.
    *
@@ -1132,6 +1152,18 @@ export class NavigationEngine {
   constructor(config: Partial<EngineConfig> = {}) {
     this.config = { ...DEFAULT_ENGINE_CONFIG, ...config };
     this.motion = new MotionContextDetector({ mountStillDeg: this.config.mountStillDeg });
+    // See `eskfAccelNoiseDensity`. 0 means "as published", so the default
+    // behaviour is byte-identical to what every existing figure measured.
+    this.eskf = new ErrorStateKalmanFilter(
+      this.config.eskfAccelNoiseDensity > 0
+        ? {
+            imu: {
+              ...IMU_NOISE.PHONE_MEMS,
+              accelNoiseDensity: this.config.eskfAccelNoiseDensity,
+            },
+          }
+        : {},
+    );
     this.stateMachine = new NavigationStateMachine(
       { adaptiveTimeout: this.config.adaptiveTimeout },
       this.log,

@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.28** · APK 7.43 MB · 1,773 tests · 60,224 lines
-**39.9 % mean drift on OUR OWN PHONE · 29.7 % on real vehicle sensors · 15.3 % simulated**
+**Build v0.29** · APK 7.43 MB · 1,787 tests · 60,224 lines
+**46.6 % mean drift on OUR OWN PHONE · 29.7 % on real vehicle sensors · 15.3 % simulated**
 
 ---
 
@@ -1747,7 +1747,7 @@ of raster tiles — a **43× reduction**.
 
 # 20 · Tests
 
-**1,773 tests across 102 files.** `pnpm test` runs them; `pnpm typecheck` and
+**1,787 tests across 102 files.** `pnpm test` runs them; `pnpm typecheck` and
 `pnpm lint:core-purity` complete the gate.
 
 ## 20.1 What a test looks like here
@@ -1817,7 +1817,7 @@ Every claim this project makes, and exactly what backs it.
 
 | Claim | Tier | Backing | Caveat |
 |---|---|---|---|
-| 39.9 % mean drift | **F** | `pnpm eval:tier-f` | **Our own handset, our own vehicle, our own roads.** The tier §22 said did not exist. It is the arbiter now |
+| 46.6 % mean drift | **F** | `pnpm eval:tier-f` | **Our own handset, our own vehicle, our own roads.** The tier §22 said did not exist. It is the arbiter now |
 | 15.3 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
 | 29.7 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
@@ -1828,7 +1828,7 @@ Every claim this project makes, and exactly what backs it.
 | 8.03× compression | Measured | `graphCodec` tests | Real OSM extracts |
 | 3.5 MB per 100 km | Measured | Cell planning | Real Overpass responses |
 | APK 7.43 MB | Measured | Clean Gradle build | |
-| 1,773 tests | Measured | `pnpm test` | |
+| 1,787 tests | Measured | `pnpm test` | |
 | Zero deps in `nav-core` | Enforced | `pnpm lint:core-purity` | |
 
 **Tier F now exists**, and it changed the answer. The app records its own raw
@@ -2275,9 +2275,14 @@ propagates unaided across that gap and arrives about **23 m** out, while its own
 covariance has grown to about **1.3 m**. `IMU_NOISE.PHONE_MEMS` understates the
 error by roughly **eighteen times in sigma**.
 
-That is a retune with a blast radius across every ESKF test and published
-figure, so it is Phase 2 work and the flag stays off. `eskfResets` is on
-Diagnostics, because rare and frequent are indistinguishable without a count.
+**★ AND THAT DIAGNOSIS WAS WRONG — SEE §24.18 ★** The arithmetic above is
+sound and the conclusion drawn from it was not. Retuning the noise does not
+fix the filter, measured across a twenty-fold range on Tier F. It is broken
+rather than mistuned. The flag stays off for a better reason than the one
+originally written here.
+
+`eskfResets` is on Diagnostics, because rare and frequent are
+indistinguishable without a count.
 
 **One thing fixed on the way:** the position update was being handed
 `[e, n, 0]`, and the zero was not a measurement. Its innovation was the
@@ -2444,6 +2449,173 @@ meant to defend. Getting it would need an ensemble, MC dropout or an explicit
 density model, and none of those is thirty parameters. `mlSpeedTrustGate` stays
 the primary defence.
 
+## 24.17 The second Tier F ride, and the rider's own words
+
+23 minutes, 174,213 samples, 904 fixes, four deliberate outages. The account
+and the log agree line for line, which is the first time this project has had
+both.
+
+### "it just held in one place. It doesn't move from there."
+
+**Outage 2, 180 s: the vehicle covered 609 m and the estimate drew 346.** The
+classifier had called `PEDESTRIAN` with GNSS *healthy*, at 4.5 km/h — and every
+rule that fired was behaving correctly. Variance was high because the road was
+broken. A cadence was reported because potholes land inside `StepDetector`'s
+0.6–3.5 Hz band. The speed was inside the walking band because traffic.
+
+§24.14's `vehicleMemoryMs` could not save it: the rider had been crawling long
+enough that no vehicle-speed reading was recent. **Time cannot separate these
+cases** — a scooter can crawl for as long as it likes.
+
+**The mount can.** A handset clamped to handlebars holds its orientation
+relative to gravity to a degree or two over the worst surface; a carried one
+swings through tens, because walking rocks the body and turns the wrist. That
+is not a statistical gap, it is an order of magnitude — and it is the one input
+to that classifier a rough road cannot fake. Every other one, it can.
+
+### "when I speed up it just go to any of the street side of Main Road"
+
+**Outage 5, 171 s, entered at 39.5 km/h:**
+
+```
+heading   179° → 138 → 141 → 104 → 107 → 68 → 79 → 63 → 44 → 73 → 85 → 89
+```
+
+The estimate drew **1500 m against 1664 m of truth — the right length, pointed
+wrongly** — and finished 858 m to the side. `leanDeg` reads 0 throughout, so
+§24.11 is not the cause. A phone on the **handlebars** is: steering input is
+not vehicle yaw, and on a two-wheeler the bars move constantly to balance.
+
+A gyro is the better instrument over seconds and the worse one over minutes, so
+the compass now **trims** it rather than replacing it, at 1 °/s. Slow enough
+that a real corner loses three degrees; fast enough that a minute of wander
+comes back.
+
+**And why that aid first measured as nothing:** `observeCourse` was only ever
+reached through `pedestrianYawRate`, so the offset between what the
+magnetometer reads and where the carrier is actually going was learned on foot
+and **never in a vehicle**. The aid had nothing to steer toward. A vehicle is a
+lump of steel with a magnet in it and the handset sits at some angle in its
+mount; both are constants of the ride, and both are free to measure whenever a
+fix carries a course — the same shape as `StrideModel` and
+`MlSpeedCalibrator`.
+
+### "when I just stop it slowly slowly move"
+
+**Outage 3, 19 s: the vehicle covered 114 m and the estimate drew 6.**
+
+`outageSpeedCeiling` stopped an inferred speed running away and **nothing
+stopped it collapsing.** Through outage 5 the integrated speed went
+
+```
+0.0 → 22.7 → 56.2 → 40.3 → 0.0 → 24.3 → 52.3 → 0.0 → 21.4 → 46.1 km/h
+```
+
+on a vehicle holding about 40. ZUPT fired **once in the entire ride** and not
+once inside that outage, so none of those zeroes is a detected stop. They are a
+high-passed accelerometer being integrated with nothing to hold it — and the
+path they draw is the right length, pointed wrongly, which is both complaints
+at once.
+
+The floor is the ceiling's mirror, with two things it may not overrule: **a
+stop something actually detected**, and **the coasting decay**. "An unaided
+estimate must not be asserted forever" is the oldest rule in
+`DeadReckoningEngine` and it is measured — 25.8 km/h held for 197 s
+manufactured 4 km — so the floor fades on the same time constant. It also may
+never raise a speed past what is plausible *now*: the anchor is a stale
+measurement and `maxSpeedMps` is a statement about the present.
+
+## 24.18 The ESKF is broken, not mistuned — and §24.13 said otherwise
+
+§24.13 measured the filter re-seeding every 45 seconds, worked out that its
+covariance understates the real error by roughly eighteen times in sigma, and
+concluded that a retune of `IMU_NOISE.PHONE_MEMS` would fix it. That
+conclusion was an inference, not a measurement, and it is wrong.
+
+Measured on the second Tier F ride, over the same 25 windows, sweeping the
+accelerometer noise density across a twenty-fold range:
+
+| configuration | Tier F mean |
+|---|---|
+| **shipped chain, ESKF off** | **46.6 %** |
+| ESKF on, published 0.08 | 79.8 % |
+| ESKF on, 0.4 — five times | 81.5 % |
+| ESKF on, 1.5 — the figure §24.13 derived | 73.1 % |
+
+Not monotonic, and not close. Eighteen times the noise is the best of the
+three and still fifty per cent worse than not running the filter at all. **A
+mistuned filter improves as you approach its correct tuning. This one does
+not**, so the fault is not in the number.
+
+What that leaves is the filter itself — the measurement model, the frame
+conversions, or the order updates are applied in — and finding it means
+auditing all three against a known-good trajectory rather than turning a
+constant. That is real work and it is honest to name it as unstarted.
+
+**The flag stays off, and now for a measured reason rather than an inferred
+one.** `eskfAccelNoiseDensity` is kept, exposed and defaulted to 0 so the next
+attempt does not have to rediscover that this is not where the problem is.
+
+## 24.19 The magnetometer trim is worth exactly one degree per second
+
+§24.17 added the compass as a slow trim on the gyro and set it at 1 °/s by
+argument. Swept on Tier F:
+
+| trim | Tier F mean |
+|---|---|
+| **1 °/s** | **46.6 %** |
+| 2 °/s | 47.9 % |
+| 3 °/s | 49.3 % |
+
+Monotonically worse as it gets faster, which is the shape the argument
+predicted: past a point the trim stops correcting accumulated wander and starts
+fighting the corners the rider actually took. The gyro is the better instrument
+over seconds, and a trim strong enough to overrule it inside a corner is a trim
+that has forgotten why it exists.
+
+## 24.20 Pulling away from rest inside an outage — still broken
+
+The one failure on the second Tier F ride that none of §24.17's three fixes
+touched, named here because it is now the clearest remaining defect rather than
+because it was solved.
+
+**Outage 3, 19 s: the vehicle covered 114 m and the estimate drew 6.**
+
+```
+  t   mode            context   src          km/h   heading   still
+  0   GNSS            VEHICLE   GNSS         14.5     276°      -
+  4   GNSS_DEGRADED   VEHICLE   INTEGRATED    0.0     196°      -
+  8   DEAD_RECKONING  VEHICLE   INTEGRATED    0.0     200°      -
+ 12   DEAD_RECKONING  VEHICLE   INTEGRATED    0.1     205°      -
+ 16   DEAD_RECKONING  VEHICLE   INTEGRATED    0.0     196°      -
+```
+
+The rider was **stopped at a signal when the receiver went**, and pulled away
+during the outage. Every mechanism that could have carried the speed is
+correctly silent:
+
+- `outageSpeedCeiling`'s floor is anchored on the last MEASURED speed, and that
+  was zero. Half of zero is zero. The floor is doing exactly what it says.
+- `mlSpeedTrustGate` is withholding the model, correctly — it has no evidence
+  on this ride that the model describes this vehicle.
+- ZUPT is not firing (`still` reads false throughout), so nothing is *forcing*
+  the zero either.
+
+What is left is integration, and **integration is not seeing a real
+acceleration from rest.** Pulling away at even 1 m/s² for ten seconds is
+10 m/s, and the chain reports 0.0 for nineteen. That is not a bound being too
+tight; it is the forward-acceleration channel failing to carry a signal that is
+certainly present in the raw accelerometer.
+
+Two candidates, neither measured: the high-pass DC term (§`accelHighPassTauMs`)
+having tracked to the value it held during the stop and then subtracting the
+very acceleration that follows it, or the mount yaw offset being wrong so that
+forward acceleration is being resolved as lateral and discarded by NHC.
+
+**Distinguishing them needs the raw forward-acceleration channel logged
+alongside the truth**, which the Tier F recorder now makes possible and which
+no measurement has yet done. Named, unstarted, and the next thing worth doing.
+
 ---
 
 # 25 · Build, deploy and workflows
@@ -2452,7 +2624,7 @@ the primary defence.
 
 ```bash
 pnpm install
-pnpm test                 # 1,773 tests
+pnpm test                 # 1,787 tests
 pnpm typecheck
 pnpm lint:core-purity     # nav-core must stay pure
 
@@ -2608,7 +2780,7 @@ needs a battery measurement we have not taken.
 
 ## 28.5 CI
 
-The repository has `keepalive.yml` and nothing that runs the 1,773 tests on push.
+The repository has `keepalive.yml` and nothing that runs the 1,787 tests on push.
 For a project whose entire credibility rests on those tests being green, that is
 a gap.
 
@@ -2636,7 +2808,7 @@ Every script in `package.json`.
 ## Quality gate
 | Command | Does |
 |---|---|
-| `pnpm test` | **1,773 tests** |
+| `pnpm test` | **1,787 tests** |
 | `pnpm test:watch` | `nav-core` in watch mode |
 | `pnpm typecheck` | Every package |
 | `pnpm lint:core-purity` | **Fails if `nav-core` gains an import or a dependency** |

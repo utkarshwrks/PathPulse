@@ -265,6 +265,10 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // were, and the classifier called PEDESTRIAN at 4.5 km/h. The orientation of
   // a clamped handset relative to gravity cannot be. See mountStillDeg.
   mountStillDeg: 6,
+  // 0 = the published PHONE_MEMS figure. See eskfAccelNoiseDensity: a
+  // datasheet number describes a sensor, not an estimator, and this one has
+  // never been checked against a real handset.
+  eskfAccelNoiseDensity: 0,
   // OFF — a kept negative result. Learning the speed model's scale against
   // GNSS Doppler and spending it in the outage is the same trick StrideModel
   // and MagneticHeading both use, and here it does not pay: over 16 outage
@@ -686,6 +690,7 @@ export function useNavigationEngine(): NavEngineOutput {
         pedestrianHeadingFromMagnetometer: next.pedestrianHeadingFromMagnetometer,
         vehicleHeadingAidDegPerSec: next.vehicleHeadingAidDegPerSec,
         mountStillDeg: next.mountStillDeg,
+        eskfAccelNoiseDensity: next.eskfAccelNoiseDensity,
         calibrateMlSpeed: next.calibrateMlSpeed,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });
