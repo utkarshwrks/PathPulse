@@ -1,10 +1,15 @@
 {
   "name": "speedclamp",
-  "description": "+ plausibility ceiling and the decay of a stale unaided estimate.",
+  "description": "+ plausibility ceiling and the decay of a stale unaided estimate. This is also the rung where the outage speed bound joins: outageSpeedCeiling is a bound derived from the last measured speed, so it belongs with the plausibility clamp rather than below it \u2014 the rungs above this one carry neither, which is what lets the table show what unbounded integration actually does.",
   "engine": {
-    "medianFilter": true, "lowPass": true,
-    "nhc": true, "zupt": true, "zaru": true,
-    "speedClamp": true, "accelHighPass": false,
-    "forwardBias": false, "roadSnap": false
+    "medianFilter": true,
+    "lowPass": true,
+    "nhc": true,
+    "zupt": true,
+    "zaru": true,
+    "speedClamp": true,
+    "accelHighPass": false,
+    "forwardBias": false,
+    "roadSnap": false
   }
 }

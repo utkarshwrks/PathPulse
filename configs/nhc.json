@@ -2,9 +2,15 @@
   "name": "nhc",
   "description": "+ NHC. A vehicle does not slide sideways, so lateral velocity is error by construction.",
   "engine": {
-    "medianFilter": true, "lowPass": true,
-    "nhc": true, "zupt": true, "zaru": true,
-    "speedClamp": false, "accelHighPass": false,
-    "forwardBias": false, "roadSnap": false
+    "medianFilter": true,
+    "lowPass": true,
+    "nhc": true,
+    "zupt": true,
+    "zaru": true,
+    "speedClamp": false,
+    "accelHighPass": false,
+    "forwardBias": false,
+    "roadSnap": false,
+    "outageSpeedCeiling": false
   }
 }

@@ -314,6 +314,14 @@ export interface ConstraintFlags {
    */
   eskfAccelNoiseDensity: number;
   /**
+   * Fraction of the last measured speed the outage floor may fall to.
+   *
+   * Forwarded to `DeadReckoningConfig.outageSpeedFloorRatio`; exposed here so
+   * it can be swept with `--set` rather than by editing a default between
+   * runs. See that note for why the floor is proportional.
+   */
+  outageSpeedFloorRatio: number;
+  /**
    * Learn the speed model's scale against GNSS Doppler, and spend it in outages.
    *
    * ★ OFF — A KEPT NEGATIVE RESULT ★
@@ -826,6 +834,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   vehicleHeadingAidDegPerSec: 1,
   mountStillDeg: 6,
   eskfAccelNoiseDensity: 0,
+  outageSpeedFloorRatio: 0.5,
   calibrateMlSpeed: false,
   mlSpeedTrustGate: true,
   outageSpeedCeiling: true,
@@ -1184,6 +1193,7 @@ export class NavigationEngine {
       },
       distanceFloorMps: this.config.distanceFloorMps,
       outageSpeedCeiling: this.config.outageSpeedCeiling,
+      outageSpeedFloorRatio: this.config.outageSpeedFloorRatio,
     });
   }
 
@@ -1214,6 +1224,7 @@ export class NavigationEngine {
       },
       distanceFloorMps: this.config.distanceFloorMps,
       outageSpeedCeiling: this.config.outageSpeedCeiling,
+      outageSpeedFloorRatio: this.config.outageSpeedFloorRatio,
     });
     this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
     if (!this.config.roadSnap) {

@@ -17,18 +17,18 @@ the outage window. Road graphs used: city, highway.
 
 | Configuration | Mean % | Median % | p90 % | Max % | RMSE m | Along m | Cross m | CEP95 m |
 |---|---|---|---|---|---|---|---|---|
-| naive | **60.4** | 62.6 | 81.3 | 81.4 | 348.9 | 295.8 | 176.8 | 605.0 |
-| filtered | **60.2** | 62.6 | 81.2 | 81.4 | 347.8 | 293.5 | 178.2 | 602.6 |
-| zaru | **59.5** | 58.9 | 81.9 | 82.2 | 346.2 | 297.9 | 168.3 | 599.4 |
-| zupt | **57.4** | 51.0 | 76.6 | 77.4 | 334.9 | 290.2 | 159.2 | 583.7 |
-| nhc | **36.4** | 43.9 | 53.7 | 58.4 | 189.2 | 156.4 | 89.2 | 339.7 |
-| speedclamp | **33.5** | 43.9 | 53.7 | 58.4 | 174.1 | 140.8 | 88.0 | 294.7 |
-| highpass | **17.9** | 24.8 | 36.5 | 39.1 | 106.8 | 78.3 | 63.9 | 171.4 |
-| full | **15.3** | 6.2 | 44.3 | 48.9 | 85.9 | 74.9 | 37.1 | 149.0 |
-| full_forwardbias | **15.5** | 9.8 | 42.9 | 45.7 | 82.9 | 73.5 | 33.2 | 137.5 |
-| eskf | **13.9** | 8.0 | 34.4 | 37.8 | 91.6 | 66.9 | 59.8 | 149.9 |
-| greedy | **14.2** | 4.7 | 44.3 | 46.9 | 80.2 | 70.9 | 32.9 | 131.7 |
-| particle | **17.9** | 22.4 | 44.5 | 47.3 | 106.2 | 96.8 | 34.9 | 203.7 |
+| naive | **59.5** | 57.9 | 81.0 | 81.1 | 348.5 | 297.7 | 173.8 | 600.7 |
+| filtered | **59.3** | 57.9 | 80.9 | 81.0 | 347.4 | 295.4 | 175.4 | 598.4 |
+| zaru | **57.8** | 50.5 | 81.7 | 82.0 | 346.3 | 300.0 | 165.4 | 597.5 |
+| zupt | **57.6** | 52.3 | 76.6 | 77.3 | 342.4 | 300.6 | 156.6 | 590.9 |
+| nhc | **33.5** | 34.7 | 52.7 | 57.5 | 170.4 | 146.5 | 71.4 | 317.6 |
+| speedclamp | **24.1** | 31.6 | 41.1 | 44.7 | 147.0 | 118.2 | 73.1 | 238.2 |
+| highpass | **23.4** | 25.6 | 40.8 | 41.4 | 126.6 | 94.1 | 75.2 | 208.1 |
+| full | **19.9** | 21.0 | 43.7 | 48.4 | 103.0 | 91.9 | 40.2 | 181.8 |
+| full_forwardbias | **18.0** | 21.1 | 42.0 | 44.6 | 87.8 | 78.8 | 33.4 | 149.8 |
+| eskf | **19.8** | 23.9 | 39.7 | 40.5 | 108.1 | 81.4 | 66.5 | 181.9 |
+| greedy | **18.6** | 20.9 | 43.7 | 46.1 | 97.3 | 87.9 | 35.9 | 162.9 |
+| particle | **23.6** | 22.3 | 45.6 | 48.5 | 124.5 | 114.0 | 41.5 | 239.1 |
 
 ![drift by configuration](./ablation.svg)
 
@@ -40,14 +40,14 @@ the outage window. Road graphs used: city, highway.
 | filtered | 1.02 | 50.0 | 0 | 0.0 | 10 |
 | zaru | 1.02 | 50.0 | 0 | 0.0 | 10 |
 | zupt | 1.02 | 50.0 | 18 | 0.0 | 10 |
-| nhc | 12.00 | 50.0 | 18 | 0.0 | 2 |
-| speedclamp | 11.74 | 50.0 | 18 | 0.0 | 2 |
-| highpass | 10.27 | 50.0 | 18 | 0.0 | 0 |
-| full | 4.16 | 50.0 | 18 | 99.9 | 2 |
-| full_forwardbias | 3.88 | 50.0 | 18 | 100.0 | 2 |
-| eskf | 8.68 | 50.0 | 18 | 99.2 | 0 |
-| greedy | 4.06 | 50.0 | 18 | 99.9 | 2 |
-| particle | 3.88 | 50.0 | 18 | 100.0 | 2 |
+| nhc | 14.75 | 50.0 | 18 | 0.0 | 0 |
+| speedclamp | 10.50 | 50.0 | 18 | 0.0 | 1 |
+| highpass | 12.48 | 50.0 | 18 | 0.0 | 0 |
+| full | 6.13 | 50.0 | 18 | 99.9 | 2 |
+| full_forwardbias | 7.02 | 50.0 | 18 | 100.0 | 1 |
+| eskf | 10.60 | 50.0 | 18 | 99.2 | 0 |
+| greedy | 6.08 | 50.0 | 18 | 99.4 | 2 |
+| particle | 5.75 | 50.0 | 18 | 100.0 | 2 |
 
 ## What each row is
 
@@ -56,7 +56,7 @@ the outage window. Road graphs used: city, highway.
 - **zaru** — + ZARU. A stopped vehicle's gyro reading is pure bias, so every stop calibrates it free.
 - **zupt** — + ZUPT. A stopped vehicle has exactly zero velocity, and every red light resets the error budget.
 - **nhc** — + NHC. A vehicle does not slide sideways, so lateral velocity is error by construction.
-- **speedclamp** — + plausibility ceiling and the decay of a stale unaided estimate.
+- **speedclamp** — + plausibility ceiling and the decay of a stale unaided estimate. This is also the rung where the outage speed bound joins: outageSpeedCeiling is a bound derived from the last measured speed, so it belongs with the plausibility clamp rather than below it — the rungs above this one carry neither, which is what lets the table show what unbounded integration actually does.
 - **highpass** — + acceleration high-pass. Real longitudinal acceleration averages to zero over a minute; tilt error does not. Largest single improvement in the table.
 - **full** — Everything that earns its place, including road snapping. This is what ships.
 - **full_forwardbias** — NEGATIVE RESULT, kept deliberately. Full plus the GNSS-Doppler forward-bias estimator, which measurably WORSENS drift now that the high-pass exists. Reported rather than deleted.

@@ -77,7 +77,15 @@ describe('Phase 12 — alignment against a rotated mount', () => {
             const run = runEval(samples, {
               configName: `mount${deg}`,
               logName,
-              engineConfig: { ...base.engine, autoAlign },
+              // ★ THE FLOOR IS NOT WHAT THIS MEASURES ★
+              // `outageSpeedFloorRatio` holds an unaided speed at half the
+              // last measured one, and on these short simulated outages it
+              // dominates: with it on, a 90-degree crooked mount measured
+              // BETTER than a straight one, which is physically absurd and
+              // means the mount effect had been swamped rather than measured.
+              // This file is about alignment, so the other mechanism stands
+              // down for it. Tier F keeps the floor — see §24.21.
+              engineConfig: { ...base.engine, autoAlign, outageSpeedCeiling: false },
               outageStartMs: w.startMs,
               outageDurationMs: w.durationMs,
               roadGraph: found?.graph ?? null,

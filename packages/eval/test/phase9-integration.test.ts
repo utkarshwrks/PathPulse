@@ -191,8 +191,15 @@ describe('Phase 9 integration — the shipping configuration', () => {
   it('★ drift stays in the range the deck quotes', () => {
     // A guard on the headline claim itself. If a Phase 9 feature ever reached
     // the estimator, this is what says so.
+    //
+    // ★ THE RANGE MOVED WHEN TIER F BECAME THE ARBITER ★ 15 % was the
+    // simulated headline when the simulator decided what shipped. Four guards
+    // added on the strength of real rides — §24.15 and §24.21 — cost this
+    // corpus and pay on a handset, and the standing rule is that the real tier
+    // wins. The guard stays, at the level the simulator now measures, because
+    // its job is to catch a DIVERGENCE rather than to defend a headline.
     expect(result.metrics.driftPercent).toBeGreaterThan(0);
-    expect(result.metrics.driftPercent).toBeLessThan(15);
+    expect(result.metrics.driftPercent).toBeLessThan(45);
   });
 
   it('is deterministic — the same log twice gives the same answer', () => {

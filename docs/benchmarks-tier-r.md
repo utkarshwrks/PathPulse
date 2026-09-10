@@ -15,13 +15,13 @@ Config `full`, 10 outage windows of 60 s per log.
 
 | log | n | mean % | median % | p90 % | best % | worst % |
 |---|---|---|---|---|---|---|
-| `iovnbd_S1.jsonl` | 10 | 33.7 | 33.7 | 66.1 | 12.6 | 66.1 |
-| `iovnbd_S3c.jsonl` | 9 | 25.3 | 23.6 | 62.8 | 3.8 | 62.8 |
-| **OVERALL** | 19 | **29.7** | **24.0** | 63.1 | 3.8 | 66.1 |
+| `iovnbd_S1.jsonl` | 10 | 34.2 | 33.7 | 66.1 | 12.6 | 66.1 |
+| `iovnbd_S3c.jsonl` | 9 | 23.9 | 23.6 | 50.5 | 3.8 | 50.5 |
+| **OVERALL** | 19 | **29.3** | **24.0** | 63.1 | 3.8 | 66.1 |
 
 ## What this says
 
-The shipped configuration measures **6.9 % on simulated logs and 29.7 % on real
+The shipped configuration measures **6.9 % on simulated logs and 29.3 % on real
 vehicle sensors.** Every figure in benchmarks.md should be read as an upper
 bound on the estimator, not an estimate of it.
 

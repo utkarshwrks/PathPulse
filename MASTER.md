@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.29** · APK 7.43 MB · 1,787 tests · 60,224 lines
-**46.6 % mean drift on OUR OWN PHONE · 29.7 % on real vehicle sensors · 15.3 % simulated**
+**Build v0.30** · APK 7.43 MB · 1,787 tests · 60,224 lines
+**39.6 % mean drift on OUR OWN PHONE · 29.3 % on real vehicle sensors · 19.9 % simulated**
 
 ---
 
@@ -1817,9 +1817,9 @@ Every claim this project makes, and exactly what backs it.
 
 | Claim | Tier | Backing | Caveat |
 |---|---|---|---|
-| 46.6 % mean drift | **F** | `pnpm eval:tier-f` | **Our own handset, our own vehicle, our own roads.** The tier §22 said did not exist. It is the arbiter now |
-| 15.3 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
-| 29.7 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
+| 39.6 % mean drift | **F** | `pnpm eval:tier-f` | **Our own handset, our own vehicle, our own roads.** The tier §22 said did not exist. It is the arbiter now |
+| 19.9 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
+| 29.3 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
 | 27° heading error over 60 s | **R** | `pnpm eval:heading` | Real vehicle sensors. The number drift % cannot see — see §24.11 |
 | 0 ms handover | **S** | `pnpm ablation` | Structural — there is no transition code path |
@@ -2590,31 +2590,84 @@ because it was solved.
  16   DEAD_RECKONING  VEHICLE   INTEGRATED    0.0     196°      -
 ```
 
-The rider was **stopped at a signal when the receiver went**, and pulled away
-during the outage. Every mechanism that could have carried the speed is
-correctly silent:
+**★ AND THE FIRST EXPLANATION OF IT WAS WRONG ★**
 
-- `outageSpeedCeiling`'s floor is anchored on the last MEASURED speed, and that
-  was zero. Half of zero is zero. The floor is doing exactly what it says.
-- `mlSpeedTrustGate` is withholding the model, correctly — it has no evidence
-  on this ride that the model describes this vehicle.
-- ZUPT is not firing (`still` reads false throughout), so nothing is *forcing*
-  the zero either.
+This section originally said the rider had been stopped at the signal when the
+receiver went, so the floor's anchor was zero and half of zero is zero. That
+was inferred from the HUD, and the log says otherwise. The last fix before the
+gap reads **4.02 m/s** and the first after it 7.16 — the vehicle was moving
+throughout, gently accelerating, at a mean of 0.16 m/s².
 
-What is left is integration, and **integration is not seeing a real
-acceleration from rest.** Pulling away at even 1 m/s² for ten seconds is
-10 m/s, and the chain reports 0.0 for nineteen. That is not a bound being too
-tight; it is the forward-acceleration channel failing to carry a signal that is
-certainly present in the raw accelerometer.
+So the anchor was 4 m/s and the floor should have held the estimate at 2. It
+did not, and the reason was a bug in the floor rather than anything about the
+ride: **it was bounded by the speed already in hand.**
 
-Two candidates, neither measured: the high-pass DC term (§`accelHighPassTauMs`)
-having tracked to the value it held during the stop and then subtracting the
-very acceleration that follows it, or the mount yaw offset being wrong so that
-forward acceleration is being resolved as lateral and discarded by NHC.
+```ts
+const ceiling = Math.min(speedCeilingWas, ...);   // speedCeilingWas IS `speed`
+speed = Math.max(speed, Math.min(floor, ceiling));
+```
 
-**Distinguishing them needs the raw forward-acceleration channel logged
-alongside the truth**, which the Tier F recorder now makes possible and which
-no measurement has yet done. Named, unstarted, and the next thing worth doing.
+That is circular. When integration collapses to zero the bound becomes zero,
+the floor is clamped to zero, and it can never lift anything — which is why the
+proportional floor measured as **no change whatsoever**: 46.6 % with it and
+46.6 % without. A no-op was being reported as a measurement.
+
+What the floor must not exceed is what is possible *now* — the plausibility
+ceiling, and the road's limit when one is trusted. Both are statements about
+the present; the speed the estimate currently holds is the thing being
+corrected.
+
+Fixed, the same outage draws **112 m against 114 m of truth** and its recovery
+error falls from 118.2 m to **33.3 m**. See §24.21.
+
+## 24.21 The outage floor, and what it costs the simulator
+
+With the circular bound removed (§24.20) the floor works, and it is worth
+sweeping rather than arguing about. Tier F, 25 windows:
+
+| floor ratio | Tier F mean |
+|---|---|
+| 0.0 — off | 42.2 % |
+| 0.25 | 41.9 % |
+| 0.35 | 40.8 % |
+| **0.50** | **39.6 %** |
+
+Monotonic, and 0.5 is where it stops. "A vehicle measured at *v* is not below
+*v*/2 without braking" is a claim braking cannot contradict inside an outage of
+this length; above that it starts asserting things a real stop would disprove,
+and the fade and the `isStationary` guard are the only things left holding it.
+
+**The 19 s outage is the case it was for:** 6 m drawn against 114 m of truth
+becomes 112 m, and recovery error 118.2 m becomes 33.3 m. The 171 s outage goes
+the other way — 756.8 m to 1490.4 m — because the heading there had already
+diverged and a faster estimate travels further along a wrong bearing. Overall
+median 42.7 % → 31.9 %, best 12.9 % → 2.1 %.
+
+### What it costs Tier S, honestly
+
+`full` moves **15.3 % → 19.9 %**, and four structural guards had to be looked
+at rather than merely re-thresholded:
+
+- The **ablation ladder's rungs below `speedclamp`** now set
+  `outageSpeedCeiling: false`. The floor is a speed bound derived from a
+  measurement, so it belongs at or after the rung that introduces speed bounds
+  — leaving it on made `naive` read 962 % and `filtered` 1622 %, which measures
+  the floor rather than the absence of a median filter.
+- The **alignment control** inverted: a 90° crooked mount measured *better*
+  than a straight one. That is physically absurd and means the mount effect had
+  been swamped, so that file runs with the floor off. It is about alignment.
+- **`full_forwardbias` inverted** — 18.0 % against `full`'s 19.9 %. Against a
+  speed that no longer collapses, a fixed learned bias is the better
+  correction. Recorded and *not* acted on: §24.5 is a standing reminder that
+  this exact comparison has reversed before, and it has to survive more than
+  four logs and hold on Tier F before the flag moves.
+- The **`full` vs `naive` ratio** loosened from 2× to 1.4×. The ordering is the
+  claim; the ratio is a number the corpus decides.
+
+Kept, because the standing rule is that when the tiers disagree the real one
+wins, and because the case it fixes is one the rider reported in their own
+words. Recorded in full, because a mechanism that costs a simulated headline
+30 % relative should be easy to find and easy to reverse.
 
 ---
 

@@ -2,9 +2,15 @@
   "name": "filtered",
   "description": "+ median and low-pass filters. Removes pothole spikes and engine vibration.",
   "engine": {
-    "medianFilter": true, "lowPass": true,
-    "nhc": false, "zupt": false, "zaru": false,
-    "speedClamp": false, "accelHighPass": false,
-    "forwardBias": false, "roadSnap": false
+    "medianFilter": true,
+    "lowPass": true,
+    "nhc": false,
+    "zupt": false,
+    "zaru": false,
+    "speedClamp": false,
+    "accelHighPass": false,
+    "forwardBias": false,
+    "roadSnap": false,
+    "outageSpeedCeiling": false
   }
 }

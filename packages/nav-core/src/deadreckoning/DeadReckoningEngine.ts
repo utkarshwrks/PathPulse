@@ -748,7 +748,6 @@ export class DeadReckoningEngine {
     // ★ EXCEPT WHEN THE VEHICLE REALLY HAS STOPPED ★ ZUPT returns long before
     // this line, so a detected stop is untouched. The floor only refuses a
     // zero that nothing measured.
-    const speedCeilingWas = speed;
     if (this.config.outageSpeedCeiling && !measuredThisSample) {
       speed = Math.min(speed, this.inferredSpeedCeiling());
       // ★ AND THE FLOOR HAS TWO THINGS IT MUST NOT OVERRULE ★
@@ -774,9 +773,28 @@ export class DeadReckoningEngine {
       // plausibility ceiling and the road's limit are statements about what is
       // possible NOW, and nothing here outranks them.
       if (!opts.isStationary && !inferredThisSample) {
+        // ★ BOUNDED BY WHAT IS PLAUSIBLE, NOT BY WHAT THE ESTIMATE CURRENTLY
+        //   SAYS — WHICH IS THE THING THE FLOOR EXISTS TO RAISE ★
+        //
+        // The first version of this bounded the floor by the speed already in
+        // hand. That is circular and it made the whole mechanism inert: when
+        // integration collapses to zero the bound becomes zero, the floor is
+        // clamped to zero, and it can never lift anything. Measured on Tier F
+        // as a change of nothing at all — 46.6 % with the floor and 46.6 %
+        // without it, which is what a no-op looks like.
+        //
+        // What the floor genuinely must not exceed is what is possible NOW:
+        // the plausibility ceiling, which drops to a walking pace in walking
+        // mode, and the road's own limit when one is trusted. Both are
+        // statements about the present; a stale anchor is not.
+        const plausible = this.config.speedClamp
+          ? this.config.speedClampConfig.maxSpeedMps
+          : this.config.maxSpeedMps;
         const ceiling = Math.min(
-          speedCeilingWas,
-          this.config.speedClamp ? this.config.speedClampConfig.maxSpeedMps : this.config.maxSpeedMps,
+          plausible,
+          opts.roadSpeedCeilingMps !== undefined && Number.isFinite(opts.roadSpeedCeilingMps)
+            ? opts.roadSpeedCeilingMps
+            : Number.POSITIVE_INFINITY,
         );
         speed = Math.max(speed, Math.min(this.inferredSpeedFloor(), ceiling));
       }

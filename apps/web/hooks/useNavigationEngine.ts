@@ -269,6 +269,11 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // datasheet number describes a sensor, not an estimator, and this one has
   // never been checked against a real handset.
   eskfAccelNoiseDensity: 0,
+  // How far the outage floor may let a measured speed fall. See
+  // outageSpeedFloorRatio: proportional, because the ceiling's absolute
+  // headroom subtracted at low speed leaves a floor of 0.3 m/s, which bounds
+  // nothing — the estimate drew 6 m while the vehicle covered 114.
+  outageSpeedFloorRatio: 0.5,
   // OFF — a kept negative result. Learning the speed model's scale against
   // GNSS Doppler and spending it in the outage is the same trick StrideModel
   // and MagneticHeading both use, and here it does not pay: over 16 outage
@@ -691,6 +696,7 @@ export function useNavigationEngine(): NavEngineOutput {
         vehicleHeadingAidDegPerSec: next.vehicleHeadingAidDegPerSec,
         mountStillDeg: next.mountStillDeg,
         eskfAccelNoiseDensity: next.eskfAccelNoiseDensity,
+        outageSpeedFloorRatio: next.outageSpeedFloorRatio,
         calibrateMlSpeed: next.calibrateMlSpeed,
         maxSpeedMps: next.walkingMode ? WALKING_MAX_SPEED_MPS : VEHICLE_MAX_SPEED_MPS,
       });
