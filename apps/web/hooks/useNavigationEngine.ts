@@ -110,6 +110,16 @@ export interface EngineDiagnostics {
   /** What the carrier is doing — a walk and a drive are not the same problem. */
   motionContext: MotionContext;
   /** See MotionContextDetector.latched — the context held across an outage. */
+  /**
+   * The compass: what it reads, what it has learned, and what it is doing.
+   * See NavigationEngine.diagnostics — every failure mode of the heading aid
+   * is silent from the outside, and all of them look like "it is drifting".
+   */
+  magneticBearingDeg: number | null;
+  magneticOffsetDeg: number | null;
+  magneticObservations: number;
+  magneticReason: string;
+  magneticTrimDegPerSec: number;
   contextLatched: boolean;
   contextLatchedAt: number | null;
   motionReason: string;
@@ -171,6 +181,11 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   mlLatencyMs: NaN,
   mlError: null,
   motionContext: 'UNKNOWN',
+  magneticBearingDeg: null,
+  magneticOffsetDeg: null,
+  magneticObservations: 0,
+  magneticReason: 'no magnetometer sample yet',
+  magneticTrimDegPerSec: 0,
   contextLatched: false,
   contextLatchedAt: null,
   motionReason: 'no samples yet',
@@ -217,6 +232,16 @@ export interface LastGnss {
 /** Phase 5C toggles plus Walking Mode, all live. */
 export interface EngineControls extends ConstraintFlags {
   walkingMode: boolean;
+  /**
+   * Roadside on/off for the compass heading aid.
+   *
+   * ★ THE RULE IS THAT EVERY NEW DEFAULT IS A TOGGLE ★ `vehicleHeadingAidDegPerSec`
+   * is a number, and the panel renders booleans, so until now the only way to
+   * A/B the aid was a rebuild — which is the thing the rule exists to prevent.
+   * This gates the number to 0 without touching its value, so switching the
+   * toggle back restores the tuning rather than a default.
+   */
+  compassHeadingAid: boolean;
 }
 
 export const DEFAULT_CONTROLS: EngineControls = {
@@ -253,13 +278,26 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // above takes it from a GNSS course and an outage has none. Toggleable, so a
   // judge can watch the corners stop being turned.
   pedestrianHeadingFromMagnetometer: true,
-  // ★ THE COMPASS TRIMS THE GYRO IN A VEHICLE ★ A gyro is the better
-  // instrument over seconds and the worse one over minutes. Second Tier F
-  // ride, a 171 s outage: the heading swung through 135 degrees and the
-  // estimate finished 858 m to the side of a road it had drawn the right
-  // LENGTH of. Slow enough not to fight a real corner, fast enough to pull
-  // back a minute of wander. See vehicleHeadingAidDegPerSec.
-  vehicleHeadingAidDegPerSec: 1,
+  // ★ THE COMPASS CARRIES THE HEADING IN A VEHICLE; THE GYRO CARRIES THE CORNER ★
+  // This used to say the other way round, and the field logs disagreed. Replayed
+  // over both Tier F rides with the course withheld, median heading error in the
+  // first 20 s: gyro alone 15.6 deg, compass alone 8.3 deg — and the gyro's grows
+  // with the outage while the compass's does not. A handlebar mount holds its
+  // offset at R = 0.952 across 23 minutes; it is not the steel box a car is.
+  // This is now a glitch limiter, not the gain. See vehicleHeadingAidDegPerSec.
+  compassHeadingAid: true,
+  vehicleHeadingAidDegPerSec: 8,
+  // How fast the compass closes a heading error, ms. Measured, not chosen:
+  // tau 5 s beat 10, 20 and 40 on the field logs. 0 restores the old
+  // saturate-every-sample behaviour so the change can be A/B'd on the roadside.
+  // See vehicleHeadingAidTauMs.
+  vehicleHeadingAidTauMs: 5_000,
+  // The library default of 180 s is a pedestrian's — a hand that has since
+  // pocketed the phone. A handlebar mount is a bolt. The two outages carrying
+  // almost all the Tier F error are 171 s and 180 s, so the old limit switched
+  // the compass off inside exactly the outages it existed for. See
+  // magneticOffsetMaxAgeMs.
+  magneticOffsetMaxAgeMs: 900_000,
   // ★ A MOUNTED PHONE IS NOT BEING CARRIED, AND THAT IS MEASURABLE ★ Variance,
   // cadence and speed can all be faked by a scooter on a bad road — all three
   // were, and the classifier called PEDESTRIAN at 4.5 km/h. The orientation of
@@ -693,7 +731,9 @@ export function useNavigationEngine(): NavEngineOutput {
         mlVehicleOnly: next.mlVehicleOnly,
         pedestrianHeadingFromGnss: next.pedestrianHeadingFromGnss,
         pedestrianHeadingFromMagnetometer: next.pedestrianHeadingFromMagnetometer,
-        vehicleHeadingAidDegPerSec: next.vehicleHeadingAidDegPerSec,
+        vehicleHeadingAidDegPerSec: next.compassHeadingAid ? next.vehicleHeadingAidDegPerSec : 0,
+        vehicleHeadingAidTauMs: next.vehicleHeadingAidTauMs,
+        magneticOffsetMaxAgeMs: next.magneticOffsetMaxAgeMs,
         mountStillDeg: next.mountStillDeg,
         eskfAccelNoiseDensity: next.eskfAccelNoiseDensity,
         outageSpeedFloorRatio: next.outageSpeedFloorRatio,

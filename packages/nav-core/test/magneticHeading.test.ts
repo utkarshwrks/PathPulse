@@ -185,6 +185,63 @@ describe('MagneticHeading — steering', () => {
     const m = new MagneticHeading();
     expect(m.yawRateToward(0, 90, 100)).toBeNull();
   });
+
+  /**
+   * ★ THE SHAPE OF THE PULL, WHICH IS WHAT WAS WRONG ★
+   *
+   * Without a time constant the rate asked for is `error / dt`, so at 125 Hz a
+   * 2 deg residual and a 90 deg blunder both ask for tens of rad/s and both
+   * come out of the engine's clamp at exactly the ceiling. That is a bang-bang
+   * controller wearing a proportional one's clothes, and it is why the aid had
+   * to be detuned to 1 deg/s to avoid fighting corners — which then left it too
+   * weak to correct anything.
+   */
+  const learned = (targetDeg: number) => {
+    const m = new MagneticHeading();
+    for (let i = 0; i < 8; i++) {
+      const { mag, up } = reading(0);
+      m.push(mag, up);
+      m.observeCourse(i * 1000, 0);
+    }
+    const { mag, up } = reading(targetDeg);
+    m.push(mag, up);
+    return m;
+  };
+
+  it('★ with a time constant the pull is proportional to the error', () => {
+    const small = learned(10).yawRateToward(9000, 0, 8, 5000)!;
+    const large = learned(60).yawRateToward(9000, 0, 8, 5000)!;
+    // Six times the error, six times the correction — within the slop of the
+    // levelling arithmetic. Neither is at a ceiling.
+    expect(large / small).toBeGreaterThan(4);
+    expect(large / small).toBeLessThan(8);
+    // 10° over 5 s is 2°/s = 0.035 rad/s, and nowhere near maxSlewRadPerSec.
+    expect(small).toBeGreaterThan(0.02);
+    expect(small).toBeLessThan(0.06);
+  });
+
+  it('★ without one, a small error and a large one ask for the same thing', () => {
+    // The old behaviour, kept reachable by tauMs = 0 so the regression is
+    // demonstrable rather than asserted. Both saturate maxSlewRadPerSec.
+    const small = learned(10).yawRateToward(9000, 0, 8, 0)!;
+    const large = learned(60).yawRateToward(9000, 0, 8, 0)!;
+    expect(small).toBeCloseTo(large, 6);
+  });
+
+  it('★ a stale offset is still refused, just later', () => {
+    // The library default is 180 s — a pedestrian's grip. A handlebar mount is
+    // a bolt, and the engine raises this; but the limit itself must still bite.
+    const m = new MagneticHeading({ offsetMaxAgeMs: 900_000 });
+    for (let i = 0; i < 8; i++) {
+      const { mag, up } = reading(0);
+      m.push(mag, up);
+      m.observeCourse(i * 1000, 0);
+    }
+    const { mag, up } = reading(30);
+    m.push(mag, up);
+    expect(m.headingDeg(180_000)).not.toBeNull();   // survives a 180 s tunnel
+    expect(m.headingDeg(1_000_000)).toBeNull();     // does not survive forever
+  });
 });
 
 /**

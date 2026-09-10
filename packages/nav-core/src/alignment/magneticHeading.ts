@@ -291,11 +291,36 @@ export class MagneticHeading {
    * This stands in for THAT value, so it takes that sign: a RIGHT turn, which
    * increases the compass bearing, is positive.
    */
-  yawRateToward(tMs: number, fromHeadingDeg: number, dtMs: number): number | null {
+  yawRateToward(
+    tMs: number,
+    fromHeadingDeg: number,
+    dtMs: number,
+    tauMs = 0,
+  ): number | null {
     const target = this.headingDeg(tMs);
     if (target === null || !(dtMs > 0)) return null;
     const errRad = (angleDiff(target, fromHeadingDeg) * Math.PI) / 180;
-    const rate = errRad / (dtMs / 1000);
+    // ★ CLOSE THE ERROR IN tau SECONDS, NOT IN ONE SAMPLE ★
+    //
+    // `errRad / dt` is the rate that lands exactly on the target THIS sample —
+    // a set dressed as a rate. On foot that is what is wanted, because the
+    // magnetometer is the only heading there is and the gyro is not to be
+    // trusted at all. In a vehicle it is wrong in shape: the gyro is the
+    // better instrument over a corner and the compass is the better one over a
+    // minute, and a pull that saturates its own clamp for any error above
+    // 0.008° fights the gyro through every turn at full authority instead of
+    // letting the turn happen and taking the offset out afterwards.
+    //
+    // With a time constant the pull is PROPORTIONAL: at the 5 s the engine
+    // ships, a 9° residual — the median this compass actually shows on a
+    // mounted handset — asks for 1.8°/s and is invisible against a corner's
+    // 30°/s, while a 90° blunder asks for 18°/s and is gone in seconds. That is
+    // the classic complementary split — gyro on the short term, magnetometer
+    // on the long — expressed as the one thing this engine integrates.
+    //
+    // The caller still clamps. See `vehicleHeadingAidDegPerSec`: this sets the
+    // gain, that catches a field disturbance asking for something absurd.
+    const rate = tauMs > 0 ? errRad / (tauMs / 1000) : errRad / (dtMs / 1000);
     const limit = this.config.maxSlewRadPerSec;
     return Math.max(-limit, Math.min(limit, rate));
   }

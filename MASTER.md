@@ -2979,6 +2979,133 @@ Two, and they are **the same estimator**. `@pathpulse/edge-engine` imports
 possible because `nav-core` has **zero dependencies**, which is enforced by a
 linter. §16, §7.1.
 
+## 24.22 §24.19 measured the right thing and drew the wrong conclusion
+
+§24.19 swept the compass trim at 1, 2 and 3 °/s, watched Tier F get
+monotonically worse, and concluded that the gyro is the better instrument and
+the compass must stay weak. The numbers are kept above and they are correct.
+The conclusion was not, and four separate defects were hiding behind it.
+
+**What the compass is actually worth on this vehicle.** Pairing every GNSS
+course above 2 m/s against the tilt-compensated device bearing, across both
+Tier F rides:
+
+| | |
+|---|---|
+| mount offset, circular mean | 20.0° |
+| concentration `R` | 0.952 |
+| residual, median | 8.7° |
+| residual, p90 | 24.4° |
+| offset drift across 23 minutes | 21.5° → 10.8° |
+
+A handlebar mount is not the steel box §24.17 assumed a vehicle to be. The
+offset holds, and the residual does not grow with time because a compass has no
+integration to drift.
+
+Against the gyro, over the same logs, with the course withheld and each
+estimator scored against the course the log recorded — median |heading error|:
+
+| estimator | 0–20 s | 20–40 s | 40–60 s |
+|---|---|---|---|
+| gyro only | 15.6° | 18.0° | 21.8° |
+| gyro + compass, τ = 40 s | 13.7° | 14.7° | 13.8° |
+| gyro + compass, τ = 20 s | 12.5° | 11.6° | 10.5° |
+| gyro + compass, τ = 10 s | 10.7° | 9.8° | 9.3° |
+| **gyro + compass, τ = 5 s** | **8.6°** | **9.5°** | **9.2°** |
+| compass only | 8.3° | 9.3° | 9.6° |
+
+The compass beats the gyro **in the first twenty seconds**, not merely over
+minutes, and the gyro's error grows while the compass's does not. The split
+this project has assumed since Phase 17 is the wrong way round: the compass
+should carry the heading, and the gyro should carry the five seconds inside a
+corner that the compass lags through.
+
+**The four defects.**
+
+1. *The pull was bang-bang.* `yawRateToward` returned `error / dt`, the rate
+   that lands on the target in one sample. At 125 Hz any error above 0.008°
+   saturated the caller's clamp, so a 2° residual and a 90° blunder produced
+   identical corrections. Raising the clamp therefore raised a *constant*
+   fight against every corner — which is exactly the monotonic worsening
+   §24.19 measured, and exactly why the explanation it inferred was wrong.
+   Fixed with a time constant: `error / τ`, so the pull is proportional.
+
+2. *The clamp was the gain.* Because of (1), `vehicleHeadingAidDegPerSec` had
+   to be small enough not to fight a corner, which left it far too small to
+   correct anything. It is now a glitch limiter at 8 °/s — above what an honest
+   correction ever asks (24° at p90, which at τ = 5 s asks 4.8 °/s) and well
+   below a corner's 30 °/s.
+
+3. *The learned offset expired inside the outage.* `MagneticHeading` defaults
+   `offsetMaxAgeMs` to 180 s, and the reason it gives is a pedestrian's: "a
+   grip learned four minutes ago describes a hand that has since put the phone
+   in a pocket." The two outages carrying almost all of the Tier F error are
+   **171 s and 180 s** long. The aid switched itself off in the final seconds
+   of the only outages long enough for it to matter. Raised to 900 s — a mount
+   is a bolt, and the fallback when it expires is a frozen heading, which is
+   not a safer answer, only a differently wrong one.
+
+4. *The compass was levelled against a different vertical from the rest of the
+   engine.* The comment above the call said "levelled against the same gravity
+   everything else uses"; the code passed the raw specific force, while ZUPT,
+   the lean detector, `yawRate`, `toHorizontal` and `removeGravity` all take
+   `attitude.upVector`. On a scooter at 125 Hz the instantaneous force vector
+   is vibration, and under acceleration or lean it is not vertical at all —
+   `attitude.ts` documents that trap in its own words and gates against it.
+   Switching to the tracked vertical moves the residual from 10.1° to 8.7°
+   median and 28.8° to 24.4° at p90.
+
+**A negative result, kept (§23).** The engine's only disturbance test is field
+magnitude inside 25–65 µT, which is a loose net. Two stronger tests were
+measured and neither predicts the error at all:
+
+| deviation from the ride's own median | median residual |
+|---|---|
+| field 0–2 µT / 2–5 / 5–10 | 8.7° / 9.5° / 7.5° |
+| dip 0–2° / 2–5 / 5–10 / 10+ | 7.2° / 9.7° / 9.1° / 9.4° |
+
+So the ~9° residual is not magnetic interference. It is GNSS course noise plus
+genuine mount and lean effects, and no disturbance gate will improve on it.
+9° is close to the floor for this method.
+
+Incidentally, the measured dip is **−37.5°** against a geomagnetic inclination
+at Jabalpur of roughly 38° down. Nothing in the code was tuned to produce that;
+it is an independent check that the tilt compensation is correct.
+
+**What the four fixes are worth.** `pnpm eval:tier-f`, all four rides' outages,
+`OVERALL` being the mean drift across 25 synthetic 60 s windows:
+
+| configuration | Tier F mean | the 171 s outage |
+|---|---|---|
+| compass aid off entirely | 43.2 % | 1786.7 m — 107 % |
+| v0.30 as shipped | 39.6 % | 1490.4 m — 90 % |
+| v0.30 config, levelling fixed (4) | 38.9 % | 377.8 m — 23 % |
+| **all four (v0.31)** | **36.5 %** | **278.6 m — 17 %** |
+
+The headline is not the mean. It is the outage the rider actually complained
+about, decomposed:
+
+| | v0.30 | v0.31 |
+|---|---|---|
+| truth travelled | 1664 m | 1664 m |
+| estimate drew | 2091 m | 2017 m |
+| along-track error | −942 m | −278 m |
+| **cross-track error** | **−1155 m** | **+12 m** |
+| recovery error | 1490.4 m | 278.6 m |
+
+The sideways error is gone. §24.21 left the estimate drawing roughly the right
+LENGTH of path in the wrong DIRECTION; what is left after these four fixes is
+almost entirely along-track, which is a speed problem and a different file.
+
+**And one of the four measured nothing (§23).** Raising `offsetMaxAgeMs` from
+180 s to 900 s — defect (3) — changed the Tier F table by **zero**: 36.5 % with
+it and 36.5 % without, every row identical to the metre. The reasoning survives
+the null result and the change is kept, because the longest outage in these logs
+is 180 s and the expiry is therefore never crossed by more than a hair; a 9 km
+tunnel at 40 km/h is thirteen minutes and would cross it four times over. But it
+is kept on the argument, not on the measurement, and this paragraph exists so
+that distinction is not quietly lost.
+
 ---
 
 *PathPulse · Team Avinya · SIH26168 · ISRO*

@@ -271,9 +271,19 @@ export interface ConstraintFlags {
    * magnetometer trims it, slowly. That is a complementary filter, and it is
    * the standard answer to exactly this pair of error characteristics.
    *
-   * Deliberately slow. At 2 deg/s a genuine 90-degree corner is barely fought
-   * — it is over in three seconds and the trim can move 6 degrees in that time
-   * — while 135 degrees of accumulated wander is pulled back over a minute.
+   * ★ THIS IS A GLITCH LIMITER, NOT THE GAIN ★
+   *
+   * It used to be both, and being both is why it was set to 1. With the pull
+   * shaped as `error / dt` the trim saturated this ceiling for any error above
+   * a hundredth of a degree, so the ceiling WAS the controller and it had to be
+   * small enough not to fight a corner. `vehicleHeadingAidTauMs` now sets the
+   * gain, which leaves this doing the one job a rate limit is good at: a truck
+   * passing, a steel gate, a level crossing — a field disturbance that moves
+   * the bearing 100 deg for two seconds should slew the estimate, not snap it.
+   *
+   * 8 deg/s sits above what an honest correction ever asks (the compass
+   * residual is 24 deg at p90, which at tau = 5 s asks 4.8 deg/s) and far
+   * below a corner (30 deg/s), so it passes the signal and catches the glitch.
    *
    * ★ AND THE DISTORTION IS LEARNED, NOT ASSUMED ★ A vehicle is a lump of
    * steel with a magnet in it, so the raw bearing is wrong by some offset.
@@ -284,6 +294,74 @@ export interface ConstraintFlags {
    * 0 disables it.
    */
   vehicleHeadingAidDegPerSec: number;
+  /**
+   * Time constant over which the compass closes a heading error, ms.
+   *
+   * ★ THE SHAPE OF THE PULL, WHICH THE CLAMP ALONE DOES NOT SET ★
+   *
+   * `vehicleHeadingAidDegPerSec` is a ceiling. On its own the trim asks for
+   * `error / dt` — the rate that lands on the compass THIS sample — so for any
+   * error above a hundredth of a degree it saturates that ceiling and pulls at
+   * full authority regardless of whether the residual is 2 degrees or 90. That
+   * is a bang-bang controller, and its worst moment is a corner: the gyro is
+   * turning the estimate correctly at 30 deg/s and the compass, lagging
+   * through the turn, spends the whole corner pulling the other way.
+   *
+   * With a time constant the pull is proportional to the error it is
+   * correcting, which is what a complementary filter actually is.
+   *
+   * ★ 5 SECONDS, AND THE NUMBER IS MEASURED, NOT CHOSEN ★
+   *
+   * The first draft of this said 20 s, reasoning that the compass should be
+   * slow because it is the noisy instrument. That reasoning was wrong on this
+   * carrier and the field logs say so. Replaying both Tier F rides with the
+   * course withheld over 60 s windows, scoring each estimator against the
+   * course the log actually recorded, median |heading error|:
+   *
+   *     estimator          0-20s   20-40s   40-60s
+   *     gyro only          15.6     18.0     21.8      <- grows, unbounded
+   *     gyro+mag tau 40s   13.7     14.7     13.8
+   *     gyro+mag tau 20s   12.5     11.6     10.5
+   *     gyro+mag tau 10s   10.7      9.8      9.3
+   *     gyro+mag tau  5s    8.6      9.5      9.2      <- best
+   *     compass only        8.3      9.3      9.6      <- flat, bounded
+   *
+   * The compass is not the noisy instrument here. It is BETTER than the gyro
+   * from the very first bin — 8.3 deg against 15.6 — and unlike the gyro it
+   * does not grow. A phone in a handlebar mount on a scooter is not the steel
+   * box this project assumed: the mount offset holds at R = 0.952 across a
+   * 23-minute ride and the residual is 8.7 deg median.
+   *
+   * So the split is the other way round from the one this file used to
+   * describe. The compass carries the heading; the gyro's job is to carry the
+   * five seconds inside a corner that the compass lags through.
+   *
+   * 0 keeps the old one-sample behaviour, so the change is measurable rather
+   * than assumed.
+   */
+  vehicleHeadingAidTauMs: number;
+  /**
+   * How stale a learned mount offset may be before the compass goes quiet, ms.
+   *
+   * ★ THE ONE THAT EXPIRED EXACTLY WHEN IT WAS NEEDED ★
+   *
+   * `MagneticHeading` defaults this to 180 s, and the reason it gives is a
+   * pedestrian reason: "a grip learned four minutes ago describes a hand that
+   * has since put the phone in a pocket." True of a hand. A handlebar mount is
+   * a bolt, and it is the same bolt three minutes later.
+   *
+   * The cost of the pedestrian default was concrete. The two outages carrying
+   * almost all of the Tier F error are 171 s and 180 s long, so the offset ran
+   * out of validity inside both of them, `headingDeg` began returning null, and
+   * the aid switched itself off in the last seconds of the only outages long
+   * enough for it to matter.
+   *
+   * On foot the fallback when this expires is a FROZEN heading — the star
+   * shaped trail — which is not a safer answer than a stale offset, only a
+   * differently wrong one. So the limit stays, because an offset is not
+   * eternal, but it is set past the length of a tunnel rather than under it.
+   */
+  magneticOffsetMaxAgeMs: number;
   /**
    * Below this much recent swing of the device's own vertical, the handset is
    * in a mount and its carrier cannot be on foot, degrees.
@@ -831,7 +909,9 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlVehicleOnly: true,
   pedestrianHeadingFromGnss: true,
   pedestrianHeadingFromMagnetometer: true,
-  vehicleHeadingAidDegPerSec: 1,
+  vehicleHeadingAidDegPerSec: 8,
+  vehicleHeadingAidTauMs: 5_000,
+  magneticOffsetMaxAgeMs: 900_000,
   mountStillDeg: 6,
   eskfAccelNoiseDensity: 0,
   outageSpeedFloorRatio: 0.5,
@@ -1016,7 +1096,9 @@ export class NavigationEngine {
    */
   private readonly mlBuffer = new SpeedWindowBuffer(ML_WINDOW_SAMPLES, true);
   private readonly mlSmoother = new SpeedSmoother(5);
-  private readonly magHeading = new MagneticHeading();
+  private readonly magHeading: MagneticHeading;
+  /** Last compass trim actually applied, rad/s. Diagnostics only. */
+  private lastMagneticTrimRadPerSec = 0;
   private readonly mlCalibrator = new MlSpeedCalibrator();
   /** Raw model output before calibration, so the calibrator scores the model. */
   private lastMlRawMps = Number.NaN;
@@ -1160,6 +1242,11 @@ export class NavigationEngine {
 
   constructor(config: Partial<EngineConfig> = {}) {
     this.config = { ...DEFAULT_ENGINE_CONFIG, ...config };
+    // See `magneticOffsetMaxAgeMs`: the library default is a pedestrian's, and
+    // it expired inside the two outages this engine exists for.
+    this.magHeading = new MagneticHeading({
+      offsetMaxAgeMs: this.config.magneticOffsetMaxAgeMs,
+    });
     this.motion = new MotionContextDetector({ mountStillDeg: this.config.mountStillDeg });
     // See `eskfAccelNoiseDensity`. 0 means "as published", so the default
     // behaviour is byte-identical to what every existing figure measured.
@@ -1301,6 +1388,27 @@ export class NavigationEngine {
      * slow traffic became the verdict for a whole outage with nothing on
      * screen to say so. See MotionContextDetector.latched.
      */
+    /**
+     * What the compass is reading, what it has learned, and what it is doing
+     * about it.
+     *
+     * ★ IF IT CANNOT BE SEEN FIRING ON THE ROADSIDE, IT IS NOT SHIPPABLE ★
+     * The compass aid now carries the heading through an outage, and every one
+     * of its failure modes is silent from the outside: no magnetometer on the
+     * handset, a field disturbed by a truck, an offset never learned because
+     * the ride began in a tunnel, an offset gone stale. All four look exactly
+     * like "the heading is drifting" unless the reason is on screen.
+     *
+     * `magneticTrimDegPerSec` is the correction actually being applied, signed,
+     * so a rider can watch it go to zero on a straight road and rise through a
+     * blunder — the difference between an aid that is working and an aid that
+     * is merely enabled.
+     */
+    magneticBearingDeg: number | null;
+    magneticOffsetDeg: number | null;
+    magneticObservations: number;
+    magneticReason: string;
+    magneticTrimDegPerSec: number;
     contextLatched: boolean;
     contextLatchedAt: number | null;
     matchedRoadName: string | null;
@@ -1409,6 +1517,11 @@ export class NavigationEngine {
       roadSpeedCeilingSource: this.roadSpeedCeilingSource,
       forcedTurns: this.turns.forcedCount,
       eskfResets: this.eskfResets,
+      magneticBearingDeg: this.magHeading.state.deviceBearingDeg,
+      magneticOffsetDeg: this.magHeading.state.offsetDeg,
+      magneticObservations: this.magHeading.state.observations,
+      magneticReason: this.magHeading.state.reason,
+      magneticTrimDegPerSec: (this.lastMagneticTrimRadPerSec * 180) / Math.PI,
       contextLatched: this.motion.latched,
       contextLatchedAt: this.motion.latchedAt,
       matchedRoadName: this.lastMatch?.name ?? this.lastMatch?.wayId ?? null,
@@ -2081,14 +2194,35 @@ export class NavigationEngine {
       this.mlBuffer.push(sample.t, ax, ay, az, gx, gy, gz);
 
       // ★ THE COMPASS, LEVELLED AGAINST THE SAME GRAVITY EVERYTHING ELSE USES ★
-      // Fed the raw specific force rather than a gravity estimate of its own,
-      // so this file's idea of "down" and the estimator's cannot drift apart.
+      //
+      // This comment was already here and the code under it did not do what it
+      // said. It passed `ax, ay, az` — the RAW specific force — while ZUPT, the
+      // lean detector, `yawRate`, `toHorizontal` and `removeGravity` all take
+      // `attitude.upVector`. The compass was the one consumer levelling itself
+      // against a different vertical from the rest of the engine, which is
+      // precisely what the comment claims cannot happen.
+      //
+      // ★ AND THE RAW ONE IS THE WRONG VERTICAL, TWICE OVER ★
+      //
+      // A scooter at 125 Hz is vibration: the instantaneous force vector swings
+      // several degrees per sample and the bearing swings with it. Worse, under
+      // acceleration or in a lean the resultant is not vertical at all —
+      // `attitude.ts` documents that trap in its own words ("when a car
+      // accelerates at 2 m/s^2 ... tilts by about 11 degrees"), gates its
+      // correction on |g| being near 9.81, and propagates through the gap on
+      // the gyro. That is the vertical this should have been using all along.
+      //
+      // Measured on the field logs, against the recorded GNSS course: the
+      // levelled bearing's median residual falls from 10.1 deg to 8.7 deg and
+      // p90 from 28.8 to 24.4, using nothing but a smoothed vertical.
+      //
       // Absent on every source but the Phase 15 native loop, and absence is
       // handled by MagneticHeading reporting null rather than by a branch here.
       if (sample.mag) {
+        const [ux, uy, uz] = this.attitude.upVector;
         this.magHeading.push(
           { x: sample.mag.mx, y: sample.mag.my, z: sample.mag.mz },
-          { x: ax, y: ay, z: az },
+          { x: ux, y: uy, z: uz },
         );
       }
     }
@@ -4104,10 +4238,22 @@ export class NavigationEngine {
    * an unknown constant, and steering toward it would be worse than drifting.
    */
   private magneticTrimRate(tMs: number, dtMs: number): number {
-    const rate = this.magHeading.yawRateToward(tMs, this.dr.current.headingDeg, dtMs);
-    if (rate === null || !Number.isFinite(rate)) return 0;
+    const rate = this.magHeading.yawRateToward(
+      tMs,
+      this.dr.current.headingDeg,
+      dtMs,
+      this.config.vehicleHeadingAidTauMs,
+    );
+    if (rate === null || !Number.isFinite(rate)) {
+      this.lastMagneticTrimRadPerSec = 0;
+      return 0;
+    }
     const limit = (this.config.vehicleHeadingAidDegPerSec * Math.PI) / 180;
-    return Math.max(-limit, Math.min(limit, rate));
+    const trimmed = Math.max(-limit, Math.min(limit, rate));
+    // Kept for `diagnostics.magneticTrimDegPerSec` — the aid has to be visible
+    // doing something, not merely visible being on.
+    this.lastMagneticTrimRadPerSec = trimmed;
+    return trimmed;
   }
 
   private runSpeedModel(tMs: number): number | undefined {

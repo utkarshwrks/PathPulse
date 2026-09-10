@@ -22,6 +22,13 @@ import { DEFAULT_CONTROLS, type EngineDiagnostics } from '@/hooks/useNavigationE
 afterEach(cleanup);
 
 const DIAGNOSTICS: EngineDiagnostics = {
+  // A compass that has learned its mount and is trimming gently — the state a
+  // rider should see on a straight road with the aid working.
+  magneticBearingDeg: 41,
+  magneticOffsetDeg: 20,
+  magneticObservations: 848,
+  magneticReason: 'ok',
+  magneticTrimDegPerSec: 0.4,
   contextLatched: false,
   contextLatchedAt: null,
   roadSpeedCeilingMps: 52 / 3.6,

@@ -345,6 +345,50 @@ function SensorsTab({
               : 'open'
           }
         />
+        {/*
+          ★ THE COMPASS, VISIBLE DOING SOMETHING ★
+
+          The magnetometer now carries the heading through an outage — measured
+          on both field rides, gyro alone drifts to 21.8° median by the first
+          minute while the compass sits flat at 9.6°. Every way that can fail is
+          silent from outside the phone: no magnetometer on this handset, a
+          field disturbed by a truck, an offset never learned because the ride
+          began underground, an offset gone stale. All four look identical to
+          "the heading is drifting" unless the reason is on screen.
+
+          MOUNT OFFSET is the constant it learned — the angle the phone sits at
+          in its cradle, measured free against the GNSS course. On the second
+          Jabalpur ride it held 20.0° across 23 minutes.
+
+          TRIM is the correction being applied right now, signed. Watch it fall
+          to nothing on a straight road and rise through a blunder: that is the
+          difference between an aid that is working and an aid that is merely
+          switched on.
+        */}
+        <Row
+          k="COMPASS"
+          v={
+            diagnostics.magneticBearingDeg === null
+              ? diagnostics.magneticReason
+              : `${diagnostics.magneticBearingDeg.toFixed(0)}°`
+          }
+        />
+        <Row
+          k="MOUNT OFFSET"
+          v={
+            diagnostics.magneticOffsetDeg === null
+              ? 'not learned yet'
+              : `${diagnostics.magneticOffsetDeg.toFixed(0)}° · ${diagnostics.magneticObservations} fixes`
+          }
+        />
+        <Row
+          k="COMPASS TRIM"
+          v={
+            Math.abs(diagnostics.magneticTrimDegPerSec) < 0.05
+              ? '—'
+              : `${diagnostics.magneticTrimDegPerSec > 0 ? '+' : ''}${diagnostics.magneticTrimDegPerSec.toFixed(1)}°/s`
+          }
+        />
       </Group>
 
       {/*
@@ -553,6 +597,11 @@ const TOGGLES: Array<{
     key: 'useMlSpeed', group: 'core',
     label: 'AI speed model',
     hint: 'The IO-VNBD-trained CNN, used for speed when GNSS is gone. Inert until the model loads — see the SENSORS tab.',
+  },
+  {
+    key: 'compassHeadingAid', group: 'core',
+    label: 'Compass heading',
+    hint: 'The magnetometer carries the heading through an outage; the gyro carries the corner. Measured on both field rides: gyro alone 15.6° median error, compass 8.3° — and the gyro\u2019s grows, the compass\u2019s does not. Off = gyro only.',
   },
   {
     key: 'roadSpeedClamp', group: 'core',
