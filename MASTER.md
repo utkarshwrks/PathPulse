@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.30** · APK 7.43 MB · 1,787 tests · 60,224 lines
-**39.6 % mean drift on OUR OWN PHONE · 29.3 % on real vehicle sensors · 19.9 % simulated**
+**Build v0.31** · 1,790 tests · 60,224 lines
+**36.5 % mean drift on OUR OWN PHONE · 29.3 % on real vehicle sensors · 19.9 % simulated**
 
 ---
 
@@ -1817,7 +1817,7 @@ Every claim this project makes, and exactly what backs it.
 
 | Claim | Tier | Backing | Caveat |
 |---|---|---|---|
-| 39.6 % mean drift | **F** | `pnpm eval:tier-f` | **Our own handset, our own vehicle, our own roads.** The tier §22 said did not exist. It is the arbiter now |
+| 36.5 % mean drift | **F** | `pnpm eval:tier-f` | **Our own handset, our own vehicle, our own roads.** The tier §22 said did not exist. It is the arbiter now. Was 39.6 % before the compass carried the heading — §24.22 |
 | 19.9 % mean drift | **S** | `pnpm ablation` | Simulated sensors, with `hmmMatch` now shipping. The greedy matcher it replaced measures 6.1 % on this corpus — recorded, and see §24.12 for why Tier S is the wrong arbiter for it |
 | 29.3 % mean drift | **R** | `pnpm eval:tier-r` | Real vehicle sensors, **not our handset**. Was 30.9 % before the road-class speed ceiling and the HMM — §24.12 |
 | 0.5 m from a road | **S** | `pnpm eval:offroad` | Simulated |
