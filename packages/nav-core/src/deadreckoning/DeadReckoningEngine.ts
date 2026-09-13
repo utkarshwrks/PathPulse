@@ -135,6 +135,58 @@ export interface DeadReckoningConfig {
   outageSpeedCeiling: boolean;
   /** Fraction of the anchor speed the estimate may exceed it by. See above. */
   outageSpeedRatio: number;
+  /**
+   * A measured speed below this, m/s, does not become the CEILING's anchor.
+   * 0 means every measurement does, including a standstill.
+   *
+   * ★ THE RED LIGHT ARRIVED THROUGH THE OTHER DOOR ★
+   *
+   * `measuredSpeedMps` is documented as deliberately not zeroed by a ZUPT: "a
+   * red light in the middle of a tunnel does not make the pre-tunnel cruise
+   * speed unknowable, and folding the stop into the anchor would cap the
+   * pull-away at walking pace for the rest of the outage." That is the right
+   * argument and it was only ever applied to a stop DETECTED inside the
+   * outage. A stop the receiver MEASURED — the light is before the tunnel,
+   * the last Doppler reads 0.0 — walked straight into the anchor, and the
+   * ceiling became 0 × 1.35 + 2.5 = 2.5 m/s for as long as the outage lasted.
+   *
+   * Third Tier F ride, the window at +110 s: stopped at a signal when the
+   * fixes were withheld, pulled away nine seconds in, and the estimate sat at
+   * exactly 2.5 m/s for the next forty seconds while the vehicle did 10 and
+   * the speed model — for once in domain — said 7 to 16. Drift 87.6 %, of
+   * which the heading contributed 41° and the speed −73 %. A city ride stops
+   * at every signal; on this one 7 % of all fixes read zero.
+   *
+   * So the ceiling anchors on the speed the vehicle was measured MOVING at.
+   * The floor keeps the plain anchor — a measured zero is a real claim about
+   * how slowly a vehicle may be going, and the floor must not overrule it —
+   * and the two anchors age separately.
+   */
+  outageCeilingAnchorMinMps: number;
+  /**
+   * The ceiling's anchor is the FASTEST moving measurement within this many
+   * ms of the newest one, not merely the newest. 0 means the newest only.
+   *
+   * With the standstill excluded, the same window anchored on the 2.2 m/s
+   * crawl into the signal instead, and the estimate sat at 2.2 × 1.35 + 2.5 =
+   * 5.5 m/s. A vehicle that was doing 8 m/s a minute ago and then queued for
+   * a light is plausibly doing 8 m/s again once it pulls away — the queue is
+   * evidence about the signal, not about the road. A bound is meant to be
+   * generous; the most the vehicle was recently seen doing is the honest
+   * answer to "how fast could it be going now".
+   *
+   * ★ OFF — A KEPT NEGATIVE RESULT ★ Measured at 60 s across all three Tier F
+   * rides against the newest-only anchor: 46.4 % → 60.8 %, 37.1 % → 39.8 %,
+   * 35.1 % → 48.7 %. The argument above is sound and the number says the
+   * ceiling is doing more work than the argument credits: on this vehicle
+   * the speed model reads two to three times the truth and integration
+   * accelerates under braking, and a ceiling anchored on the fastest recent
+   * minute lets both run. The 171 s outage that §24.22 left at 278.6 m came
+   * back at 19.1 m under the looser bound — and the 48 s one went from 103 m
+   * to 275 m. Kept wired so the trade can be measured again on a ride where
+   * the speed chain has been fixed.
+   */
+  outageCeilingLookbackMs: number;
   /** Absolute headroom above the anchor, m/s. Carries the low-speed end. */
   outageSpeedGainMps: number;
   /** Time over which the headroom opens from nothing to full, ms. */
@@ -218,6 +270,8 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   mlSpeedMaxDecelMps2: 8,
   outageSpeedCeiling: false,
   outageSpeedRatio: 1.35,
+  outageCeilingAnchorMinMps: 0.5,
+  outageCeilingLookbackMs: 0,
   outageSpeedGainMps: 2.5,
   outageSpeedRampMs: 20_000,
   outageSpeedFloorRatio: 0.5,
@@ -318,6 +372,13 @@ export interface DeadReckoningState {
    */
   measuredSpeedMps: number;
   measuredSpeedAgeMs: number;
+  /**
+   * The ceiling's anchor — the fastest the vehicle was recently measured
+   * MOVING — and how long ago that measurement was. See
+   * `outageCeilingAnchorMinMps` and `outageCeilingLookbackMs`.
+   */
+  movingSpeedMps: number;
+  movingSpeedAgeMs: number;
 }
 
 /**
@@ -342,9 +403,43 @@ export class DeadReckoningEngine {
     unaidedMs: 0,
     measuredSpeedMps: 0,
     measuredSpeedAgeMs: 0,
+    movingSpeedMps: 0,
+    movingSpeedAgeMs: 0,
   };
 
   private config: DeadReckoningConfig;
+  /**
+   * Record a measured speed as the anchors' latest. See
+   * `outageCeilingAnchorMinMps` for why there are two.
+   */
+  private anchorMeasuredSpeed(speedMps: number): void {
+    if (!Number.isFinite(speedMps)) return;
+    const v = Math.max(0, speedMps);
+    this.state.measuredSpeedMps = v;
+    this.state.measuredSpeedAgeMs = 0;
+    if (v < this.config.outageCeilingAnchorMinMps) return;
+    // Moving measurements, newest last, with their age relative to this one.
+    // The newest is always kept: with nothing inside the lookback, the last
+    // time the vehicle was seen moving is still the best anchor there is.
+    const lookback = this.config.outageCeilingLookbackMs;
+    const since = this.movingHistorySinceMs;
+    this.movingHistory = this.movingHistory
+      .map((m) => ({ v: m.v, ageMs: m.ageMs + since }))
+      .filter((m) => m.ageMs <= lookback);
+    this.movingHistory.push({ v, ageMs: 0 });
+    this.movingHistorySinceMs = 0;
+    // The anchor is the fastest in the window, and it ages from ITS sample.
+    let best = this.movingHistory[0]!;
+    for (const m of this.movingHistory) if (m.v > best.v) best = m;
+    this.state.movingSpeedMps = best.v;
+    this.state.movingSpeedAgeMs = best.ageMs;
+  }
+
+  /** See `anchorMeasuredSpeed`. Ages are relative to the newest entry. */
+  private movingHistory: Array<{ v: number; ageMs: number }> = [];
+  /** Time since the newest entry in `movingHistory`, ms. */
+  private movingHistorySinceMs = 0;
+
   /** Rolling window of recent good fixes, newest last. */
   private recentFixes: TrustedFix[] = [];
   private lastTrustedSpeed = 0;
@@ -381,10 +476,7 @@ export class DeadReckoningEngine {
     this.lastTrustedSpeed = fix.speedMps;
     // The ceiling's anchor is a MEASUREMENT, and this is one. See
     // `outageSpeedCeiling`.
-    if (Number.isFinite(fix.speedMps)) {
-      this.state.measuredSpeedMps = Math.max(0, fix.speedMps);
-      this.state.measuredSpeedAgeMs = 0;
-    }
+    this.anchorMeasuredSpeed(fix.speedMps);
   }
 
   /**
@@ -431,10 +523,7 @@ export class DeadReckoningEngine {
       n: fix.speedMps * Math.cos(h),
     };
     this.state.unaidedMs = 0;
-    if (Number.isFinite(fix.speedMps)) {
-      this.state.measuredSpeedMps = Math.max(0, fix.speedMps);
-      this.state.measuredSpeedAgeMs = 0;
-    }
+    this.anchorMeasuredSpeed(fix.speedMps);
     this.initialised = true;
   }
 
@@ -503,8 +592,7 @@ export class DeadReckoningEngine {
     // vehicle going when the fixes stopped" that seeds the dynamics two lines
     // up — not the single last fix, which is the one taken under the
     // overpass. See `outageSpeedCeiling`.
-    this.state.measuredSpeedMps = Math.max(0, medianSpeed);
-    this.state.measuredSpeedAgeMs = 0;
+    this.anchorMeasuredSpeed(medianSpeed);
     this.lastTrustedSpeed = medianSpeed;
     this.initialised = true;
     return true;
@@ -539,6 +627,8 @@ export class DeadReckoningEngine {
     // Ages on every step and is reset ONLY by a measurement — not by a ZUPT.
     // See `measuredSpeedMps`.
     this.state.measuredSpeedAgeMs += dtMs;
+    this.state.movingSpeedAgeMs += dtMs;
+    this.movingHistorySinceMs += dtMs;
 
     // --- heading -----------------------------------------------------------
     // When the caller has already projected the gyro onto the true vertical and
@@ -602,8 +692,7 @@ export class DeadReckoningEngine {
         // A held speed is a stale measurement and must not re-anchor the
         // ceiling either — the same reasoning as `gnssSpeedWeight`, applied to
         // the other quantity that has to survive the outage.
-        this.state.measuredSpeedMps = Math.max(0, gnssSpeedMps);
-        this.state.measuredSpeedAgeMs = 0;
+        this.anchorMeasuredSpeed(gnssSpeedMps);
       } else this.state.unaidedMs += dtMs;
     } else if (opts.stepSpeedMps !== undefined && Number.isFinite(opts.stepSpeedMps)) {
       inferredThisSample = true;
@@ -705,10 +794,18 @@ export class DeadReckoningEngine {
       // the highway one (measured at 100), which is the whole distinction.
       // See `roadClampFloorDecayMps2`. The floor is what the receiver measured,
       // decayed by what a braking vehicle could plausibly have shed since.
-      const ageS = Math.max(0, this.state.measuredSpeedAgeMs) / 1000;
+      //
+      // ★ THE MOVING ANCHOR, FOR THE SAME REASON THE CEILING USES IT ★ The
+      // argument above is that a measurement outranks a tag. A vehicle
+      // measured at 8 m/s on this road a minute ago, then measured at 0 at
+      // the signal, was still measured at 8 m/s on this road; the zero is
+      // about the signal. With the plain anchor the third ride's red-light
+      // window was held to a `residential` 20 km/h — 5.5 m/s — for the whole
+      // pull-away while the vehicle did 10. See `outageCeilingAnchorMinMps`.
+      const ageS = Math.max(0, this.state.movingSpeedAgeMs) / 1000;
       const floor = Math.max(
         0,
-        this.state.measuredSpeedMps - this.config.roadClampFloorDecayMps2 * ageS,
+        this.state.movingSpeedMps - this.config.roadClampFloorDecayMps2 * ageS,
       );
       speed = Math.min(speed, Math.max(opts.roadSpeedCeilingMps, floor));
     }
@@ -852,12 +949,13 @@ export class DeadReckoningEngine {
    * why it is a bound rather than a fit.
    */
   inferredSpeedCeiling(): number {
-    const anchor = Number.isFinite(this.state.measuredSpeedMps)
-      ? Math.max(0, this.state.measuredSpeedMps)
+    // The MOVING anchor, not the plain one. See `outageCeilingAnchorMinMps`.
+    const anchor = Number.isFinite(this.state.movingSpeedMps)
+      ? Math.max(0, this.state.movingSpeedMps)
       : 0;
     const ramp = Math.max(
       0,
-      Math.min(1, this.state.measuredSpeedAgeMs / Math.max(1, this.config.outageSpeedRampMs)),
+      Math.min(1, this.state.movingSpeedAgeMs / Math.max(1, this.config.outageSpeedRampMs)),
     );
     const headroom =
       ramp * (anchor * (this.config.outageSpeedRatio - 1) + this.config.outageSpeedGainMps);
@@ -928,8 +1026,12 @@ export class DeadReckoningEngine {
       unaidedMs: 0,
       measuredSpeedMps: 0,
       measuredSpeedAgeMs: 0,
+      movingSpeedMps: 0,
+      movingSpeedAgeMs: 0,
     };
     this.recentFixes = [];
+    this.movingHistory = [];
+    this.movingHistorySinceMs = 0;
     this.lastTrustedSpeed = 0;
     this.initialised = false;
   }

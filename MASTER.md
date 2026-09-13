@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.31** · 1,790 tests · 60,224 lines
-**36.5 % mean drift on OUR OWN PHONE · 29.3 % on real vehicle sensors · 19.9 % simulated**
+**Build v0.32** · 1,796 tests · 60,224 lines
+**39.7 % mean drift on OUR OWN PHONE across three rides · 29.0 % on real vehicle sensors · 19.9 % simulated**
 
 ---
 
@@ -2809,6 +2809,13 @@ Tier R says heading is good (slope 1.002, 0.9°) and speed is not: the error is
 **3–4× larger along-track than cross-track**, and the spread runs from 6.9 % to
 107.2 % depending on whether the window is free-flowing or stop-go.
 
+Tier F now says the same thing in its own numbers (§24.23): with the compass
+honest, every synthetic window's heading error sits at 5–30° and its speed
+bias at −73 % to +158 %, both signs, and on the same vehicle. Two mechanisms
+are measured and named there — the speed model reading two to three times the
+truth on a two-wheeler, and integration *accelerating under braking* as the
+handlebar dives — and neither is fixed.
+
 The plausible directions, none yet measured:
 
 - feed **M1's speed estimate** into the filter with a proper covariance during
@@ -3105,6 +3112,167 @@ is 180 s and the expiry is therefore never crossed by more than a hair; a 9 km
 tunnel at 40 km/h is thirteen minutes and would cross it four times over. But it
 is kept on the argument, not on the measurement, and this paragraph exists so
 that distinction is not quietly lost.
+
+## 24.23 The third Tier F ride: a compass the phone had not calibrated, and a red light before the tunnel
+
+21.5 minutes, 163,327 samples, 781 fixes, six deliberate outages of 63, 56,
+54, 78, 108 and 164 s. Slower and stoppier than the second ride — median
+4.0 m/s against 5.7, and 7 % of all fixes reading zero, which is a city at
+signals. Scored as v0.31 shipped it:
+
+| log | n | mean % | median % |
+|---|---|---|---|
+| `drive_20260909_1942` | 7 | 35.1 | 27.2 |
+| `drive_20260909_2229` | 18 | 37.1 | 36.3 |
+| **`drive_20260911_2141`** | 12 | **52.6** | 51.2 |
+
+Fifteen points worse than the ride v0.31 was tuned on. `pnpm eval:tier-f
+--windows` now prints a speed bias and a heading error beside every window —
+the same split `drdiag.ts` makes, because a drift percentage says how wrong
+and not which of the two independent things was — and the split is not
+subtle:
+
+```
+  +  20s  drift  82.5 %   speed -15%   hdg  55°
+  +  50s  drift  62.6 %   speed +65%   hdg  11°
+  +  80s  drift  99.0 %   speed +47%   hdg  60°
+  + 110s  drift  87.4 %   speed -73%   hdg  45°
+  + 260s  drift  75.6 %   speed +18%   hdg  54°
+  + 290s  drift  51.2 %   speed  -1%   hdg  41°
+  + 320s  drift  39.1 %   speed -40%   hdg  12°
+  + 470s  drift  48.4 %   speed -32%   hdg  29°
+  + 770s  drift  21.1 %   speed -39%   hdg  13°
+  + 980s  drift   8.6 %   speed +51%   hdg  16°
+  +1010s  drift  30.8 %   speed  -5%   hdg  18°
+  +1040s  drift  24.9 %   speed -20%   hdg  16°
+```
+
+The first seven minutes carry heading errors of 41–60°; the rest of the ride
+carries 13–29°, which is what §24.22 measured. Something was wrong with the
+heading for seven minutes and then stopped being wrong.
+
+### The magnetometer was not calibrated, and the gate could not see it
+
+Field magnitude by minute, against the 46 µT both earlier rides held
+throughout:
+
+```
+  min   0    1    2    3    4    5    6    7    8 ...
+  |B|  69   78   94   86   58   85   49   47   47 ...
+  dip -17  -22  -23  -22  -55  -43  -46  -32  -33 ...
+```
+
+Android's `TYPE_MAGNETIC_FIELD` is the *calibrated* sensor, and the
+calibration it applies is a hard-iron offset the OS learns as the phone moves.
+Until it has one — after a reboot, after a spell beside a magnet — every sample
+carries a constant vector the Earth did not put there. At minute six the OS
+caught up, the field stepped to 46 µT, and stayed there.
+
+The engine's disturbance test is per sample: 25–65 µT, or the bearing is
+refused. A constant added to a rotating field does not fail that test all the
+time. It fails it at some headings and passes at others — 34 %, 25 %, 3 %,
+4 %, 69 %, 40 % of samples in minutes one to six — and on every sample it
+passed, the bearing was wrong by an amount that depended on the heading. Six
+passed in the first ten seconds, on one heading, agreed with each other
+perfectly, and taught a mount offset of **3°**. The true offset, measured after
+the calibration settled, is **334°**. The compass then steered the +20 s
+window from 1° of error to **111°** at full authority, and §24.22's whole
+argument for giving it that authority is that it does not integrate and cannot
+drift.
+
+**The fix is not a tighter band.** A calibrated compass is in band on
+95–100 % of samples in every minute of two clean rides and the clean half of
+this one. So the test is not "is this sample in band" but "has the field
+*been* in band": a running fraction over the last minute, `minFieldHealth`,
+and below 0.9 the compass is withheld — bearing, offset learning, everything.
+It falls back to the gyro, which is the arm every earlier version measured. The
+same shape as `mlSpeedTrustGate`: the instrument is not asserted until the
+evidence says it is describing this ride.
+
+**Measured.** Tier F, the new ride only, 12 windows:
+
+| | mean % | +20 s | +80 s | +260 s |
+|---|---|---|---|---|
+| v0.31 | 52.6 | 82.5 (hdg 55°) | 99.0 (hdg 60°) | 75.6 (hdg 54°) |
+| field health ≥ 0.9 | 46.8 | **13.6 (hdg 5°)** | **47.5 (hdg 12°)** | 126.1 (hdg 107°) |
+
+The +20 s window is the case it was built for: a gyro carrying a 60 s outage
+to 5° once nothing was lying to it. The +260 s window got *worse*, and that is
+recorded rather than averaged away. Between 250 and 300 s the raw gyroscope
+integrates to **+297°** while the GNSS course turns −66° then +81°, and the
+phone's own vertical swings by 15–20°. The handset was turned in its mount —
+by a hand, or by a mount that let go for a moment — and for that stretch there
+is no heading instrument on the phone at all. v0.31 scored 75 % there because
+a garbage compass partly cancelled a garbage gyro, which is luck rather than a
+mechanism, and luck is not kept.
+
+**A negative result, kept (§23).** Before the field-health gate, the first
+idea was a *concentration* gate: the circular concentration `R` of the recent
+offset observations, on the argument that an uncalibrated compass disagrees
+with the course and a calibrated one does not. Wired, tested, and measured at
+0.7, 0.8 and 0.9 — 49.0 %, 56.1 %, 57.5 % against 52.6 %. It could not see the
+first-ten-seconds case (six observations on one heading agree perfectly
+whatever the calibration) and at 0.9 it began withholding the healthy compass
+too. Left in the code at 0, because the measurement exists and the next person
+to have the idea should find the number rather than the idea.
+
+### The red light before the tunnel
+
+The +110 s window has the speed at **−73 %** with the compass out of the
+picture, and the log says why: the vehicle was queued at a signal reading
+0.0 m/s when the fixes were withheld, and pulled away nine seconds later. From
+`DeadReckoningEngine`'s own documentation of the ceiling's anchor:
+
+> A red light in the middle of a tunnel does not make the pre-tunnel cruise
+> speed unknowable, and folding the stop into the anchor would cap the
+> pull-away at walking pace for the rest of the outage.
+
+That is the right argument and it was only ever applied to a stop *detected*
+inside the outage. A stop the receiver *measured* — the light before the
+tunnel — walked straight into the anchor through the other door, and the
+ceiling became 0 × 1.35 + 2.5 = **2.5 m/s** for the rest of the outage. The
+estimate sat at exactly 2.5 for forty seconds while the vehicle did 10 and the
+speed model, for once in domain, said 7 to 16.
+
+The ceiling now anchors on the last speed the vehicle was measured *moving*
+at (`outageCeilingAnchorMinMps`, 0.5 m/s); the floor keeps the plain anchor,
+because a measured zero is a real claim about how slowly a vehicle may be
+going and the floor must not overrule it. Pinned by a test that reproduces the
+2.5 m/s cap under the old default, so the regression is visible if it returns.
+
+**And the generous version of the same idea measured worse.** Anchoring on the
+*fastest* moving measurement of the last minute — "the queue is evidence
+about the signal, not about the road" — is the better argument, and Tier F
+refused it on all three rides: 46.4 → 60.8 %, 37.1 → 39.8 %, 35.1 → 48.7 %.
+The 171 s outage §24.22 left at 278.6 m came back at **19.1 m** under the
+looser bound, and the 48 s one went from 103 m to 275 m. The ceiling is doing
+more work than its argument credits, because on this vehicle the speed model
+reads two to three times the truth and integration *accelerates under
+braking* — measured on the second ride's +710 s window, the vehicle braking at
+−0.75 m/s² while the integrated speed rose at +0.33, which is a handlebar
+diving under the front brake read as forward acceleration. `outageCeilingLookbackMs`
+stays wired at 0.
+
+### What the third ride leaves
+
+Tier F, all three rides, 37 windows:
+
+| | Tier F mean | new ride | 2229 | 1942 | Tier S `full` | Tier R |
+|---|---|---|---|---|---|---|
+| v0.31 | 41.7 % | 52.6 | 37.1 | 35.1 | 19.9 % | 29.3 % |
+| **v0.32** | **39.7 %** | **46.4** | 37.1 | 35.1 | 19.9 % | 29.0 % |
+
+Tier S does not move, and that is the point: the simulator has no
+magnetometer and no measured standstill ahead of a window, so both mechanisms
+are inert there. Tier R moves by 0.3 — one S3c window enters its outage from a
+measured crawl, and the moving anchor lets it pull away. With the heading honest for the whole ride, what
+is left on every window is the speed column — ±20 to 160 %, both signs — and
+that is §28.2, which this ride has now measured rather than argued.
+
+Two things the harness gained: `--log <name>` runs one ride in a third of the
+time, and a partial run (one log, or any `--set`) no longer overwrites
+`docs/benchmarks-tier-f.md`, because a sweep that rewrites the table every
+number in this document points at is how a sweep becomes the record.
 
 ---
 

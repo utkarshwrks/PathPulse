@@ -118,6 +118,8 @@ export interface EngineDiagnostics {
   magneticBearingDeg: number | null;
   magneticOffsetDeg: number | null;
   magneticObservations: number;
+  /** Fraction of the last minute's samples carrying an Earth-strength field. */
+  magneticFieldHealth: number;
   magneticReason: string;
   magneticTrimDegPerSec: number;
   contextLatched: boolean;
@@ -184,6 +186,7 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   magneticBearingDeg: null,
   magneticOffsetDeg: null,
   magneticObservations: 0,
+  magneticFieldHealth: 0,
   magneticReason: 'no magnetometer sample yet',
   magneticTrimDegPerSec: 0,
   contextLatched: false,
@@ -298,6 +301,27 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // the compass off inside exactly the outages it existed for. See
   // magneticOffsetMaxAgeMs.
   magneticOffsetMaxAgeMs: 900_000,
+  // ★ A FIELD THAT FLICKERS IN AND OUT OF BAND IS NOT THE EARTH'S ★ The third
+  // ride opened with the OS's magnetometer calibration not yet learned: |B|
+  // ran 68–94 µT for six minutes and dipped into band on some headings only,
+  // and the bearings that passed taught a mount offset 330° wrong. The compass
+  // is withheld until 90 % of the last minute's samples were Earth-strength.
+  // See magneticMinFieldHealth.
+  magneticMinFieldHealth: 0.9,
+  // A kept negative result on the same ride: the offset's own scatter did
+  // not separate a calibrated compass from an uncalibrated one cleanly enough
+  // to gate on. Off, measured, and left wired so it can be measured again.
+  // See magneticMinConcentration.
+  magneticMinConcentration: 0,
+  magneticConcentrationWindow: 60,
+  // ★ A RED LIGHT BEFORE THE TUNNEL IS NOT THE ROAD'S SPEED ★ An outage that
+  // began with the receiver reading 0.0 at a signal was capped at 2.5 m/s for
+  // its whole length. The ceiling now anchors on the fastest speed the vehicle
+  // was measured MOVING at in the last minute. See outageCeilingAnchorMinMps.
+  outageCeilingAnchorMinMps: 0.5,
+  // 0 = the newest moving measurement only. A 60 s lookback is a kept
+  // negative result — see outageCeilingLookbackMs.
+  outageCeilingLookbackMs: 0,
   // ★ A MOUNTED PHONE IS NOT BEING CARRIED, AND THAT IS MEASURABLE ★ Variance,
   // cadence and speed can all be faked by a scooter on a bad road — all three
   // were, and the classifier called PEDESTRIAN at 4.5 km/h. The orientation of
@@ -734,6 +758,11 @@ export function useNavigationEngine(): NavEngineOutput {
         vehicleHeadingAidDegPerSec: next.compassHeadingAid ? next.vehicleHeadingAidDegPerSec : 0,
         vehicleHeadingAidTauMs: next.vehicleHeadingAidTauMs,
         magneticOffsetMaxAgeMs: next.magneticOffsetMaxAgeMs,
+        magneticMinFieldHealth: next.magneticMinFieldHealth,
+        magneticMinConcentration: next.magneticMinConcentration,
+        magneticConcentrationWindow: next.magneticConcentrationWindow,
+        outageCeilingAnchorMinMps: next.outageCeilingAnchorMinMps,
+        outageCeilingLookbackMs: next.outageCeilingLookbackMs,
         mountStillDeg: next.mountStillDeg,
         eskfAccelNoiseDensity: next.eskfAccelNoiseDensity,
         outageSpeedFloorRatio: next.outageSpeedFloorRatio,

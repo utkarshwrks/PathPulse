@@ -27,6 +27,7 @@ const DIAGNOSTICS: EngineDiagnostics = {
   magneticBearingDeg: 41,
   magneticOffsetDeg: 20,
   magneticObservations: 848,
+  magneticFieldHealth: 1,
   magneticReason: 'ok',
   magneticTrimDegPerSec: 0.4,
   contextLatched: false,

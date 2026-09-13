@@ -140,6 +140,108 @@ describe('MagneticHeading — the four ways it says "I cannot"', () => {
     expect(m.headingDeg(8000 + 240_000)).toBeNull();
   });
 
+  it('★ refuses a compass the fixes have been disagreeing with', () => {
+    // The third Tier F ride: the OS had not yet calibrated the magnetometer,
+    // the hard-iron vector passed the magnitude gate at some headings, and
+    // the offset those samples taught walked round the compass — 1°, 261°,
+    // 4°, 343°, 8°, 289°, 107°. The magnitude gate cannot see that. The
+    // scatter of the offset can.
+    const m = new MagneticHeading({ minOffsetConcentration: 0.8, concentrationWindow: 10 });
+    const wandering = [1, 261, 4, 343, 8, 289, 107, 297, 10];
+    wandering.forEach((offset, i) => {
+      const { mag, up } = reading(90);
+      m.push(mag, up);
+      m.observeCourse(i * 1000, 90 + offset);
+    });
+    expect(m.state.concentration).toBeLessThan(0.7);
+    expect(m.headingDeg(9000)).toBeNull();
+    expect(m.state.reason).toContain('agreeing');
+
+    // The same nine observations of a mount that is a bolt.
+    const bolt = new MagneticHeading({ minOffsetConcentration: 0.8, concentrationWindow: 10 });
+    [334, 331, 338, 335, 329, 340, 333, 336, 334].forEach((offset, i) => {
+      const { mag, up } = reading(90);
+      bolt.push(mag, up);
+      bolt.observeCourse(i * 1000, 90 + offset);
+    });
+    expect(bolt.state.concentration).toBeGreaterThan(0.95);
+    expect(bolt.headingDeg(9000)).not.toBeNull();
+    expect(bolt.state.reason).toBe('ok');
+  });
+
+  it('a compass that starts agreeing again is trusted again, on the concentration\'s own clock', () => {
+    const m = new MagneticHeading({ minOffsetConcentration: 0.8, concentrationWindow: 10 });
+    let t = 0;
+    for (const offset of [1, 261, 4, 343, 8, 289]) {
+      const { mag, up } = reading(90);
+      m.push(mag, up);
+      m.observeCourse(t, 90 + offset);
+      t += 1000;
+    }
+    expect(m.headingDeg(t)).toBeNull();
+    // The OS finds its calibration; the offset settles.
+    for (let i = 0; i < 40; i++) {
+      const { mag, up } = reading(90);
+      m.push(mag, up);
+      m.observeCourse(t, 90 + 334);
+      t += 1000;
+    }
+    expect(m.state.concentration).toBeGreaterThan(0.8);
+    expect(m.headingDeg(t)).not.toBeNull();
+  });
+
+  it('★ refuses a compass whose field has been flickering in and out of band', () => {
+    // The third Tier F ride, minute one: the OS had not yet removed the
+    // hard-iron vector, so |B| ran 68–94 µT and dipped into band on some
+    // headings only. Six in-band samples in the first ten seconds, all on one
+    // heading, taught an offset that agreed with itself perfectly. Nothing
+    // about those six samples was wrong; what was wrong was the other
+    // nineteen out of twenty-five, and the per-sample gate cannot see them.
+    const m = new MagneticHeading({ minFieldHealth: 0.9, fieldHealthTauMs: 10_000 });
+    const { mag, up } = reading(90);
+    const hardIron = { x: mag.x * 1.8, y: mag.y * 1.8, z: mag.z * 1.8 }; // 85 µT
+    let t = 0;
+    for (let i = 0; i < 40; i++) {
+      // One in four samples is in band; those alone teach the offset.
+      const inBand = i % 4 === 0;
+      m.push(inBand ? mag : hardIron, up, t);
+      if (inBand) m.observeCourse(t, 90 + 334);
+      t += 250;
+    }
+    expect(m.state.fieldHealth).toBeLessThan(0.5);
+    // The current sample is in band, and the bearing reads fine — and the
+    // compass is still withheld, because the field has not BEEN the Earth's.
+    m.push(mag, up, t);
+    expect(m.state.deviceBearingDeg).not.toBeNull();
+    expect(m.headingDeg(t)).toBeNull();
+    expect(m.state.reason).toContain('not calibrated');
+
+    // The OS finds its calibration. The field stays in band, the health
+    // recovers on its own time constant, the offset is re-learned from fixes
+    // that arrive after that, and the compass comes back.
+    for (let i = 0; i < 160; i++) {
+      m.push(mag, up, t);
+      if (i % 4 === 0) m.observeCourse(t, 90 + 334);
+      t += 250;
+    }
+    expect(m.state.fieldHealth).toBeGreaterThan(0.9);
+    expect(m.headingDeg(t)).not.toBeNull();
+    expect(m.state.reason).toBe('ok');
+  });
+
+  it('a clean field from the first sample is trusted from the first sample', () => {
+    // The gate has to be earned, not waited out: a ride that starts with a
+    // calibrated compass must not lose its first minute to the warm-up.
+    const m = new MagneticHeading({ minFieldHealth: 0.9 });
+    const { mag, up } = reading(90);
+    for (let i = 0; i < 8; i++) {
+      m.push(mag, up, i * 1000);
+      m.observeCourse(i * 1000, 0);
+    }
+    expect(m.state.fieldHealth).toBe(1);
+    expect(m.headingDeg(8000)).not.toBeNull();
+  });
+
   it('refuses a vertical field and a free-falling handset', () => {
     const m = new MagneticHeading();
     m.push({ x: 0, y: 0, z: 47 }, { x: 0, y: 0, z: 9.81 });

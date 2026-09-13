@@ -121,6 +121,49 @@ function syntheticWindows(samples: readonly SensorSample[], gaps: readonly Gap[]
   return out;
 }
 
+/**
+ * Speed or heading? The same split `drdiag.ts` makes, per synthetic window.
+ *
+ * A drift percentage says how wrong; it does not say which of the two
+ * independent things was wrong, and they are fixed in different files. Speed
+ * bias is the estimate's mean speed over the truth's, as a percentage; heading
+ * error is the mean |estimate − truth course| over samples where the vehicle
+ * is genuinely moving, because a course taken between two crawling fixes is
+ * noise.
+ */
+function decompose(
+  res: ReturnType<typeof runEval>,
+  startMs: number,
+  endMs: number,
+): { speedBiasPct: number; headingErrDeg: number } {
+  const tr = res.truth.filter((p) => p.t >= startMs && p.t <= endMs);
+  const st = res.states.filter((x) => x.t >= startMs && x.t <= endMs);
+  if (tr.length < 3 || st.length < 3) return { speedBiasPct: Number.NaN, headingErrDeg: Number.NaN };
+  let trueDist = 0;
+  for (let i = 1; i < tr.length; i++) trueDist += metresBetween(tr[i - 1]!, tr[i]!);
+  const durS = (tr[tr.length - 1]!.t - tr[0]!.t) / 1000;
+  const trueMean = trueDist / Math.max(1e-6, durS);
+  const estMean =
+    st.reduce((a, x) => a + (Number.isFinite(x.velocityMps) ? x.velocityMps : 0), 0) / st.length;
+  const errs: number[] = [];
+  for (let i = 2; i < tr.length; i++) {
+    const a = tr[i - 2]!;
+    const b = tr[i]!;
+    const mPerLon = 111_320 * Math.cos((a.lat * Math.PI) / 180);
+    const de = (b.lon - a.lon) * mPerLon;
+    const dn = (b.lat - a.lat) * METRES_PER_DEG_LAT;
+    const dtS = (b.t - a.t) / 1000;
+    if (dtS <= 0 || Math.hypot(de, dn) / dtS < 3) continue;
+    const truthHdg = (Math.atan2(de, dn) * 180) / Math.PI;
+    const near = st.reduce((best, x) => (Math.abs(x.t - b.t) < Math.abs(best.t - b.t) ? x : best));
+    errs.push(Math.abs(((near.headingDeg - truthHdg + 540) % 360) - 180));
+  }
+  return {
+    speedBiasPct: (estMean / Math.max(0.1, trueMean)) * 100 - 100,
+    headingErrDeg: errs.length ? errs.reduce((x, y) => x + y, 0) / errs.length : Number.NaN,
+  };
+}
+
 const configName = process.argv.includes('--config')
   ? String(process.argv[process.argv.indexOf('--config') + 1])
   : 'full';
@@ -139,7 +182,12 @@ for (let i = 0; i < process.argv.length; i++) {
 const engineConfig = { ...(cfg.engine as Record<string, unknown>), ...overrides };
 if (Object.keys(overrides).length) console.log('  overrides:', overrides);
 
-const logs = listLogs('F');
+// `--log <name>` scores one ride instead of all of them. A full run is twenty
+// minutes; a sweep across one ride's six outages should not cost that.
+const ONLY = process.argv.includes('--log')
+  ? String(process.argv[process.argv.indexOf('--log') + 1])
+  : null;
+const logs = listLogs('F').filter((l) => ONLY === null || l === ONLY);
 if (logs.length === 0) {
   console.log(
     '\n  No Tier F logs. Record one on the handset — Events tab, "Record ride" —\n' +
@@ -212,11 +260,14 @@ for (const logName of logs) {
     // 20 m is 75 % that says almost nothing about the estimator. The distance
     // has to be on the row or the table cannot be read honestly.
     if (process.argv.includes('--windows')) {
+      const { speedBiasPct, headingErrDeg } = decompose(res, w, w + DURATION_MS);
       console.log(
         `      +${((w - samples[0]!.t) / 1000).toFixed(0).padStart(4)}s  ` +
           `truth ${res.metrics.distanceTravelledM.toFixed(0).padStart(5)} m  ` +
           `drift ${Number.isFinite(d) ? d.toFixed(1).padStart(6) : '     —'} %  ` +
-          `err ${(((d / 100) * res.metrics.distanceTravelledM) || 0).toFixed(1).padStart(6)} m`,
+          `err ${(((d / 100) * res.metrics.distanceTravelledM) || 0).toFixed(1).padStart(6)} m  ` +
+          `speed ${(speedBiasPct >= 0 ? '+' : '') + speedBiasPct.toFixed(0)}%  ` +
+          `hdg ${Number.isFinite(headingErrDeg) ? headingErrDeg.toFixed(0) : '—'}°`,
       );
     }
   }
@@ -384,6 +435,12 @@ ${perLog
 ${perLog.map((r) => `| \`${r.name}\` | ${r.minutes.toFixed(1)} | — | ${r.fixes} |`).join('\n')}
 `;
 
-writeFileSync(join(ROOT, 'docs/benchmarks-tier-f.md'), doc);
-console.log(`\n  wrote docs/benchmarks-tier-f.md\n`);
+// A partial run — one ride, or an override — must not overwrite the table
+// every number in MASTER.md points at.
+if (ONLY === null && Object.keys(overrides).length === 0) {
+  writeFileSync(join(ROOT, 'docs/benchmarks-tier-f.md'), doc);
+  console.log(`\n  wrote docs/benchmarks-tier-f.md\n`);
+} else {
+  console.log(`\n  partial run — docs/benchmarks-tier-f.md left untouched\n`);
+}
 if (!existsSync(join(ROOT, 'docs/benchmarks-tier-f.md'))) process.exit(1);

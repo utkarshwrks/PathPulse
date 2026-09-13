@@ -363,6 +363,26 @@ export interface ConstraintFlags {
    */
   magneticOffsetMaxAgeMs: number;
   /**
+   * Withhold the compass until its recent course observations agree to this
+   * circular concentration. 0 disables. See
+   * `MagneticHeadingConfig.minOffsetConcentration` for the ride that needed
+   * it: a compass the OS had not yet calibrated passed the field-magnitude
+   * gate at some headings and taught a mount offset that walked the whole way
+   * round, and a 56 s outage was steered 36° wrong with full authority.
+   */
+  magneticMinConcentration: number;
+  /** How many recent course observations that agreement is taken over. */
+  magneticConcentrationWindow: number;
+  /**
+   * Withhold the compass while less than this fraction of the last minute's
+   * samples carried an Earth-strength field. 0 disables. See
+   * `MagneticHeadingConfig.minFieldHealth`: the per-sample band test passes
+   * an uncalibrated compass on the headings where its hard-iron error happens
+   * to cancel, and those are exactly the samples that taught a 3° offset
+   * against a true 334° and steered a window 111° wrong.
+   */
+  magneticMinFieldHealth: number;
+  /**
    * Below this much recent swing of the device's own vertical, the handset is
    * in a mount and its carrier cannot be on foot, degrees.
    *
@@ -399,6 +419,14 @@ export interface ConstraintFlags {
    * runs. See that note for why the floor is proportional.
    */
   outageSpeedFloorRatio: number;
+  /**
+   * Forwarded to `DeadReckoningConfig.outageCeilingAnchorMinMps`: a measured
+   * speed below this does not anchor the outage ceiling, so an outage that
+   * begins at a red light is not capped at 2.5 m/s for its whole length.
+   */
+  outageCeilingAnchorMinMps: number;
+  /** Forwarded to `DeadReckoningConfig.outageCeilingLookbackMs`. */
+  outageCeilingLookbackMs: number;
   /**
    * Learn the speed model's scale against GNSS Doppler, and spend it in outages.
    *
@@ -912,9 +940,14 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   vehicleHeadingAidDegPerSec: 8,
   vehicleHeadingAidTauMs: 5_000,
   magneticOffsetMaxAgeMs: 900_000,
+  magneticMinConcentration: 0,
+  magneticConcentrationWindow: 60,
+  magneticMinFieldHealth: 0.9,
   mountStillDeg: 6,
   eskfAccelNoiseDensity: 0,
   outageSpeedFloorRatio: 0.5,
+  outageCeilingAnchorMinMps: 0.5,
+  outageCeilingLookbackMs: 0,
   calibrateMlSpeed: false,
   mlSpeedTrustGate: true,
   outageSpeedCeiling: true,
@@ -1246,6 +1279,9 @@ export class NavigationEngine {
     // it expired inside the two outages this engine exists for.
     this.magHeading = new MagneticHeading({
       offsetMaxAgeMs: this.config.magneticOffsetMaxAgeMs,
+      minOffsetConcentration: this.config.magneticMinConcentration,
+      concentrationWindow: this.config.magneticConcentrationWindow,
+      minFieldHealth: this.config.magneticMinFieldHealth,
     });
     this.motion = new MotionContextDetector({ mountStillDeg: this.config.mountStillDeg });
     // See `eskfAccelNoiseDensity`. 0 means "as published", so the default
@@ -1281,6 +1317,8 @@ export class NavigationEngine {
       distanceFloorMps: this.config.distanceFloorMps,
       outageSpeedCeiling: this.config.outageSpeedCeiling,
       outageSpeedFloorRatio: this.config.outageSpeedFloorRatio,
+      outageCeilingAnchorMinMps: this.config.outageCeilingAnchorMinMps,
+      outageCeilingLookbackMs: this.config.outageCeilingLookbackMs,
     });
   }
 
@@ -1312,6 +1350,8 @@ export class NavigationEngine {
       distanceFloorMps: this.config.distanceFloorMps,
       outageSpeedCeiling: this.config.outageSpeedCeiling,
       outageSpeedFloorRatio: this.config.outageSpeedFloorRatio,
+      outageCeilingAnchorMinMps: this.config.outageCeilingAnchorMinMps,
+      outageCeilingLookbackMs: this.config.outageCeilingLookbackMs,
     });
     this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
     if (!this.config.roadSnap) {
@@ -1407,6 +1447,17 @@ export class NavigationEngine {
     magneticBearingDeg: number | null;
     magneticOffsetDeg: number | null;
     magneticObservations: number;
+    /** See `MagneticHeadingState.concentration`. */
+    magneticConcentration: number;
+    /** See `MagneticHeadingState.fieldHealth`. */
+    magneticFieldHealth: number;
+    /**
+     * How far the handset has recently swung in its mount, degrees — the
+     * decaying peak of the angle between the current vertical and its
+     * slow mean. See `MotionContextInput.mountMotionDeg`. Null until the
+     * attitude has settled.
+     */
+    mountMotionDeg: number | null;
     magneticReason: string;
     magneticTrimDegPerSec: number;
     contextLatched: boolean;
@@ -1520,6 +1571,9 @@ export class NavigationEngine {
       magneticBearingDeg: this.magHeading.state.deviceBearingDeg,
       magneticOffsetDeg: this.magHeading.state.offsetDeg,
       magneticObservations: this.magHeading.state.observations,
+      magneticConcentration: this.magHeading.state.concentration,
+      magneticFieldHealth: this.magHeading.state.fieldHealth,
+      mountMotionDeg: this.mountMotionDeg,
       magneticReason: this.magHeading.state.reason,
       magneticTrimDegPerSec: (this.lastMagneticTrimRadPerSec * 180) / Math.PI,
       contextLatched: this.motion.latched,
@@ -2223,6 +2277,7 @@ export class NavigationEngine {
         this.magHeading.push(
           { x: sample.mag.mx, y: sample.mag.my, z: sample.mag.mz },
           { x: ux, y: uy, z: uz },
+          sample.t,
         );
       }
     }

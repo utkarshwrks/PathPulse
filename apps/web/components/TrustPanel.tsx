@@ -368,9 +368,13 @@ function SensorsTab({
         <Row
           k="COMPASS"
           v={
-            diagnostics.magneticBearingDeg === null
+            // The reason, not the bearing, whenever the compass is withheld —
+            // a bearing that is being read and ignored looks exactly like one
+            // that is steering, and the third ride's first six minutes were
+            // spent finding that out.
+            diagnostics.magneticBearingDeg === null || diagnostics.magneticReason !== 'ok'
               ? diagnostics.magneticReason
-              : `${diagnostics.magneticBearingDeg.toFixed(0)}°`
+              : `${diagnostics.magneticBearingDeg.toFixed(0)}° · field ${(diagnostics.magneticFieldHealth * 100).toFixed(0)}% clean`
           }
         />
         <Row

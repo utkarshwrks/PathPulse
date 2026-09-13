@@ -490,6 +490,84 @@ describe('an inferred speed is bounded by the last measured one', () => {
     for (; t < 40_000; t += 20) v = e.update(sample(t)).velocityMps;
     expect(v).toBeGreaterThan(RIDE_MPS);
   });
+
+  /**
+   * The same ride, with the stop BEFORE the outage: the receiver measures the
+   * standstill, then the fixes go, then the light changes.
+   */
+  function redLightThenOutage(e: NavigationEngine): number {
+    let t = 0;
+    for (; t < 30_000; t += 20) {
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: RIDE_MPS };
+      }
+      e.update(s);
+    }
+    // Queued at the signal, receiver still up and reading zero.
+    for (; t < 45_000; t += 20) {
+      const s = stillSample(t);
+      if (t % 1000 === 0) s.gnss = { lat: 23.163, lon: 79.93, accuracyM: 5, speedMps: 0 };
+      e.update(s);
+    }
+    // The fixes stop while still queued, then the light changes.
+    for (; t < 50_000; t += 20) e.update(stillSample(t));
+    let v = 0;
+    for (; t < 80_000; t += 20) v = e.update(sample(t)).velocityMps;
+    return v;
+  }
+
+  it('★ a stop MEASURED before the outage capped the pull-away at 2.5 m/s', () => {
+    // The third Tier F ride, +110 s: the same argument the test above makes
+    // for a ZUPT, arriving through the receiver instead. See
+    // `outageCeilingAnchorMinMps`. This is the shipped default, pinned so the
+    // regression is visible if it ever comes back.
+    const capped = new NavigationEngine({ ...CEILING, outageCeilingAnchorMinMps: 0 });
+    capped.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    expect(redLightThenOutage(capped)).toBeLessThanOrEqual(2.51);
+  });
+
+  it('★ anchored on the last MOVING measurement, the pull-away is allowed', () => {
+    const e = new NavigationEngine({ ...CEILING, outageCeilingAnchorMinMps: 0.5 });
+    e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+    const v = redLightThenOutage(e);
+    expect(v).toBeGreaterThan(RIDE_MPS);
+    // And still bounded by what that vehicle was seen doing, not by the model.
+    expect(v).toBeLessThanOrEqual(RIDE_MPS * 1.35 + 2.5 + 0.01);
+  });
+
+  it('★ the anchor is the fastest recent moving measurement, not the crawl into the queue', () => {
+    // Doing 8.3, then a 2 m/s crawl for the last ten seconds before the
+    // light: the crawl says something about the queue, not about the road.
+    const run = (lookbackMs: number) => {
+      const e = new NavigationEngine({
+        ...CEILING,
+        outageCeilingAnchorMinMps: 0.5,
+        outageCeilingLookbackMs: lookbackMs,
+      });
+      e.setSpeedPredictor(new MockSpeedPredictor(24.7), { mean: ZERO12, std: ONE12 });
+      let t = 0;
+      for (; t < 40_000; t += 20) {
+        const s = sample(t);
+        if (t % 1000 === 0) {
+          s.gnss = {
+            lat: 23.16 + t * 1e-7,
+            lon: 79.93,
+            accuracyM: 5,
+            speedMps: t < 30_000 ? RIDE_MPS : 2,
+          };
+        }
+        e.update(s);
+      }
+      let v = 0;
+      for (; t < 80_000; t += 20) v = e.update(sample(t)).velocityMps;
+      return v;
+    };
+    // Newest only: 2 * 1.35 + 2.5 = 5.2.
+    expect(run(0)).toBeLessThanOrEqual(5.21);
+    // A minute of lookback reaches back to the 8.3.
+    expect(run(60_000)).toBeGreaterThan(RIDE_MPS);
+  });
 });
 
 /**
