@@ -477,6 +477,26 @@ function SensorsTab({
           warn={!modelInfo.loaded || diagnostics.mlError !== null}
         />
         <Row k="SOURCE" v={diagnostics.speedSource} accent={diagnostics.speedSource === 'ML'} />
+        {/*
+          ★ WHETHER THE ACCELEROMETER KNOWS THE SPEED ★ Its forward
+          acceleration correlated with the receiver's over the last two
+          minutes. A cradle in a car reads 0.7; a handlebar reads 0.2, and at
+          0.2 an outage coasts on the ride's own recent traffic speed (the
+          PRIOR source) instead of integrating a handlebar.
+        */}
+        <Row
+          k="ACCEL vs GNSS"
+          v={
+            Number.isFinite(diagnostics.accelCorrelation)
+              ? `r ${diagnostics.accelCorrelation.toFixed(2)}${
+                  Number.isFinite(diagnostics.speedPriorMps)
+                    ? ` · prior ${(diagnostics.speedPriorMps * 3.6).toFixed(0)} km/h`
+                    : ''
+                }`
+              : 'not scored yet'
+          }
+          warn={Number.isFinite(diagnostics.accelCorrelation) && diagnostics.accelCorrelation < 0.4}
+        />
         <Row
           k="LATENCY"
           v={Number.isFinite(modelInfo.latencyMs) ? `${modelInfo.latencyMs.toFixed(1)} ms` : '—'}

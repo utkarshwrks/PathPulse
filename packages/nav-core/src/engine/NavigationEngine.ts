@@ -136,7 +136,7 @@ function rampTo(from: number, to: number, dtMs: number, rampMs: number): number 
  * Surfaced so the HUD can label it. A judge asking "is the AI actually doing
  * anything?" deserves an answer on screen rather than an assurance.
  */
-export type SpeedSource = 'GNSS' | 'ML' | 'STEPS' | 'INTEGRATED' | 'STOPPED' | 'NONE';
+export type SpeedSource = 'GNSS' | 'ML' | 'STEPS' | 'PRIOR' | 'INTEGRATED' | 'STOPPED' | 'NONE';
 
 /** Runtime feature switches. Every one of these is an ablation-table row. */
 export interface ConstraintFlags {
@@ -489,6 +489,94 @@ export interface ConstraintFlags {
    * an asserted speed integrates.
    */
   mlSpeedTrustGate: boolean;
+  /**
+   * Forwarded to `SpeedCalibratorConfig.minTrustCorrelation`: the least the
+   * speed model's output may correlate with the receiver's before the trust
+   * gate admits it. 0 disables. See that note for the three rides on which a
+   * ratio inside 0.6–1.7 was passed by a model with r = −0.05.
+   *
+   * ★ OFF — A KEPT NEGATIVE RESULT ★ At 0.5 it measured nothing on Tier F
+   * (46.6 / 38.0 / 35.1 with the model off entirely against 46.4 / 37.1 /
+   * 35.1 with it on — the ratio gate was already withholding it) and cost
+   * Tier R: S1 34.2 % → 40.9 %, because on IO-VNBD replayed through this
+   * pipeline the model tracks the receiver at only r = 0.38, and at 0.38 it
+   * is still worth 7 points. The field rides sit at −0.17 to +0.19, so a
+   * threshold exists between them; it is not one this corpus can set.
+   */
+  mlMinTrustCorrelation: number;
+  /**
+   * Time constant over which an unaided speed relaxes toward the ride's own
+   * recent traffic speed instead of integrating the accelerometer, ms. 0 keeps
+   * integration.
+   *
+   * ★ ON THIS MOUNT THE ACCELEROMETER DOES NOT KNOW THE SPEED ★
+   *
+   * Measured on both long Tier F rides, the phone's horizontal acceleration
+   * averaged over each fix interval against the receiver's Doppler dv/dt, at
+   * the best of every lag from −2 to +2 s and every direction in the plane:
+   *
+   *   horizon    1 s     3 s     5 s    10 s    20 s
+   *   2229    r 0.21    0.19    0.18    0.17    0.10
+   *   2141    r 0.29    0.33    0.30    0.26    0.21
+   *
+   * Under a tenth of the variance in the vehicle's acceleration, at any
+   * horizon, in the best direction — and the best direction itself wanders
+   * by 40° across horizons, which is why `AutoAlignment` never once
+   * calibrated on either ride. A handlebar is not a chassis: it pitches under
+   * the front brake, turns with the steering, and shakes on a broken surface
+   * by more than the accelerations it is meant to measure. Integrating it
+   * produced the +710 s window's 16.7 m/s while the vehicle braked from 10.6
+   * to 3.8. The speed model reads the same vibration and does no better
+   * (`mlMinTrustCorrelation`), and vibration intensity itself is
+   * uncorrelated with speed here (r = −0.13 to +0.22), because city lanes are
+   * rougher at a crawl than the main road is at 40.
+   *
+   * What the last five minutes of Doppler DO predict is the next minute's
+   * mean speed: across 37 windows, holding the ride's five-minute mean
+   * misses by 32 % against the shipped chain's 38 %, and it cannot run away.
+   * So while the estimate is unaided and no measurement or trusted model is
+   * in hand, the speed relaxes toward that prior. ZUPT still zeroes it; the
+   * coasting decay still fades it; the floor and ceiling still bound it.
+   */
+  outageSpeedPriorTauMs: number;
+  /** How far back the traffic-speed prior looks, ms. */
+  speedPriorWindowMs: number;
+  /**
+   * Whether the prior averages only fixes where the vehicle was moving. With
+   * a stop detector that catches every stop, the moving mean is the right
+   * target between stops; without one, the all-fixes mean already carries the
+   * stop time. Measured, not argued — see MASTER.md §24.24.
+   */
+  speedPriorMovingOnly: boolean;
+  /**
+   * The least the engine's forward acceleration may correlate with the
+   * receiver's before integration is preferred to the traffic-speed prior.
+   * 0 means the prior is used whenever `outageSpeedPriorTauMs` is set.
+   *
+   * ★ THE ACCELEROMETER IS CHECKED AGAINST THE RECEIVER THAT CAN CHECK IT ★
+   *
+   * The same shape as `mlSpeedTrustGate`, pointed at the other inference.
+   * Every fix interval, the mean forward acceleration the chain would have
+   * integrated is paired with the change in Doppler speed across it; over the
+   * last two minutes the correlation says whether this mount's accelerometer
+   * is describing this vehicle's motion. A simulated IMU, or a phone in a
+   * car's cradle, correlates well and keeps integrating exactly as before; a
+   * handlebar mount (r = 0.15 and −0.10 on the two long Tier F rides) falls
+   * back to the prior.
+   *
+   * ★ HERE, NO EVIDENCE KEEPS THE OLD ARM ★ The model's gate withholds the
+   * model until the receiver has scored it, because the model is the
+   * newcomer and integration is the arm every published figure compares
+   * against. The same asymmetry, applied here, says the PRIOR is the
+   * newcomer: it stands in only once the receiver has shown integration not
+   * to track. Pairs are only scored on a fix cadence of 3 s or better — on
+   * IO-VNBD's 9 s receiver the forward acceleration is high-passed over an
+   * interval long enough to anti-correlate with a slow ramp (r = −0.45 on
+   * S1), and a score that cannot be trusted must not be spent. Measured:
+   * with the prior engaging on that corpus, S1 went 34.2 % → 38.4 %; with
+   * it withheld for want of evidence, Tier R is unchanged.
+   */
+  minAccelCorrelation: number;
   /**
    * Bound an inferred speed by the last one GNSS measured.
    *
@@ -950,6 +1038,11 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   outageCeilingLookbackMs: 0,
   calibrateMlSpeed: false,
   mlSpeedTrustGate: true,
+  mlMinTrustCorrelation: 0,
+  outageSpeedPriorTauMs: 20_000,
+  speedPriorWindowMs: 300_000,
+  speedPriorMovingOnly: true,
+  minAccelCorrelation: 0.4,
   outageSpeedCeiling: true,
   maxHeadingGateDeg: 90,
   roadHeadingAidDegPerSec: 2,
@@ -1116,6 +1209,11 @@ export class NavigationEngine {
   private forwardAccelDc = 0;
   /** Diagnostics only: the conditioned forward acceleration last integrated. */
   private lastForwardAccel = 0;
+  /** Forward acceleration summed since the last fix, for `minAccelCorrelation`. */
+  private accelSinceFixSum = 0;
+  private accelSinceFixN = 0;
+  private accelPairs: Array<{ dvdt: number; accel: number }> = [];
+  private lastAccelPairFix: { t: number; mps: number } | null = null;
   private hasAccelDc = false;
   private estimatedDriftM = 0;
   private lastState: NavigationState | null = null;
@@ -1132,7 +1230,9 @@ export class NavigationEngine {
   private readonly magHeading: MagneticHeading;
   /** Last compass trim actually applied, rad/s. Diagnostics only. */
   private lastMagneticTrimRadPerSec = 0;
-  private readonly mlCalibrator = new MlSpeedCalibrator();
+  private readonly mlCalibrator: MlSpeedCalibrator;
+  /** Recent trusted Doppler speeds, for the traffic-speed prior. See `outageSpeedPriorTauMs`. */
+  private speedPriorSamples: Array<{ t: number; mps: number }> = [];
   /** Raw model output before calibration, so the calibrator scores the model. */
   private lastMlRawMps = Number.NaN;
   /** Latch so `mlSpeedTrustGate` logs its verdict once, not at 10 Hz. */
@@ -1277,6 +1377,9 @@ export class NavigationEngine {
     this.config = { ...DEFAULT_ENGINE_CONFIG, ...config };
     // See `magneticOffsetMaxAgeMs`: the library default is a pedestrian's, and
     // it expired inside the two outages this engine exists for.
+    this.mlCalibrator = new MlSpeedCalibrator({
+      minTrustCorrelation: this.config.mlMinTrustCorrelation,
+    });
     this.magHeading = new MagneticHeading({
       offsetMaxAgeMs: this.config.magneticOffsetMaxAgeMs,
       minOffsetConcentration: this.config.magneticMinConcentration,
@@ -1319,6 +1422,7 @@ export class NavigationEngine {
       outageSpeedFloorRatio: this.config.outageSpeedFloorRatio,
       outageCeilingAnchorMinMps: this.config.outageCeilingAnchorMinMps,
       outageCeilingLookbackMs: this.config.outageCeilingLookbackMs,
+      outageSpeedPriorTauMs: this.config.outageSpeedPriorTauMs,
     });
   }
 
@@ -1352,6 +1456,7 @@ export class NavigationEngine {
       outageSpeedFloorRatio: this.config.outageSpeedFloorRatio,
       outageCeilingAnchorMinMps: this.config.outageCeilingAnchorMinMps,
       outageCeilingLookbackMs: this.config.outageCeilingLookbackMs,
+      outageSpeedPriorTauMs: this.config.outageSpeedPriorTauMs,
     });
     this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
     if (!this.config.roadSnap) {
@@ -1458,6 +1563,10 @@ export class NavigationEngine {
      * attitude has settled.
      */
     mountMotionDeg: number | null;
+    /** See `minAccelCorrelation`. NaN until twenty fix intervals have been scored. */
+    accelCorrelation: number;
+    /** The traffic-speed prior in hand, m/s, or NaN. See `outageSpeedPriorTauMs`. */
+    speedPriorMps: number;
     magneticReason: string;
     magneticTrimDegPerSec: number;
     contextLatched: boolean;
@@ -1574,6 +1683,8 @@ export class NavigationEngine {
       magneticConcentration: this.magHeading.state.concentration,
       magneticFieldHealth: this.magHeading.state.fieldHealth,
       mountMotionDeg: this.mountMotionDeg,
+      accelCorrelation: this.accelCorrelation(),
+      speedPriorMps: this.speedPrior() ?? Number.NaN,
       magneticReason: this.magHeading.state.reason,
       magneticTrimDegPerSec: (this.lastMagneticTrimRadPerSec * 180) / Math.PI,
       contextLatched: this.motion.latched,
@@ -2178,6 +2289,8 @@ export class NavigationEngine {
         forwardAccel = h.forward;
       }
       this.lastForwardAccel = forwardAccel;
+      this.accelSinceFixSum += forwardAccel;
+      this.accelSinceFixN++;
 
       // ★ PHASE 18B — THE LEAN, BEFORE ANYTHING INTEGRATES THE YAW RATE ★
       //
@@ -2532,6 +2645,26 @@ export class NavigationEngine {
         }
         // Held, not consumed. See `gnssSpeedHoldMs`.
         this.lastGnssSpeed = { t: sample.t, mps: speedForFix };
+        // And remembered, for the traffic-speed prior. See `outageSpeedPriorTauMs`.
+        this.speedPriorSamples.push({ t: sample.t, mps: speedForFix });
+        // And the accelerometer scored against it. See `minAccelCorrelation`.
+        if (this.lastAccelPairFix && this.accelSinceFixN > 0) {
+          const dtS = (sample.t - this.lastAccelPairFix.t) / 1000;
+          if (dtS > 0.2 && dtS <= 3) {
+            this.accelPairs.push({
+              dvdt: (speedForFix - this.lastAccelPairFix.mps) / dtS,
+              accel: this.accelSinceFixSum / this.accelSinceFixN,
+            });
+            if (this.accelPairs.length > 120) this.accelPairs.shift();
+          }
+        }
+        this.lastAccelPairFix = { t: sample.t, mps: speedForFix };
+        this.accelSinceFixSum = 0;
+        this.accelSinceFixN = 0;
+        const cutoff = sample.t - this.config.speedPriorWindowMs;
+        while (this.speedPriorSamples.length && this.speedPriorSamples[0]!.t < cutoff) {
+          this.speedPriorSamples.shift();
+        }
       }
       if (trusted) {
         this.dr.pushFix({
@@ -2855,8 +2988,14 @@ export class NavigationEngine {
         });
       }
 
+      // See `outageSpeedPriorTauMs` and `minAccelCorrelation`: the traffic
+      // prior stands in for integration only where integration has not
+      // earned its place against the receiver.
+      const priorForPropagate =
+        this.config.outageSpeedPriorTauMs > 0 && !this.accelTrusted() ? this.speedPrior() : undefined;
       this.dr.propagate(forwardAccel, drYawRate, dtMs, gnssSpeed, {
         lateralAccelMps2: lateralAccel,
+        priorSpeedMps: priorForPropagate,
         isStationary: stationaryForZupt,
         mlSpeedMps: mlForPropagate,
         stepSpeedMps: stepSpeed,
@@ -2903,7 +3042,9 @@ export class NavigationEngine {
               ? 'STEPS'
               : mlForPropagate !== undefined
                 ? 'ML'
-                : // ★ AND THIS IS WHY THE BADGE IS WORTH READING ★ On a 1 Hz
+                : priorForPropagate !== undefined
+                  ? 'PRIOR'
+                  : // ★ AND THIS IS WHY THE BADGE IS WORTH READING ★ On a 1 Hz
                   // receiver in a vehicle the nine samples between fixes now
                   // say INTEGRATED, where they used to say ML. Both are the
                   // truth about the arm that supplied the velocity; the
@@ -4020,6 +4161,58 @@ export class NavigationEngine {
     }
   }
 
+  /**
+   * Pearson correlation of the forward acceleration against the receiver's
+   * dv/dt over the recent pairs, or NaN. See `minAccelCorrelation`.
+   */
+  accelCorrelation(): number {
+    const n = this.accelPairs.length;
+    if (n < 20) return Number.NaN;
+    let mx = 0;
+    let my = 0;
+    for (const p of this.accelPairs) {
+      mx += p.dvdt;
+      my += p.accel;
+    }
+    mx /= n;
+    my /= n;
+    let sxy = 0;
+    let sxx = 0;
+    let syy = 0;
+    for (const p of this.accelPairs) {
+      sxy += (p.dvdt - mx) * (p.accel - my);
+      sxx += (p.dvdt - mx) ** 2;
+      syy += (p.accel - my) ** 2;
+    }
+    if (!(sxx > 0) || !(syy > 0)) return Number.NaN;
+    return sxy / Math.sqrt(sxx * syy);
+  }
+
+  /**
+   * Whether integration keeps its place over the prior. See
+   * `minAccelCorrelation`: it does until the receiver has shown otherwise.
+   */
+  private accelTrusted(): boolean {
+    if (this.config.minAccelCorrelation <= 0) return false;
+    const r = this.accelCorrelation();
+    if (!Number.isFinite(r)) return true;
+    return r >= this.config.minAccelCorrelation;
+  }
+
+  /**
+   * The ride's recent traffic speed, m/s, or undefined before there is one.
+   * See `outageSpeedPriorTauMs`.
+   */
+  private speedPrior(): number | undefined {
+    const pool = this.config.speedPriorMovingOnly
+      ? this.speedPriorSamples.filter((x) => x.mps >= 0.5)
+      : this.speedPriorSamples;
+    if (pool.length < 10) return undefined;
+    let sum = 0;
+    for (const x of pool) sum += x.mps;
+    return sum / pool.length;
+  }
+
   /** Speed and compass heading as an ENU velocity vector. */
   /**
    * How much of a fix's disagreement to adopt, given what the fix claims.
@@ -4635,6 +4828,11 @@ export class NavigationEngine {
     this.hasGnssSpeedEvidence = false;
     this.motion.reset();
     this.mlSuppressed = false;
+    this.speedPriorSamples = [];
+    this.accelPairs = [];
+    this.lastAccelPairFix = null;
+    this.accelSinceFixSum = 0;
+    this.accelSinceFixN = 0;
     this.roadIndex = null;
     this.lastMatchedWayId = null;
     this.lastMatch = null;

@@ -122,6 +122,10 @@ export interface EngineDiagnostics {
   magneticFieldHealth: number;
   magneticReason: string;
   magneticTrimDegPerSec: number;
+  /** See NavigationEngine.diagnostics.accelCorrelation — NaN until scored. */
+  accelCorrelation: number;
+  /** The traffic-speed prior in hand, m/s, or NaN. */
+  speedPriorMps: number;
   contextLatched: boolean;
   contextLatchedAt: number | null;
   motionReason: string;
@@ -189,6 +193,8 @@ const EMPTY_DIAGNOSTICS: EngineDiagnostics = {
   magneticFieldHealth: 0,
   magneticReason: 'no magnetometer sample yet',
   magneticTrimDegPerSec: 0,
+  accelCorrelation: Number.NaN,
+  speedPriorMps: Number.NaN,
   contextLatched: false,
   contextLatchedAt: null,
   motionReason: 'no samples yet',
@@ -322,6 +328,19 @@ export const DEFAULT_CONTROLS: EngineControls = {
   // 0 = the newest moving measurement only. A 60 s lookback is a kept
   // negative result — see outageCeilingLookbackMs.
   outageCeilingLookbackMs: 0,
+  // ★ THE MODEL AND THE ACCELEROMETER ARE BOTH CHECKED AGAINST THE RECEIVER ★
+  // On a handlebar mount neither knows the speed: the model correlates with
+  // Doppler at r ≈ 0 (it reads vibration, which does not vary with speed
+  // here) and the accelerometer at r ≈ 0.25 (it reads the handlebar). A model
+  // that fails the correlation test is withheld; an accelerometer that fails
+  // it yields to the ride's own recent traffic speed. See
+  // mlMinTrustCorrelation, minAccelCorrelation, outageSpeedPriorTauMs.
+  // 0 = off: a kept negative result, see mlMinTrustCorrelation.
+  mlMinTrustCorrelation: 0,
+  minAccelCorrelation: 0.4,
+  outageSpeedPriorTauMs: 20_000,
+  speedPriorWindowMs: 300_000,
+  speedPriorMovingOnly: true,
   // ★ A MOUNTED PHONE IS NOT BEING CARRIED, AND THAT IS MEASURABLE ★ Variance,
   // cadence and speed can all be faked by a scooter on a bad road — all three
   // were, and the classifier called PEDESTRIAN at 4.5 km/h. The orientation of
@@ -763,6 +782,11 @@ export function useNavigationEngine(): NavEngineOutput {
         magneticConcentrationWindow: next.magneticConcentrationWindow,
         outageCeilingAnchorMinMps: next.outageCeilingAnchorMinMps,
         outageCeilingLookbackMs: next.outageCeilingLookbackMs,
+        mlMinTrustCorrelation: next.mlMinTrustCorrelation,
+        minAccelCorrelation: next.minAccelCorrelation,
+        outageSpeedPriorTauMs: next.outageSpeedPriorTauMs,
+        speedPriorWindowMs: next.speedPriorWindowMs,
+        speedPriorMovingOnly: next.speedPriorMovingOnly,
         mountStillDeg: next.mountStillDeg,
         eskfAccelNoiseDensity: next.eskfAccelNoiseDensity,
         outageSpeedFloorRatio: next.outageSpeedFloorRatio,

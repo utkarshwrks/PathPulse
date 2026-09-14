@@ -30,6 +30,8 @@ const DIAGNOSTICS: EngineDiagnostics = {
   magneticFieldHealth: 1,
   magneticReason: 'ok',
   magneticTrimDegPerSec: 0.4,
+  accelCorrelation: 0.21,
+  speedPriorMps: 5.8,
   contextLatched: false,
   contextLatchedAt: null,
   roadSpeedCeilingMps: 52 / 3.6,

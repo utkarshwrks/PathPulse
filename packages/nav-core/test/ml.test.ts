@@ -677,6 +677,195 @@ describe('the speed model is checked against the receiver that can check it', ()
     expect(e.currentSpeedSource).toBe('ML');
     expect(Math.max(...speeds) * 3.6).toBeGreaterThan(80);
   });
+
+  /**
+   * A ride whose speed varies, with a model that either tracks it or answers
+   * a constant near its mean. The ratio of sums is inside the band for both;
+   * only the correlation tells them apart.
+   */
+  function varyingRide(e: NavigationEngine, mock: MockSpeedPredictor, tracks: boolean) {
+    let t = 0;
+    for (; t < 60_000; t += 20) {
+      // 4 → 12 → 4 m/s over a minute.
+      const v = 8 + 4 * Math.sin((t / 60_000) * 2 * Math.PI);
+      mock.setValue(tracks ? v * 1.1 : 8.8);
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: v };
+      }
+      e.update(s);
+    }
+    for (; t < 70_000; t += 20) e.update(sample(t));
+  }
+
+  it('★ a model answering a constant near the mean passes the ratio and is refused by the correlation', () => {
+    // Three Tier F rides: r = −0.05, −0.17, +0.19 against Doppler, while the
+    // ratio of sums sat inside 0.6–1.7 whenever the vehicle had recently been
+    // doing about what the model always says.
+    const mock = new MockSpeedPredictor(8.8);
+    const ratioOnly = new NavigationEngine({ mlMinTrustCorrelation: 0 });
+    ratioOnly.setSpeedPredictor(mock, { mean: ZERO12, std: ONE12 });
+    varyingRide(ratioOnly, mock, false);
+    expect(ratioOnly.currentSpeedSource).toBe('ML');
+
+    const mock2 = new MockSpeedPredictor(8.8);
+    const gated = new NavigationEngine({ mlMinTrustCorrelation: 0.5 });
+    gated.setSpeedPredictor(mock2, { mean: ZERO12, std: ONE12 });
+    varyingRide(gated, mock2, false);
+    expect(gated.currentSpeedSource).not.toBe('ML');
+  });
+
+  it('a model that tracks the receiver keeps its place', () => {
+    const mock = new MockSpeedPredictor(0);
+    const e = new NavigationEngine({ mlMinTrustCorrelation: 0.5 });
+    e.setSpeedPredictor(mock, { mean: ZERO12, std: ONE12 });
+    varyingRide(e, mock, true);
+    expect(e.currentSpeedSource).toBe('ML');
+  });
+
+  it('a steady ride gives no evidence either way, and the ratio test stands alone', () => {
+    // A car at a constant 30 km/h for a minute: the measured spread is zero,
+    // correlation is undefined, and a model inside the ratio band is admitted
+    // exactly as it was before the correlation test existed.
+    const e = new NavigationEngine({ mlMinTrustCorrelation: 0.5 });
+    e.setSpeedPredictor(new MockSpeedPredictor(RIDE_MPS * 1.1), { mean: ZERO12, std: ONE12 });
+    ride(e, 30_000, 4000, RIDE_MPS);
+    expect(e.currentSpeedSource).toBe('ML');
+  });
+});
+
+describe('an unaided speed relaxes toward the ride\'s own traffic speed', () => {
+  // See `outageSpeedPriorTauMs`: on a handlebar mount the accelerometer was
+  // measured to know less about the speed than the last five minutes of
+  // Doppler do.
+  const PRIOR = { outageSpeedPriorTauMs: 10_000, useMlSpeed: false } as const;
+
+  /** Five minutes at a mix of speeds averaging 6 m/s, then an outage. */
+  function trafficThenOutage(e: NavigationEngine, outageMs: number, lastMps: number) {
+    let t = 0;
+    for (; t < 300_000; t += 20) {
+      const v = t < 290_000 ? (Math.floor(t / 30_000) % 2 === 0 ? 9 : 3) : lastMps;
+      const s = sample(t);
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: v };
+      }
+      e.update(s);
+    }
+    const speeds: number[] = [];
+    for (; t < 300_000 + outageMs; t += 20) speeds.push(e.update(sample(t)).velocityMps);
+    return speeds;
+  }
+
+  it('★ settles on the five-minute mean rather than integrating a handlebar', () => {
+    const e = new NavigationEngine(PRIOR);
+    const speeds = trafficThenOutage(e, 40_000, 9);
+    const end = speeds[speeds.length - 1]!;
+    // Mean of 9/3 alternating is 6; the ceiling and floor sit at 9×1.35+2.5
+    // and 4.5, so neither binds.
+    expect(end).toBeGreaterThan(5.5);
+    expect(end).toBeLessThan(6.5);
+  });
+
+  it('gets there on its own time constant, not in a step', () => {
+    const e = new NavigationEngine(PRIOR);
+    const speeds = trafficThenOutage(e, 40_000, 9);
+    // One second in it is still near the last measurement.
+    expect(speeds[50]!).toBeGreaterThan(8);
+    // Ten seconds in — three of them spent on the Doppler hold — it has moved
+    // about a time constant's worth; twenty seconds in, most of the way.
+    expect(speeds[500]!).toBeLessThan(8);
+    expect(speeds[1000]!).toBeLessThan(7);
+  });
+
+  it('★ a detected stop still stops it dead', () => {
+    const e = new NavigationEngine(PRIOR);
+    trafficThenOutage(e, 5000, 9);
+    let v = 1;
+    for (let t = 305_000; t < 320_000; t += 20) {
+      v = e.update({ t, imu: { ax: 0, ay: 0, az: 9.81, gx: 0, gy: 0, gz: 0 } }).velocityMps;
+    }
+    expect(v).toBe(0);
+  });
+
+  it('switched off, the estimate does not go looking for the prior', () => {
+    const off = new NavigationEngine({ ...PRIOR, outageSpeedPriorTauMs: 0 });
+    const speeds = trafficThenOutage(off, 40_000, 9);
+    // Integrating a still IMU from 9 m/s: the floor holds it at 4.5 and the
+    // prior at 6 is never approached from below.
+    expect(Math.abs(speeds[speeds.length - 1]! - 6)).toBeGreaterThan(0.5);
+  });
+
+  it('★ and the prior itself expires, so a ten-minute outage still comes to rest', () => {
+    // "An unaided estimate must not be asserted forever" is the oldest rule
+    // in DeadReckoningEngine. A target that did not fade would defeat it: the
+    // per-sample decay is undone by the next sample's pull.
+    const e = new NavigationEngine(PRIOR);
+    const speeds = trafficThenOutage(e, 600_000, 9);
+    expect(speeds[speeds.length - 1]!).toBeLessThan(0.5);
+  });
+
+  /**
+   * A ride whose Doppler speed is the integral of what the accelerometer
+   * reads along +y — a phone in a car's cradle — or of nothing it reads — a
+   * handlebar. Speed 6 ± 3 m/s over 40 s cycles.
+   */
+  function accelRide(e: NavigationEngine, accelTracks: boolean) {
+    let t = 0;
+    const speeds: number[] = [];
+    for (; t < 200_000; t += 20) {
+      const p = t / 1000;
+      const v = 6 + 3 * Math.sin((p / 40) * 2 * Math.PI);
+      const a = ((3 * 2 * Math.PI) / 40) * Math.cos((p / 40) * 2 * Math.PI);
+      const s = sample(t);
+      if (accelTracks && s.imu) s.imu.ay += a;
+      if (t % 1000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: v };
+      }
+      e.update(s);
+    }
+    for (; t < 230_000; t += 20) speeds.push(e.update(sample(t)).velocityMps);
+    return speeds;
+  }
+
+  it('★ integration keeps its place where the accelerometer has earned it', () => {
+    // A simulated IMU correlates at 0.65–0.78 with the receiver; a handlebar
+    // at −0.23 to 0.29. See `minAccelCorrelation`.
+    const gated = new NavigationEngine({ ...PRIOR, minAccelCorrelation: 0.4 });
+    const integrating = new NavigationEngine({ useMlSpeed: false });
+    const a = accelRide(gated, true);
+    const b = accelRide(integrating, true);
+    expect((gated.diagnostics as { accelCorrelation: number }).accelCorrelation).toBeGreaterThan(0.4);
+    // Same inputs, same integration: the prior never engaged.
+    for (let i = 0; i < a.length; i++) expect(a[i]!).toBeCloseTo(b[i]!, 6);
+  });
+
+  it('★ and yields to the prior only once the receiver has shown it does not track', () => {
+    const gated = new NavigationEngine({ ...PRIOR, minAccelCorrelation: 0.4 });
+    const prior = new NavigationEngine(PRIOR);
+    const a = accelRide(gated, false);
+    const b = accelRide(prior, false);
+    const r = (gated.diagnostics as { accelCorrelation: number }).accelCorrelation;
+    expect(Number.isFinite(r)).toBe(true);
+    expect(r).toBeLessThan(0.4);
+    for (let i = 0; i < a.length; i++) expect(a[i]!).toBeCloseTo(b[i]!, 6);
+  });
+
+  it('★ with no score yet, integration is the arm that stays', () => {
+    // The prior is the newcomer. A receiver too slow to score the
+    // accelerometer — IO-VNBD's 9 s cadence — leaves the chain as published.
+    const e = new NavigationEngine({ ...PRIOR, minAccelCorrelation: 0.4 });
+    let t = 0;
+    for (; t < 300_000; t += 20) {
+      const s = sample(t);
+      if (t % 9000 === 0) {
+        s.gnss = { lat: 23.16 + t * 1e-7, lon: 79.93, accuracyM: 5, speedMps: 6 };
+      }
+      e.update(s);
+    }
+    expect(Number.isFinite((e.diagnostics as { accelCorrelation: number }).accelCorrelation)).toBe(false);
+    for (; t < 330_000; t += 20) e.update(sample(t));
+    expect(e.currentSpeedSource).toBe('INTEGRATED');
+  });
 });
 
 /**

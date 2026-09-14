@@ -37,6 +37,16 @@ const configName = process.argv.includes('--config')
   ? String(process.argv[process.argv.indexOf('--config') + 1])
   : 'full';
 const cfg = loadConfig(configName);
+// `--set key=value`, as in tierF.ts: the arbiter has to be cheap to question.
+const overrides: Record<string, unknown> = {};
+for (let i = 0; i < process.argv.length; i++) {
+  if (process.argv[i] !== '--set') continue;
+  const [k, v] = String(process.argv[i + 1] ?? '').split('=');
+  if (!k) continue;
+  overrides[k] = v === 'true' ? true : v === 'false' ? false : Number(v);
+}
+const engineConfig = { ...(cfg.engine as Record<string, unknown>), ...overrides };
+if (Object.keys(overrides).length) console.log('  overrides:', overrides);
 const all: number[] = [];
 const byLog: Array<{ name: string; s: ReturnType<typeof stats> }> = [];
 
@@ -60,7 +70,7 @@ for (const r of RUNS) {
     const res = runEval(samples, {
       configName,
       logName: r.log,
-      engineConfig: cfg.engine,
+      engineConfig: engineConfig as never,
       outageStartMs: w,
       outageDurationMs: DURATION_MS,
       roadGraph: graph,
@@ -142,7 +152,10 @@ single mean hides that entirely.
 > Measured on real vehicle sensors from a public dataset — **not yet on our own
 > device**. Tier F (\`drive_*\`) does not exist yet.
 `;
-  writeFileSync(join(ROOT, 'docs', 'benchmarks-tier-r.md'), doc);
+  // A sweep must not rewrite the table the document points at.
+  if (Object.keys(overrides).length) {
+    console.log('\n  partial run — docs/benchmarks-tier-r.md left untouched\n');
+  } else writeFileSync(join(ROOT, 'docs', 'benchmarks-tier-r.md'), doc);
   console.log(
     `\n  wrote docs/benchmarks-tier-r.md` +
       `\n\n  Measured on real vehicle sensors from a public dataset — not yet on our` +

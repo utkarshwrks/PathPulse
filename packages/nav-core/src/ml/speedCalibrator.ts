@@ -91,6 +91,36 @@ export interface SpeedCalibratorConfig {
    */
   minTrustRatio: number;
   maxTrustRatio: number;
+  /**
+   * The least the model's output may correlate with the receiver's over the
+   * window before it is trusted. 0 disables.
+   *
+   * ★ A RATIO CANNOT TELL A CONSTANT FROM A MEASUREMENT ★
+   *
+   * The ratio of sums weights every pair by the speed it was observed at, so
+   * a model that answers a constant 12 m/s whatever the vehicle does passes
+   * the ratio test whenever the vehicle has recently been doing about 12 —
+   * and on a two-wheeler that is what this model does. Paired against
+   * Doppler across the three Tier F rides, at 1 Hz, above 1 m/s:
+   *
+   *   ride     n     r        ml/gnss at 1-3 m/s   at 9-20 m/s
+   *   2229    871   -0.05          5.7               1.15
+   *   2141    687   -0.17          8.5               1.69
+   *   1942    232   +0.19          7.6                 —
+   *
+   * Correlation of essentially zero. The model reads this vehicle's vibration
+   * and its vibration does not vary with speed, so it answers 12–18 m/s at a
+   * crawl and at 50 km/h alike — and a constant that happens to match the
+   * vehicle's fastest recent minute is the one thing the ratio test cannot
+   * refuse. On IO-VNBD, in domain, the same pairs give r ≈ 0.9.
+   *
+   * Only asked when the measured speeds have varied by `minTrustSpreadMps`
+   * over the window: a car that has held 100 km/h for two minutes gives no
+   * evidence either way, and there the ratio test stands alone.
+   */
+  minTrustCorrelation: number;
+  /** Standard deviation of the measured speeds below which correlation is not asked, m/s. */
+  minTrustSpreadMps: number;
 }
 
 export const DEFAULT_SPEED_CALIBRATOR_CONFIG: SpeedCalibratorConfig = {
@@ -102,6 +132,8 @@ export const DEFAULT_SPEED_CALIBRATOR_CONFIG: SpeedCalibratorConfig = {
   maxAgeMs: 300_000,
   minTrustRatio: 0.6,
   maxTrustRatio: 1.7,
+  minTrustCorrelation: 0,
+  minTrustSpreadMps: 1,
 };
 
 export interface SpeedCalibratorState {
@@ -113,6 +145,8 @@ export interface SpeedCalibratorState {
   trusted: boolean;
   /** The unclamped ratio, or NaN before there is enough to say. */
   rawRatio: number;
+  /** Pearson correlation of model against receiver over the window, or NaN. */
+  correlation: number;
 }
 
 export class MlSpeedCalibrator {
@@ -212,7 +246,43 @@ export class MlSpeedCalibrator {
     // default is to wait for the receiver to say something, which on a moving
     // vehicle takes about ten seconds.
     if (!Number.isFinite(raw)) return false;
-    return raw >= this.config.minTrustRatio && raw <= this.config.maxTrustRatio;
+    if (raw < this.config.minTrustRatio || raw > this.config.maxTrustRatio) return false;
+    // See `minTrustCorrelation`. Only when the vehicle has varied its speed
+    // enough for tracking to be distinguishable from a constant.
+    if (this.config.minTrustCorrelation > 0) {
+      const { r, spread } = this.correlationAt();
+      if (spread >= this.config.minTrustSpreadMps && !(r >= this.config.minTrustCorrelation)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Pearson correlation of predicted against measured, and the measured spread. */
+  private correlationAt(): { r: number; spread: number } {
+    const n = this.measured.length;
+    if (n < this.config.minObservations) return { r: Number.NaN, spread: 0 };
+    let mm = 0;
+    let mp = 0;
+    for (let i = 0; i < n; i++) {
+      mm += this.measured[i]!;
+      mp += this.predicted[i]!;
+    }
+    mm /= n;
+    mp /= n;
+    let sxy = 0;
+    let sxx = 0;
+    let syy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = this.measured[i]! - mm;
+      const dy = this.predicted[i]! - mp;
+      sxy += dx * dy;
+      sxx += dx * dx;
+      syy += dy * dy;
+    }
+    const spread = Math.sqrt(sxx / n);
+    if (!(sxx > 0) || !(syy > 0)) return { r: Number.NaN, spread };
+    return { r: sxy / Math.sqrt(sxx * syy), spread };
   }
 
   /**
@@ -248,6 +318,7 @@ export class MlSpeedCalibrator {
       active: this.measured.length >= this.config.minObservations && scale !== 1,
       trusted: this.isTrusted(tMs),
       rawRatio: this.rawRatioAt(tMs),
+      correlation: this.correlationAt().r,
     };
   }
 

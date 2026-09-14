@@ -970,7 +970,7 @@ describe('★ the Doppler hold, and why a slow receiver changes the rule', () =>
       // vehicle's vibration would not let it — so counting those would drown
       // out the comparison entirely.
       const src = engine.diagnostics.speedSource;
-      if (src === 'GNSS' || src === 'INTEGRATED') sources.push(src);
+      if (src === 'GNSS' || src === 'INTEGRATED' || src === 'PRIOR') sources.push(src);
     }
     return sources;
   }
@@ -994,7 +994,10 @@ describe('★ the Doppler hold, and why a slow receiver changes the rule', () =>
     // one short gap beats a stale Doppler, and the published simulated
     // ablation depends on that staying true.
     const s = sourcesOverDrive(1);
-    expect(s.filter((x) => x === 'INTEGRATED').length).toBeGreaterThan(0);
+    // Since the traffic prior arrived, the samples between fixes say PRIOR
+    // once the ride has taught one and the accelerometer has not earned its
+    // place; before that they say INTEGRATED. Either is the unaided arm.
+    expect(s.filter((x) => x === 'INTEGRATED' || x === 'PRIOR').length).toBeGreaterThan(0);
   });
 });
 

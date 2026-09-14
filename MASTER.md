@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.32** · 1,796 tests · 60,224 lines
-**39.7 % mean drift on OUR OWN PHONE across three rides · 29.0 % on real vehicle sensors · 19.9 % simulated**
+**Build v0.33** · 1,806 tests · 60,224 lines
+**35.7 % mean drift on OUR OWN PHONE across three rides · 29.0 % on real vehicle sensors · 19.9 % simulated**
 
 ---
 
@@ -3273,6 +3273,173 @@ Two things the harness gained: `--log <name>` runs one ride in a third of the
 time, and a partial run (one log, or any `--set`) no longer overwrites
 `docs/benchmarks-tier-f.md`, because a sweep that rewrites the table every
 number in this document points at is how a sweep becomes the record.
+
+## 24.24 The speed problem, measured to its floor
+
+§28.2 has said since Tier R arrived that the error is along-track. §24.23
+ended with every window's heading at 5–30° and its speed at −73 % to +158 %,
+and the instruction to go and work on that. This section is what the three
+Tier F rides say about *why*, and it is not what the chain assumes.
+
+### Neither instrument on the phone knows the speed
+
+The chain has two ways to infer a speed once the Doppler is gone: the CNN
+speed model, and integrating the forward accelerometer. Both were scored the
+only way an inference can be — against the receiver, at 1 Hz, while it was
+still there.
+
+**The model.** Its output paired with Doppler, above 1 m/s:
+
+| ride | n | r | ml/gnss at 1–3 m/s | at 9–20 m/s |
+|---|---|---|---|---|
+| 2229 | 871 | **−0.05** | 5.7 | 1.15 |
+| 2141 | 687 | **−0.17** | 8.5 | 1.69 |
+| 1942 | 232 | **+0.19** | 7.6 | — |
+
+The correlation is zero. The model answers 12–18 m/s at a crawl and at
+50 km/h alike, because it reads vibration amplitude and on this vehicle the
+amplitude does not vary with speed (r = −0.13 to +0.22 between 1 s
+accelerometer RMS and Doppler — a city lane at a crawl is rougher than the
+main road at 40). On IO-VNBD, in domain, the same pairing gives r ≈ 0.9.
+
+And the trust gate (§24.9) could not see it. The gate is a ratio of sums,
+which weights every pair by its speed — so a model answering a constant 12
+passes the band whenever the vehicle has lately been doing about 12. A ratio
+cannot tell a constant from a measurement; a correlation can, and the gate
+can now ask for one (`mlMinTrustCorrelation`, only when the measured speeds
+have varied enough for the question to mean anything). **Wired, and off.**
+At 0.5 it measured nothing on Tier F — 46.6 / 38.0 / 35.1 with the model off
+entirely against 46.4 / 37.1 / 35.1 with it on, because the ratio gate was
+already withholding it most of the time — and it cost Tier R: S1 went
+**34.2 % → 40.9 %**, because on IO-VNBD replayed through this pipeline the
+model tracks the receiver at only r = 0.38, and at 0.38 it is still worth
+seven points. The field rides sit at −0.17 to +0.19, so a threshold exists
+between the two; it is not one that two cars and one scooter can set, and a
+default that costs the real-car corpus to fix a problem the ratio gate
+already covers is not a default.
+
+**The accelerometer.** Its horizontal component averaged over each fix
+interval, against Doppler dv/dt, at the best of every direction in the plane
+and every lag from −2 to +2 s:
+
+| horizon | 1 s | 3 s | 5 s | 10 s | 20 s |
+|---|---|---|---|---|---|
+| 2229, r | 0.21 | 0.19 | 0.18 | 0.17 | 0.10 |
+| 2141, r | 0.29 | 0.33 | 0.30 | 0.26 | 0.21 |
+
+Under a tenth of the variance in the vehicle's acceleration, at every
+horizon, and the best direction wanders by 40° between horizons — which is
+why `AutoAlignment` has never once calibrated on a field ride (0 observations
+on all three; it calibrates in ten minutes on IO-VNBD). A handlebar pitches
+under the front brake, turns with the steering, and on a broken surface
+shakes by more than the accelerations it is meant to measure. This is the
+mechanism behind the +710 s window: the vehicle braking at −0.75 m/s² while
+the integral rose at +0.33.
+
+So what the chain does during an outage on this vehicle — consult a model
+that carries no information, then integrate a sensor that carries almost
+none, bounded by a ceiling and a floor around the last measurement — is
+bounded noise. The ±35 % it scores is what the bounds are worth.
+
+### What does know the speed: the last five minutes
+
+Against the same 37 windows, offline, how well various things predict the
+next minute's mean speed:
+
+| predictor | mean \|bias\| |
+|---|---|
+| shipped chain (v0.32) | 38 % |
+| last Doppler speed, held | 35 % |
+| mean of the last 5 min of Doppler | **32 %** |
+
+Stop-go traffic is not predictable a minute ahead from anything on the
+phone; the ride's own recent traffic speed is the least wrong thing to say,
+and it cannot run away. So an unaided speed now **relaxes toward the ride's
+recent moving-speed mean** (`outageSpeedPriorTauMs`, 20 s; window 300 s;
+moving fixes only) instead of integrating — while a stop detected by the
+IMU still zeroes it, the floor and ceiling still bound it, and the prior
+itself expires on the coasting schedule so a ten-minute outage still comes
+to rest.
+
+**And integration keeps its place where it has earned it.** The same shape
+as the model's gate, pointed at the accelerometer: forward acceleration is
+scored against Doppler every fix, and only below `minAccelCorrelation` (0.4)
+does the prior stand in. The simulator's IMU scores 0.65–0.78 and keeps
+integrating exactly as before; the three field rides score −0.23 to 0.29 and
+do not.
+
+**Swept, not argued.** Tier F, all three rides, the prior against v0.32:
+
+| arm | 2141 | 2229 | 1942 | all 37 |
+|---|---|---|---|---|
+| v0.32 | 46.4 | 37.1 | 35.1 | 39.7 |
+| prior, all fixes, τ 10 s | 51.3 | 27.2 | 36.2 | 36.4 |
+| prior, moving fixes, τ 10 s | 51.5 | 26.4 | 27.7 | 34.8 |
+| **prior, moving fixes, τ 20 s** | 51.3 | **24.8** | 27.8 | **34.0** |
+| prior, moving fixes, τ 40 s | 51.8 | 24.7 | 31.2 | 34.7 |
+| prior, moving, τ 10 s, 120 s window | 53.2 | 28.3 | 27.7 | 36.7 |
+
+The second ride's +710 s window — the braking-read-as-acceleration case —
+goes from 66.7 % to 15.1 %; +860 s from 52.5 to 13.8; +20 s from 47.7 to
+16.4. **The third ride pays five points**, and that is recorded rather than
+averaged away: it is the stop-go ride, and the windows it loses are the ones
+where the vehicle crawled or stopped inside the window (+980 s: truth
+2.5 m/s, prior 4.5) — which is the one thing a traffic mean cannot know and
+the IMU cannot see unless the crawl is a full stop.
+
+### Two things measured and refused
+
+**Turning the forward axis round on Tier R.** The accelerometer score above
+was also run on IO-VNBD and came out *negative* — r = −0.45 on S1 over 82
+minutes — which reads as a forward axis pointing backwards, and
+`AutoAlignment` does resolve its sign against the dead-reckoning speed, which
+between 9 s fixes is the integral of the acceleration being tested. A latch
+that turned the axis through 180° below −0.3 was built and measured:
+**29.0 % → 30.6 %**. Worse. The likelier explanation is that the forward
+acceleration the score sees is high-passed, and over a 9 s interval a
+high-pass turns a slow ramp into something that anti-correlates with it.
+Removed rather than kept at 0, because a mechanism whose only measurement
+says it is wrong is clutter, and the score's own validity on a slow receiver
+is the open question. On Tier F's 1 Hz cadence the raw and the engine
+correlations agree, so the field conclusion stands.
+
+**The prior on Tier R.** Tier R's accelerometer scores below the gate too,
+so the prior engages there — see the regenerated table. It is a car with an
+in-domain model and a 9 s receiver, and whether five minutes of Doppler beat
+a held fix plus integration is a different question from the one this
+section answers.
+
+### What the third ride leaves now
+
+| | Tier F mean | 2141 | 2229 | 1942 | Tier S `full` | Tier R |
+|---|---|---|---|---|---|---|
+| v0.32 | 39.7 % | 46.4 | 37.1 | 35.1 | 19.9 % | 29.0 % |
+| **v0.33** | **35.7 %** | 52.9 | **27.4** | **27.6** | 19.9 % | 29.0 % |
+
+Tier S and Tier R are unchanged to the decimal, which is the point of the
+two gates: the simulator's accelerometer earns its place and the car corpus
+has no receiver fast enough to score one, so on both the chain is exactly
+what it was.
+
+**One real outage got worse, and it is the one the rider complained about.**
+The 171 s outage on the second ride, entered at 39.5 km/h, recovered at
+278.6 m in v0.31 and recovers at 989.9 m now: the estimate drew 1181 m
+against 1664 m of truth. The prior expires on the coasting schedule — full
+for 45 s, then e-folding over 60 s — so by the third minute of a tunnel it
+is asserting a tenth of the traffic speed, and a vehicle that is in fact
+still doing 40 km/h is drawn stopping. That rule was written for integration
+noise on a stationary phone (197 s at a confident 25.8 km/h) and the floor
+already pays for it the same way. A slower expiry for the prior — it is a
+traffic mean, not a drifting integral — is the next thing to sweep; it was
+not swept here because the machine this was measured on spent the last six
+hours on a throttled battery core, and an unmeasured default is not a
+default. The 19 s outage went 33 → 16 m, the 54 s one 124 → 41 m.
+
+What is left is the stop-go ride, and it is a hardware problem before it is
+an estimator problem: a phone on a handlebar can tell a stop from motion
+and nothing finer. The Device screen now shows `ACCEL vs GNSS` — the
+correlation and the prior in hand — so the next ride can see, on the road,
+whether this mount is one the accelerometer can be believed on.
 
 ---
 

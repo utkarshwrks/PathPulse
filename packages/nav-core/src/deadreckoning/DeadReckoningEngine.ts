@@ -187,6 +187,15 @@ export interface DeadReckoningConfig {
    * the speed chain has been fixed.
    */
   outageCeilingLookbackMs: number;
+  /**
+   * Time constant over which an unaided speed relaxes toward
+   * `priorSpeedMps`, ms. 0 keeps integrating the accelerometer. See
+   * `EngineConfig.outageSpeedPriorTauMs` for the measurement: on a handlebar
+   * mount the accelerometer explains under a tenth of the vehicle's
+   * acceleration at any horizon, and the last five minutes of Doppler predict
+   * the next minute better than anything the IMU can say.
+   */
+  outageSpeedPriorTauMs: number;
   /** Absolute headroom above the anchor, m/s. Carries the low-speed end. */
   outageSpeedGainMps: number;
   /** Time over which the headroom opens from nothing to full, ms. */
@@ -272,6 +281,7 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   outageSpeedRatio: 1.35,
   outageCeilingAnchorMinMps: 0.5,
   outageCeilingLookbackMs: 0,
+  outageSpeedPriorTauMs: 0,
   outageSpeedGainMps: 2.5,
   outageSpeedRampMs: 20_000,
   outageSpeedFloorRatio: 0.5,
@@ -282,6 +292,12 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
 export interface PropagateOptions {
   /** Lateral (cross-vehicle) acceleration, m/s^2. Feeds the NHC ablation. */
   lateralAccelMps2?: number;
+  /**
+   * The ride's recent traffic speed, m/s. When present and
+   * `outageSpeedPriorTauMs` is set, an unaided speed relaxes toward it
+   * instead of integrating the accelerometer. See that note.
+   */
+  priorSpeedMps?: number;
   /** Stationarity verdict from the detector. Drives ZUPT. */
   isStationary?: boolean;
   /**
@@ -728,6 +744,35 @@ export class DeadReckoningEngine {
       vE = bounded * fE;
       vN = bounded * fN;
       this.state.unaidedMs += dtMs;
+    } else if (
+      this.config.outageSpeedPriorTauMs > 0 &&
+      opts.priorSpeedMps !== undefined &&
+      Number.isFinite(opts.priorSpeedMps)
+    ) {
+      // 3a. ★ RELAX TOWARD THE RIDE'S OWN TRAFFIC SPEED ★ See
+      //     `outageSpeedPriorTauMs`. Not a measurement and not asserted as one:
+      //     it does not reset `unaidedMs`, so the coasting decay below still
+      //     fades it, and the floor and ceiling still bound it. What it
+      //     replaces is the accelerometer, which on this mount was measured
+      //     to know less about the speed than the last five minutes do.
+      //
+      //     ★ THE TARGET FADES, NOT THE STEP ★ Multiplying the relaxed speed
+      //     by the per-sample coasting decay does nothing: the next sample
+      //     pulls it back toward the prior. So the PRIOR is what expires, on
+      //     the same schedule the floor uses — full while integration would
+      //     still be trusted, then exponentially — and after ten minutes
+      //     unaided the target is zero, as the long-outage invariant demands.
+      this.state.unaidedMs += dtMs;
+      const cfg = this.config.speedClampConfig;
+      const staleMs = this.config.speedClamp
+        ? Math.max(0, this.state.unaidedMs - cfg.integrationTrustMs)
+        : 0;
+      const fade = staleMs > 0 ? Math.exp(-staleMs / cfg.decayTimeConstantMs) : 1;
+      const prev = this.state.speedMps;
+      const a = Math.min(1, dtMs / this.config.outageSpeedPriorTauMs);
+      const relaxed = prev + (Math.max(0, opts.priorSpeedMps) * fade - prev) * a;
+      vE = relaxed * fE;
+      vN = relaxed * fN;
     } else {
       // 3. Integrate acceleration onto the existing velocity vector.
       vE = this.state.velocityEnu.e + (accel * fE + lateral * rE) * dt;
