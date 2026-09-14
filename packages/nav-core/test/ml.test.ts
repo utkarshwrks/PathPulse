@@ -799,9 +799,14 @@ describe('an unaided speed relaxes toward the ride\'s own traffic speed', () => 
     // "An unaided estimate must not be asserted forever" is the oldest rule
     // in DeadReckoningEngine. A target that did not fade would defeat it: the
     // per-sample decay is undone by the next sample's pull.
+    // Five-minute expiry (see `priorFadeTauMs`): after ten minutes unaided
+    // a 6 m/s prior is asserting about 1 m/s, and the long-outage invariant
+    // in invariants.test.ts holds the line at 2.
     const e = new NavigationEngine(PRIOR);
     const speeds = trafficThenOutage(e, 600_000, 9);
-    expect(speeds[speeds.length - 1]!).toBeLessThan(0.5);
+    expect(speeds[speeds.length - 1]!).toBeLessThan(1.5);
+    const twenty = trafficThenOutage(new NavigationEngine(PRIOR), 1_200_000, 9);
+    expect(twenty[twenty.length - 1]!).toBeLessThan(0.3);
   });
 
   /**

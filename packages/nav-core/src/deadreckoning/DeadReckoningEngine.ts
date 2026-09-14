@@ -196,6 +196,20 @@ export interface DeadReckoningConfig {
    * the next minute better than anything the IMU can say.
    */
   outageSpeedPriorTauMs: number;
+  /**
+   * Time constant on which the traffic-speed prior expires once integration
+   * would no longer be trusted, ms. 0 uses the coasting decay's own constant.
+   *
+   * The coasting decay's 60 s was written for integration noise on a
+   * stationary phone — 197 s at a confident 25.8 km/h. A traffic mean is not
+   * a drifting integral: it is a statement about the road, and the road does
+   * not change because the receiver went. On the second ride's 171 s outage,
+   * entered at 39.5 km/h, expiring the prior on the integration schedule drew
+   * the vehicle stopping in the third minute of a tunnel it was still doing
+   * 40 through — 989.9 m of recovery error against 278.6 m before the prior
+   * existed. Swept, see MASTER.md §24.25.
+   */
+  priorFadeTauMs: number;
   /** Absolute headroom above the anchor, m/s. Carries the low-speed end. */
   outageSpeedGainMps: number;
   /** Time over which the headroom opens from nothing to full, ms. */
@@ -282,6 +296,7 @@ export const DEFAULT_DR_CONFIG: DeadReckoningConfig = {
   outageCeilingAnchorMinMps: 0.5,
   outageCeilingLookbackMs: 0,
   outageSpeedPriorTauMs: 0,
+  priorFadeTauMs: 0,
   outageSpeedGainMps: 2.5,
   outageSpeedRampMs: 20_000,
   outageSpeedFloorRatio: 0.5,
@@ -767,7 +782,9 @@ export class DeadReckoningEngine {
       const staleMs = this.config.speedClamp
         ? Math.max(0, this.state.unaidedMs - cfg.integrationTrustMs)
         : 0;
-      const fade = staleMs > 0 ? Math.exp(-staleMs / cfg.decayTimeConstantMs) : 1;
+      const fadeTau =
+        this.config.priorFadeTauMs > 0 ? this.config.priorFadeTauMs : cfg.decayTimeConstantMs;
+      const fade = staleMs > 0 ? Math.exp(-staleMs / fadeTau) : 1;
       const prev = this.state.speedMps;
       const a = Math.min(1, dtMs / this.config.outageSpeedPriorTauMs);
       const relaxed = prev + (Math.max(0, opts.priorSpeedMps) * fade - prev) * a;

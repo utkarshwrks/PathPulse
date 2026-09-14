@@ -3,8 +3,8 @@
 **AI-ML based Intelligent Dead Reckoning for Seamless Navigation**
 Smart India Hackathon · Problem Statement **SIH26168** · Sponsor **ISRO** · Team **Avinya**
 
-**Build v0.33** · 1,806 tests · 60,224 lines
-**35.7 % mean drift on OUR OWN PHONE across three rides · 29.0 % on real vehicle sensors · 19.9 % simulated**
+**Build v0.34** · 1,806 tests · 60,224 lines
+**35.5 % mean drift on OUR OWN PHONE across three rides · 29.0 % on real vehicle sensors · 19.9 % simulated**
 
 ---
 
@@ -3414,7 +3414,8 @@ section answers.
 | | Tier F mean | 2141 | 2229 | 1942 | Tier S `full` | Tier R |
 |---|---|---|---|---|---|---|
 | v0.32 | 39.7 % | 46.4 | 37.1 | 35.1 | 19.9 % | 29.0 % |
-| **v0.33** | **35.7 %** | 52.9 | **27.4** | **27.6** | 19.9 % | 29.0 % |
+| v0.33 | 35.7 % | 52.9 | **27.4** | **27.6** | 19.9 % | 29.0 % |
+| **v0.34** — prior expires over 300 s, §24.25 | **35.5 %** | 52.3 | 27.4 | 27.6 | 19.9 % | 29.0 % |
 
 Tier S and Tier R are unchanged to the decimal, which is the point of the
 two gates: the simulator's accelerometer earns its place and the car corpus
@@ -3440,6 +3441,45 @@ an estimator problem: a phone on a handlebar can tell a stop from motion
 and nothing finer. The Device screen now shows `ACCEL vs GNSS` — the
 correlation and the prior in hand — so the next ride can see, on the road,
 whether this mount is one the accelerometer can be believed on.
+
+## 24.25 The prior's expiry, and the tunnel the mean cannot know about
+
+§24.24 shipped the traffic-speed prior expiring on the coasting decay's own
+schedule — full for 45 s, then e-folding over 60 s — and recorded what it
+cost: the 171 s outage the rider complained about in §24.17 went from
+278.6 m of recovery error to 989.9 m, drawn stopping in the third minute of
+a road it was still doing 40 km/h along. That schedule was written for
+integration noise on a stationary phone. A traffic mean is not a drifting
+integral, so it gets its own constant (`priorFadeTauMs`), swept:
+
+| prior expiry | 2141 | 2229 | 1942 | the 171 s outage |
+|---|---|---|---|---|
+| 60 s (v0.33) | 52.9 | 27.4 | 27.6 | 989.9 m — drew 1181 |
+| 180 s | 52.9 | 27.4 | 27.6 | 837.3 m — drew 1614 |
+| **300 s** | 52.3 | 27.4 | 27.6 | **777.5 m — drew 1580** |
+
+The 60 s windows do not move, as they cannot — the expiry has barely begun
+by the end of one. The long outage recovers 200 m and now draws the right
+*length* of path, 1580 m against 1664. Shipped at 300 s; the ten-minute
+invariant still holds (a 6 m/s prior asserts 1 m/s after ten minutes
+unaided, 0.3 after twenty).
+
+**And what it does not recover, named.** 777 m is still 500 m worse than
+v0.31's 278.6, and the decomposition says why: along-track −754 m, with the
+length right. This outage begins where the ride leaves the city for the
+main road. The last five minutes of Doppler — the prior — average 6 m/s of
+lanes and signals; the last fix before the receiver went reads 11 m/s, and
+the road ahead is 40 km/h for three minutes. v0.31 held the 11 (the floor and
+ceiling sit around the last measurement) and was right by accident of
+regime; the prior is right about the road behind and wrong about the road
+ahead, and nothing on the phone can tell a tunnel entered from a main road
+from one entered from a lane except the speed it was entered at. So the
+speed the outage was entered at is evidence that the traffic mean should not
+outrank — and the floor, at half the anchor, is the only place that evidence
+currently survives. Raising the floor toward the anchor was swept in §24.21
+and stopped at 0.5 for a reason that still holds on 60 s windows. Weighting
+the prior toward its most recent minute is the next thing to measure, and
+it was not measured here.
 
 ---
 

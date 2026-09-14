@@ -340,6 +340,9 @@ export const DEFAULT_CONTROLS: EngineControls = {
   minAccelCorrelation: 0.4,
   outageSpeedPriorTauMs: 20_000,
   speedPriorWindowMs: 300_000,
+  // The prior expires five times more slowly than integration does: it is a
+  // statement about the road, not a drifting integral. See speedPriorFadeTauMs.
+  speedPriorFadeTauMs: 300_000,
   speedPriorMovingOnly: true,
   // ★ A MOUNTED PHONE IS NOT BEING CARRIED, AND THAT IS MEASURABLE ★ Variance,
   // cadence and speed can all be faked by a scooter on a bad road — all three
@@ -786,6 +789,7 @@ export function useNavigationEngine(): NavEngineOutput {
         minAccelCorrelation: next.minAccelCorrelation,
         outageSpeedPriorTauMs: next.outageSpeedPriorTauMs,
         speedPriorWindowMs: next.speedPriorWindowMs,
+        speedPriorFadeTauMs: next.speedPriorFadeTauMs,
         speedPriorMovingOnly: next.speedPriorMovingOnly,
         mountStillDeg: next.mountStillDeg,
         eskfAccelNoiseDensity: next.eskfAccelNoiseDensity,

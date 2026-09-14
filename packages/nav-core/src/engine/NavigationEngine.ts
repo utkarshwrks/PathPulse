@@ -541,6 +541,8 @@ export interface ConstraintFlags {
   outageSpeedPriorTauMs: number;
   /** How far back the traffic-speed prior looks, ms. */
   speedPriorWindowMs: number;
+  /** Forwarded to `DeadReckoningConfig.priorFadeTauMs`. 0 = the coasting decay's own constant. */
+  speedPriorFadeTauMs: number;
   /**
    * Whether the prior averages only fixes where the vehicle was moving. With
    * a stop detector that catches every stop, the moving mean is the right
@@ -1041,6 +1043,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   mlMinTrustCorrelation: 0,
   outageSpeedPriorTauMs: 20_000,
   speedPriorWindowMs: 300_000,
+  speedPriorFadeTauMs: 300_000,
   speedPriorMovingOnly: true,
   minAccelCorrelation: 0.4,
   outageSpeedCeiling: true,
@@ -1423,6 +1426,7 @@ export class NavigationEngine {
       outageCeilingAnchorMinMps: this.config.outageCeilingAnchorMinMps,
       outageCeilingLookbackMs: this.config.outageCeilingLookbackMs,
       outageSpeedPriorTauMs: this.config.outageSpeedPriorTauMs,
+      priorFadeTauMs: this.config.speedPriorFadeTauMs,
     });
   }
 
@@ -1457,6 +1461,7 @@ export class NavigationEngine {
       outageCeilingAnchorMinMps: this.config.outageCeilingAnchorMinMps,
       outageCeilingLookbackMs: this.config.outageCeilingLookbackMs,
       outageSpeedPriorTauMs: this.config.outageSpeedPriorTauMs,
+      priorFadeTauMs: this.config.speedPriorFadeTauMs,
     });
     this.stateMachine.setConfig({ adaptiveTimeout: this.config.adaptiveTimeout });
     if (!this.config.roadSnap) {
