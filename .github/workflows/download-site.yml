@@ -1,0 +1,79 @@
+# Publishes the standalone "get the app" page to GitHub Pages.
+#
+# ★ WHY A SECOND, SEPARATE SITE ★
+# The main site at /about is a whole Next app; its download button lives one
+# scroll into a marketing page. For a slide, a QR code or the SIH deck we want
+# ONE clean root URL that opens straight onto "here is the app, downloading
+# now" and nothing else. This deploys deploy/download-site/ — a single
+# self-contained index.html plus the committed APK — to Pages, giving:
+#
+#     https://utkarshwrks.github.io/PathPulse/
+#
+# It is deliberately framework-free: no build step, no _next chunks with
+# absolute paths that would break under the /PathPulse/ project-pages base.
+# Every asset the page needs is referenced by a relative path, so it works at
+# that base without an assetPrefix to keep in sync.
+#
+# ★ ONE-TIME SETUP ★
+# In Settings → Pages, set "Source" to "GitHub Actions" once. After that every
+# push that touches the folder redeploys on its own.
+
+name: download-site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/download-site/**'
+      - '.github/workflows/download-site.yml'
+  workflow_dispatch:
+
+# Pages needs these to mint the deploy token and write the site.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two publishes race; the newest push wins.
+concurrency:
+  group: download-site-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # enablement:true turns Pages on for the repo if it is not already, so a
+      # fresh clone does not need a manual click before the first deploy.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # Assemble the site: the standalone page plus the ONE committed copy of
+      # the APK and its manifest. Copying at deploy time — rather than keeping a
+      # second 7 MB binary under deploy/ — means the repo has a single source of
+      # truth for the file, and this site always ships whatever the app site
+      # ships.
+      - name: Assemble site
+        run: |
+          mkdir -p _site/downloads
+          cp deploy/download-site/index.html _site/index.html
+          cp apps/web/public/downloads/PathPulse.apk _site/downloads/PathPulse.apk
+          cp apps/web/public/downloads/apk.json      _site/downloads/apk.json
+          ls -la _site _site/downloads
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
